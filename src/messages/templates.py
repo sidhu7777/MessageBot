@@ -106,6 +106,20 @@ def get_message(response_language: str, key: str, **kwargs: object) -> str:
             "Reply YES to confirm or NO to restart."
         ),
         "confirm_prompt": "Please reply YES to confirm or NO to restart.",
+        "ask_change_field": (
+            "No problem. Which detail do you want to change?\n"
+            "1. Name\n"
+            "2. Patient type\n"
+            "3. Age\n"
+            "4. Gender\n"
+            "5. Contact number\n"
+            "6. Clinic\n"
+            "7. Date\n"
+            "8. Time\n"
+            "9. Reason\n"
+            "10. Symptoms"
+        ),
+        "invalid_change_field": "Please choose a valid detail number (1-10), or type the field name.",
         "change_ack": (
             "No problem. Let's update that detail."
         ),
@@ -240,6 +254,20 @@ def get_message(response_language: str, key: str, **kwargs: object) -> str:
             "पुष्टि के लिए YES और दोबारा शुरू करने के लिए NO भेजें।"
         ),
         "confirm_prompt": "कृपया पुष्टि के लिए YES या दोबारा शुरू करने के लिए NO भेजें।",
+        "ask_change_field": (
+            "कोई बात नहीं। आप कौन-सा विवरण बदलना चाहते हैं?\n"
+            "1. नाम\n"
+            "2. मरीज का प्रकार\n"
+            "3. आयु\n"
+            "4. जेंडर\n"
+            "5. संपर्क नंबर\n"
+            "6. क्लिनिक\n"
+            "7. तारीख\n"
+            "8. समय\n"
+            "9. कारण\n"
+            "10. लक्षण"
+        ),
+        "invalid_change_field": "कृपया सही विकल्प चुनें (1-10), या फ़ील्ड का नाम लिखें।",
         "change_ack": (
             "ठीक है। हम वह विवरण अपडेट करते हैं।"
         ),
@@ -372,6 +400,20 @@ def get_message(response_language: str, key: str, **kwargs: object) -> str:
             "Confirm ke liye YES ya restart ke liye NO bhejiye."
         ),
         "confirm_prompt": "Please confirm ke liye YES ya restart ke liye NO bhejiye.",
+        "ask_change_field": (
+            "No problem. Kaunsa detail change karna hai?\n"
+            "1. Name\n"
+            "2. Patient type\n"
+            "3. Age\n"
+            "4. Gender\n"
+            "5. Contact number\n"
+            "6. Clinic\n"
+            "7. Date\n"
+            "8. Time\n"
+            "9. Reason\n"
+            "10. Symptoms"
+        ),
+        "invalid_change_field": "Please valid option choose kariye (1-10), ya field name type kariye.",
         "change_ack": "No problem. Chaliye woh detail update karte hain.",
         "confirmed": (
             "Appointment request confirm ho gaya.\n"

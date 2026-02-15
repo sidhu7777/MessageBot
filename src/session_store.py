@@ -20,12 +20,14 @@ class SessionManager:
         llm_client: LLMClient,
         mixed_response_language: str = "en",
         enable_llm_polish: bool = True,
+        enable_response_polish: bool = False,
         booking_repository: Optional[BookingRepository] = None,
         ttl_minutes: int = 120,
     ) -> None:
         self.llm_client = llm_client
         self.mixed_response_language = mixed_response_language
         self.enable_llm_polish = enable_llm_polish
+        self.enable_response_polish = enable_response_polish
         self.booking_repository = booking_repository
         self.ttl = timedelta(minutes=ttl_minutes)
         self._sessions: Dict[str, SessionEntry] = {}
@@ -42,6 +44,7 @@ class SessionManager:
                         llm_client=self.llm_client,
                         mixed_response_language=self.mixed_response_language,
                         enable_llm_polish=self.enable_llm_polish,
+                        enable_response_polish=self.enable_response_polish,
                         booking_repository=self.booking_repository,
                         chat_phone_number=user_id,
                     ),

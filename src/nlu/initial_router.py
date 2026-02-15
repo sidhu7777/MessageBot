@@ -1,6 +1,12 @@
 from src.llm.client import LLMClient
 from src.llm.tasks import llm_route_intent
-from src.nlu.extractors import is_availability_intent, is_booking_intent, is_greeting_intent
+from src.nlu.extractors import (
+    has_booking_negative_signal,
+    has_weak_booking_signal,
+    is_availability_intent,
+    is_booking_intent,
+    is_greeting_intent,
+)
 
 
 def route_initial_intent(
@@ -15,9 +21,30 @@ def route_initial_intent(
     if normalized in {"2", "option 2", "check availability"} or normalized.startswith("2 "):
         return "CHECK_AVAILABILITY"
 
+    if has_booking_negative_signal(lower):
+        decision = llm_route_intent(
+            llm_client=llm_client,
+            enable_llm_polish=enable_llm_polish,
+            text=text,
+            min_confidence=0.80,
+        )
+        if decision in {"CHECK_AVAILABILITY", "GREETING", "GENERAL_QUERY", "OTHER"}:
+            return decision
+        return "GENERAL_QUERY"
+
     if is_availability_intent(lower):
         return "CHECK_AVAILABILITY"
     if is_booking_intent(lower):
+        if has_weak_booking_signal(lower):
+            decision = llm_route_intent(
+                llm_client=llm_client,
+                enable_llm_polish=enable_llm_polish,
+                text=text,
+                min_confidence=0.80,
+            )
+            if decision:
+                return decision
+            return "GENERAL_QUERY"
         return "BOOK_APPOINTMENT"
     if is_greeting_intent(lower):
         return "GREETING"

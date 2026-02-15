@@ -39,13 +39,47 @@ def is_booking_intent(lower: str) -> bool:
         r"\bbook\s+karo\b",
         r"\bbook\s+kar\s+do\b",
         r"\bappointment\s+chahiye\b",
-        r"\bdoctor\s+se\s+milna\b",
-        r"\bdoctor\s+consult\b",
         r"\bschedule\b.*\bappointment\b",
     ]
     return any(re.search(pattern, lower) for pattern in patterns) or any(
         re.search(pattern, lower) for pattern in devanagari_patterns
     )
+
+
+def has_weak_booking_signal(lower: str) -> bool:
+    patterns = [
+        r"\bdoctor\s+se\s+milna\b",
+        r"\bdoctor\s+consult\b",
+        r"\bmeet\s+the\s+doctor\b",
+        r"\bdoctor\s+meeting\b",
+    ]
+    devanagari_patterns = [
+        r"à¤¡à¥‰à¤•à¥à¤Ÿà¤°\s+à¤¸à¥‡\s+à¤®à¤¿à¤²à¤¨à¤¾",
+        r"à¤¡à¥‰à¤•à¥à¤Ÿà¤°\s+à¤•à¥‡\s+à¤ªà¤¾à¤¸\s+à¤œà¤¾à¤¨à¤¾",
+    ]
+    return any(re.search(pattern, lower) for pattern in patterns) or any(
+        re.search(pattern, lower) for pattern in devanagari_patterns
+    )
+
+
+def has_booking_negative_signal(lower: str) -> bool:
+    patterns = [
+        r"\bno\s+appointment\b",
+        r"\bnot\s+appointment\b",
+        r"\bnot\s+booking\b",
+        r"\bdon[’']?t\s+book\b",
+        r"\bwithout\s+appointment\b",
+        r"\bno\s+book\b",
+        r"\bnot\s+book\b",
+        r"\bhouse\b",
+        r"\bhome\b",
+        r"\binterview\b",
+        r"\bnahi\b",
+        r"\bnah\b",
+        r"à¤¨à¤¹à¥€à¤‚\s+à¤…à¤ªà¥‰à¤‡à¤‚à¤Ÿà¤®à¥‡à¤‚à¤Ÿ",
+        r"à¤¬à¤¿à¤¨à¤¾\s+à¤…à¤ªà¥‰à¤‡à¤‚à¤Ÿà¤®à¥‡à¤‚à¤Ÿ",
+    ]
+    return any(re.search(pattern, lower) for pattern in patterns)
 
 
 def is_availability_intent(lower: str) -> bool:
@@ -126,6 +160,24 @@ def extract_name(text: str) -> Optional[str]:
     cleaned = text.strip()
     if cleaned.lower() in {"hi", "hello", "hey", "namaste", "hii", "end", "end now"}:
         return None
+    reject_tokens = {
+        "no",
+        "not",
+        "need",
+        "doctor",
+        "appointment",
+        "book",
+        "booking",
+        "hospital",
+        "house",
+        "home",
+        "meet",
+        "cancel",
+        "restart",
+    }
+    lowered_clean = cleaned.lower()
+    if any(token in lowered_clean.split() for token in reject_tokens):
+        return None
 
     patterns = [
         r"(?:my name is|i am|this is)\s+([a-zA-Z][a-zA-Z ]{1,48})$",
@@ -143,7 +195,30 @@ def extract_name(text: str) -> Optional[str]:
 
 
 def clean_name(name: str) -> str:
-    return " ".join(part.capitalize() for part in name.split())
+    cleaned = name.strip()
+    intro_patterns = [
+        r"^(my\s+name\s+is)\s+",
+        r"^(i\s+am)\s+",
+        r"^(this\s+is)\s+",
+        r"^(mera\s+naam)\s+",
+        r"^(mera\s+nam)\s+",
+        r"^(mera\s+na\s+nam)\s+",
+        r"^(mera\s+name)\s+",
+        r"^(mai)\s+",
+        r"^(main)\s+",
+    ]
+    lowered = cleaned.lower()
+    changed = True
+    while changed:
+        changed = False
+        for pattern in intro_patterns:
+            match = re.search(pattern, lowered)
+            if match:
+                cleaned = cleaned[match.end():].strip()
+                lowered = cleaned.lower()
+                changed = True
+                break
+    return " ".join(part.capitalize() for part in cleaned.split())
 
 
 def extract_patient_type(lower: str) -> Optional[str]:

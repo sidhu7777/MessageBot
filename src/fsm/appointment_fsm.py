@@ -86,6 +86,7 @@ class AppointmentFSM:
     llm_client: LLMClient
     mixed_response_language: str = "auto"
     enable_llm_polish: bool = True
+    enable_response_polish: bool = False
     booking_repository: Optional[BookingRepository] = None
     state: str = "INIT"
     context: AppointmentContext = field(default_factory=AppointmentContext)
@@ -94,6 +95,7 @@ class AppointmentFSM:
     language_turn_count: int = 0
     init_unclear_count: int = 0
     chat_phone_number: Optional[str] = None
+    in_edit_flow: bool = False
 
     def handle(self, user_text: str) -> str:
         text = (user_text or "").strip()
@@ -171,8 +173,22 @@ class AppointmentFSM:
         if self.state == "ASK_NAME":
             name = extract_name(text)
             if not name:
+                rerouted = route_initial_intent(
+                    llm_client=self.llm_client,
+                    enable_llm_polish=self.enable_llm_polish,
+                    text=text,
+                    lower=lower,
+                )
+                if rerouted in {"GENERAL_QUERY", "OTHER", "CHECK_AVAILABILITY"}:
+                    self.state = "INIT"
+                    self.init_unclear_count = 1
+                    return self._respond(self._msg("clarify_intent"), allow_polish=False)
                 return self._respond(self._msg("invalid_name"))
             self.context.patient_name = name
+            if self.in_edit_flow:
+                self.in_edit_flow = False
+                self.state = "CONFIRM"
+                return self._respond(self._msg("change_ack", step="ASK_NAME") + "\n" + self._msg("confirm_summary", **self.context.__dict__))
             self.state = "ASK_PATIENT_TYPE"
             return self._respond(self._msg("name_ack", name=name) + "\n" + self._msg("ask_patient_type"))
 
@@ -223,6 +239,10 @@ class AppointmentFSM:
             if not patient_type:
                 return self._respond(self._msg("invalid_patient_type"))
             self.context.patient_type = patient_type
+            if self.in_edit_flow:
+                self.in_edit_flow = False
+                self.state = "CONFIRM"
+                return self._respond(self._msg("change_ack", step="ASK_PATIENT_TYPE") + "\n" + self._msg("confirm_summary", **self.context.__dict__))
             self.state = "ASK_AGE"
             return self._respond(self._msg("patient_type_ack", patient_type=patient_type) + "\n" + self._msg("ask_age"))
 
@@ -239,6 +259,10 @@ class AppointmentFSM:
             if age is None:
                 return self._respond(self._msg("invalid_age"))
             self.context.age = age
+            if self.in_edit_flow:
+                self.in_edit_flow = False
+                self.state = "CONFIRM"
+                return self._respond(self._msg("change_ack", step="ASK_AGE") + "\n" + self._msg("confirm_summary", **self.context.__dict__))
             self.state = "ASK_GENDER"
             return self._respond(self._msg("age_ack", age=age) + "\n" + self._msg("ask_gender"))
 
@@ -254,6 +278,10 @@ class AppointmentFSM:
             if not gender:
                 return self._respond(self._msg("invalid_gender"))
             self.context.gender = gender
+            if self.in_edit_flow:
+                self.in_edit_flow = False
+                self.state = "CONFIRM"
+                return self._respond(self._msg("change_ack", step="ASK_GENDER") + "\n" + self._msg("confirm_summary", **self.context.__dict__))
             self.state = "ASK_PHONE"
             return self._respond(self._msg("gender_ack", gender=gender) + "\n" + self._msg("ask_phone"))
 
@@ -275,6 +303,10 @@ class AppointmentFSM:
                 if not chat_phone:
                     return self._respond(self._msg("invalid_phone_same_missing"))
                 self.context.phone_number = chat_phone
+                if self.in_edit_flow:
+                    self.in_edit_flow = False
+                    self.state = "CONFIRM"
+                    return self._respond(self._msg("change_ack", step="ASK_PHONE") + "\n" + self._msg("confirm_summary", **self.context.__dict__))
                 self.state = "ASK_CLINIC"
                 return self._respond(
                     self._msg("phone_ack", phone_number=self.context.phone_number) + "\n" + self._msg("ask_clinic")
@@ -294,6 +326,10 @@ class AppointmentFSM:
             if not phone:
                 return self._respond(self._msg("invalid_phone"))
             self.context.phone_number = phone
+            if self.in_edit_flow:
+                self.in_edit_flow = False
+                self.state = "CONFIRM"
+                return self._respond(self._msg("change_ack", step="ASK_PHONE") + "\n" + self._msg("confirm_summary", **self.context.__dict__))
             self.state = "ASK_CLINIC"
             return self._respond(self._msg("phone_ack", phone_number=phone) + "\n" + self._msg("ask_clinic"))
 
@@ -304,6 +340,10 @@ class AppointmentFSM:
             self.context.clinic_id = selected["id"]
             self.context.clinic_name = selected["name"]
             self.context.clinic_address = selected["address"]
+            if self.in_edit_flow:
+                # Clinic change affects slot pool, so re-collect date+time only.
+                self.context.appointment_date = None
+                self.context.appointment_time = None
             self.state = "ASK_DATE"
             d1, d2, d3 = self._date_options()
             return self._respond(
@@ -389,6 +429,10 @@ class AppointmentFSM:
                     + self._msg("ask_time_slots", slot_1=slots[0], slot_2=slots[1], slot_3=slots[2])
                 )
             self.context.appointment_time = parsed_time
+            if self.in_edit_flow:
+                self.in_edit_flow = False
+                self.state = "CONFIRM"
+                return self._respond(self._msg("change_ack", step="ASK_TIME") + "\n" + self._msg("confirm_summary", **self.context.__dict__))
             self.state = "ASK_REASON"
             return self._respond(self._msg("time_ack", appointment_time=parsed_time) + "\n" + self._msg("ask_reason"))
 
@@ -399,6 +443,12 @@ class AppointmentFSM:
             if reason_value == "__ASK_OTHER__":
                 return self._respond(self._msg("ask_reason_other"))
             self.context.reason = reason_value
+            if self.in_edit_flow:
+                # Reason and symptoms are coupled; if reason changes, recollect symptoms.
+                self.context.symptoms = None
+                self.in_edit_flow = False
+                self.state = "ASK_SYMPTOMS"
+                return self._respond(self._msg("reason_ack") + "\n" + self._msg("ask_symptoms"))
             self.state = "ASK_SYMPTOMS"
             return self._respond(self._msg("reason_ack") + "\n" + self._msg("ask_symptoms"))
 
@@ -406,6 +456,8 @@ class AppointmentFSM:
             if len(text) < 3:
                 return self._respond(self._msg("invalid_symptoms"))
             self.context.symptoms = text
+            if self.in_edit_flow:
+                self.in_edit_flow = False
             self.state = "CONFIRM"
             return self._respond(self._msg("symptoms_ack") + "\n" + self._msg("confirm_summary", **self.context.__dict__))
 
@@ -429,10 +481,25 @@ class AppointmentFSM:
                 if reroute_state:
                     self.state = reroute_state
                     return self._respond(self._msg("change_ack", step=reroute_state))
-                self._reset_all(cancelled=False)
-                self.state = "ASK_NAME"
-                return self._respond(self._msg("not_confirmed"))
+                self.state = "ASK_CHANGE_FIELD"
+                return self._respond(self._msg("ask_change_field"))
             return self._respond(self._msg("confirm_prompt"))
+
+        if self.state == "ASK_CHANGE_FIELD":
+            reroute_state = resolve_change_target(lower)
+            if not reroute_state:
+                reroute_state = self._change_state_from_option(lower)
+            if not reroute_state:
+                reroute_state = llm_change_target(
+                    llm_client=self.llm_client,
+                    enable_llm_polish=self.enable_llm_polish,
+                    text=text,
+                )
+            if not reroute_state:
+                return self._respond(self._msg("invalid_change_field"))
+            self.in_edit_flow = True
+            self.state = reroute_state
+            return self._respond(self._msg("change_ack", step=reroute_state))
 
         if self.state == "COMPLETED":
             if is_booking_intent(lower) or is_restart_intent(lower):
@@ -446,7 +513,7 @@ class AppointmentFSM:
         return self._respond(self._msg("ask_name"))
 
     def _respond(self, base_text: str, allow_polish: bool = True) -> str:
-        if not allow_polish:
+        if not allow_polish or not self.enable_response_polish:
             return base_text
         return polish_response(
             llm_client=self.llm_client,
@@ -485,6 +552,7 @@ class AppointmentFSM:
         self.context = AppointmentContext()
         self.state = "CANCELLED" if cancelled else "INIT"
         self.init_unclear_count = 0
+        self.in_edit_flow = False
         if not cancelled and self.mixed_response_language.lower() == "auto":
             self.language_locked = False
             self.response_language = "en"
@@ -601,3 +669,19 @@ class AppointmentFSM:
         except ValueError:
             return False
         return 9 <= hour <= 18 and minute in {0, 30}
+
+    def _change_state_from_option(self, lower: str) -> Optional[str]:
+        options = {
+            "1": "ASK_NAME",
+            "2": "ASK_PATIENT_TYPE",
+            "3": "ASK_AGE",
+            "4": "ASK_GENDER",
+            "5": "ASK_PHONE",
+            "6": "ASK_CLINIC",
+            "7": "ASK_DATE",
+            "8": "ASK_TIME",
+            "9": "ASK_REASON",
+            "10": "ASK_SYMPTOMS",
+        }
+        normalized = lower.strip()
+        return options.get(normalized)
