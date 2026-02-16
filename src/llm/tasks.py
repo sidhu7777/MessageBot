@@ -6,26 +6,6 @@ from typing import Any, Dict, Optional
 from src.llm.client import LLMClient
 
 
-def polish_response(
-    llm_client: LLMClient,
-    enable_llm_polish: bool,
-    response_language: str,
-    base_text: str,
-) -> str:
-    if not enable_llm_polish:
-        return base_text
-    try:
-        prompt_system = (
-            "You are a medical appointment WhatsApp assistant. "
-            "Keep exact meaning and state order. Do not add/remove fields."
-        )
-        prompt_user = f"Language: {response_language}. Rewrite only tone:\n{base_text}"
-        rewritten = llm_client.generate(prompt_system, prompt_user)
-        return rewritten.strip() if rewritten else base_text
-    except Exception:
-        return base_text
-
-
 def llm_extract(
     llm_client: LLMClient,
     enable_llm_polish: bool,
@@ -144,6 +124,59 @@ def llm_route_intent(
         return intent if intent in allowed else None
     except Exception:
         return None
+
+
+def llm_route_intent_and_language(
+    llm_client: LLMClient,
+    enable_llm_polish: bool,
+    text: str,
+    min_confidence: float = 0.70,
+) -> tuple[Optional[str], Optional[str]]:
+    if not enable_llm_polish:
+        return None, None
+    try:
+        system = (
+            "Classify initial user message for a medical appointment assistant. "
+            "User may write in English, Hindi (Devanagari), or Hinglish. "
+            "Return strict JSON only, no markdown, no extra keys: "
+            "{\"intent\":\"BOOK_APPOINTMENT|CHECK_AVAILABILITY|GREETING|GENERAL_QUERY|OTHER\","
+            "\"language\":\"EN|HI|HINGLISH|UNKNOWN\",\"confidence\":0.0}."
+        )
+        raw = llm_client.generate(system, f"Text: {text}").strip()
+        parsed = parse_first_json_object(raw)
+        if not parsed:
+            return None, None
+
+        intent = str(parsed.get("intent", "")).upper()
+        lang = str(parsed.get("language", "")).upper()
+        try:
+            confidence = float(parsed.get("confidence", 0))
+        except (TypeError, ValueError):
+            confidence = 0.0
+
+        if confidence < min_confidence:
+            return None, None
+
+        allowed_intents = {
+            "BOOK_APPOINTMENT",
+            "CHECK_AVAILABILITY",
+            "GREETING",
+            "GENERAL_QUERY",
+            "OTHER",
+        }
+        intent_value = intent if intent in allowed_intents else None
+
+        if lang == "EN":
+            lang_value = "en"
+        elif lang == "HI":
+            lang_value = "hi"
+        elif lang == "HINGLISH":
+            lang_value = "hinglish"
+        else:
+            lang_value = None
+        return intent_value, lang_value
+    except Exception:
+        return None, None
 
 
 def parse_first_json_object(raw: str) -> Optional[Dict[str, Any]]:

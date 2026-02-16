@@ -26,6 +26,39 @@ def get_message(response_language: str, key: str, **kwargs: object) -> str:
             "Send 'book appointment' anytime to start."
         ),
         "ask_name": "Please share the patient full name.",
+        "existing_booking_found": (
+            "You already have a booked appointment:\n"
+            "Reference ID: {appointment_id}\n"
+            "Clinic: {clinic_name}\n"
+            "Date: {appointment_date}\n"
+            "Time: {appointment_time}\n"
+            "Choose one option:\n"
+            "1. Keep existing appointment\n"
+            "2. Cancel appointment\n"
+            "3. Reschedule (clinic/date/time)"
+        ),
+        "existing_booking_choice_invalid": "Please reply with 1, 2, or 3.",
+        "existing_booking_choice_again": "Please choose again:\n1. Keep existing appointment\n2. Cancel appointment\n3. Reschedule",
+        "existing_booking_keep": "Okay. Your existing appointment is kept as is.",
+        "existing_booking_cancel_only_done": "Done. Your appointment has been cancelled.",
+        "existing_booking_reschedule_start": "Okay. Let's reschedule this appointment. Previous clinic: {clinic_name}. You can choose same or another clinic.",
+        "confirm_reschedule_summary": (
+            "Please confirm reschedule:\n"
+            "Clinic: {clinic_name}\n"
+            "Old slot: {old_date} {old_time}\n"
+            "New slot: {new_date} {new_time}\n"
+            "Reply YES to confirm or NO to go back."
+        ),
+        "confirm_reschedule_prompt": "Please reply YES to confirm reschedule or NO to go back.",
+        "reschedule_confirmed": (
+            "Appointment rescheduled successfully.\n"
+            "Reference ID: {appointment_id}\n"
+            "Clinic: {clinic_name}\n"
+            "Date: {appointment_date}\n"
+            "Time: {appointment_time}"
+        ),
+        "reschedule_failed": "Reschedule failed because the selected slot is not available now. Please try another date/time.",
+        "existing_booking_cancel_failed": "I could not cancel the existing appointment right now. Please try again later.",
         "invalid_name": "Please provide a valid name. Example: Vineeth Raja Banala",
         "name_ack": "Thank you, {name}.",
         "ask_patient_type": "Is the patient old or new?\n1. New\n2. Old",
@@ -51,7 +84,9 @@ def get_message(response_language: str, key: str, **kwargs: object) -> str:
             "2. Sunrise Health Center | KPHB, Hyderabad | Slots today: 5\n"
             "3. Green Valley Clinic | Gachibowli, Hyderabad | Slots today: 4"
         ),
+        "ask_clinic_header": "Please choose clinic:",
         "invalid_clinic": "Please choose clinic 1, 2, or 3.",
+        "no_clinic_available": "No clinics are available for booking right now. Please try again later.",
         "clinic_ack": "Clinic noted: {clinic_name}, {clinic_address}.",
         "ask_reason": (
             "Select reason (you can choose multiple like 1,3):\n"
@@ -78,6 +113,7 @@ def get_message(response_language: str, key: str, **kwargs: object) -> str:
         ),
         "ask_date_manual": "Please type preferred date in YYYY-MM-DD format.",
         "invalid_date": "Invalid date. Please send a future date in YYYY-MM-DD format.",
+        "no_date_available": "No available dates for this clinic right now. Please choose another clinic or try later.",
         "date_ack": "Date noted: {appointment_date}.",
         "ask_time": "Please share preferred time (e.g., 10 am or 14:30).",
         "ask_time_slots": (
@@ -88,6 +124,7 @@ def get_message(response_language: str, key: str, **kwargs: object) -> str:
             "Or type another preferred time."
         ),
         "time_not_available": "Requested time {requested_time} is not available.",
+        "no_time_available": "No available time slots for this date. Please choose another date.",
         "time_ack": "Time noted: {appointment_time}.",
         "invalid_time": "Invalid time format. Example: 10 am or 14:30",
         "confirm_summary": (
@@ -174,6 +211,39 @@ def get_message(response_language: str, key: str, **kwargs: object) -> str:
             "शुरू करने के लिए कभी भी 'book appointment' भेजें।"
         ),
         "ask_name": "कृपया मरीज का पूरा नाम बताएं।",
+        "existing_booking_found": (
+            "आपकी एक अपॉइंटमेंट पहले से बुक है:\n"
+            "रेफरेंस आईडी: {appointment_id}\n"
+            "क्लिनिक: {clinic_name}\n"
+            "तारीख: {appointment_date}\n"
+            "समय: {appointment_time}\n"
+            "एक विकल्प चुनें:\n"
+            "1. पुरानी अपॉइंटमेंट रखें\n"
+            "2. अपॉइंटमेंट cancel करें\n"
+            "3. Reschedule करें (clinic/date/time)"
+        ),
+        "existing_booking_choice_invalid": "कृपया 1, 2, या 3 भेजें।",
+        "existing_booking_choice_again": "कृपया फिर से चुनें:\n1. पुरानी रखें\n2. Cancel करें\n3. Reschedule करें",
+        "existing_booking_keep": "ठीक है। आपकी मौजूदा अपॉइंटमेंट वैसी ही रहेगी।",
+        "existing_booking_cancel_only_done": "ठीक है। आपकी अपॉइंटमेंट cancel कर दी गई है।",
+        "existing_booking_reschedule_start": "ठीक है। आपकी पुरानी क्लिनिक: {clinic_name}। आप वही या दूसरी क्लिनिक चुनकर reschedule कर सकते हैं।",
+        "confirm_reschedule_summary": (
+            "कृपया reschedule की पुष्टि करें:\n"
+            "क्लिनिक: {clinic_name}\n"
+            "पुराना स्लॉट: {old_date} {old_time}\n"
+            "नया स्लॉट: {new_date} {new_time}\n"
+            "पुष्टि के लिए YES या वापस जाने के लिए NO भेजें।"
+        ),
+        "confirm_reschedule_prompt": "कृपया reschedule पुष्टि के लिए YES या वापस जाने के लिए NO भेजें।",
+        "reschedule_confirmed": (
+            "अपॉइंटमेंट सफलतापूर्वक reschedule हो गई।\n"
+            "रेफरेंस आईडी: {appointment_id}\n"
+            "क्लिनिक: {clinic_name}\n"
+            "तारीख: {appointment_date}\n"
+            "समय: {appointment_time}"
+        ),
+        "reschedule_failed": "Reschedule असफल रहा क्योंकि चुना गया स्लॉट अभी उपलब्ध नहीं है। कृपया दूसरी तारीख/समय चुनें।",
+        "existing_booking_cancel_failed": "अभी पुरानी अपॉइंटमेंट cancel नहीं हो पाई। कृपया बाद में फिर कोशिश करें।",
         "invalid_name": "कृपया सही नाम बताएं। उदाहरण: Vineeth Raja Banala",
         "name_ack": "धन्यवाद, {name}।",
         "ask_patient_type": "मरीज पुराना है या नया?\n1. New\n2. Old",
@@ -199,7 +269,9 @@ def get_message(response_language: str, key: str, **kwargs: object) -> str:
             "2. Sunrise Health Center | KPHB, Hyderabad | आज स्लॉट: 5\n"
             "3. Green Valley Clinic | Gachibowli, Hyderabad | आज स्लॉट: 4"
         ),
+        "ask_clinic_header": "कृपया क्लिनिक चुनें:",
         "invalid_clinic": "कृपया क्लिनिक 1, 2 या 3 चुनें।",
+        "no_clinic_available": "फिलहाल बुकिंग के लिए कोई क्लिनिक उपलब्ध नहीं है। कृपया बाद में फिर कोशिश करें।",
         "clinic_ack": "क्लिनिक नोट किया गया: {clinic_name}, {clinic_address}।",
         "ask_reason": (
             "कारण चुनें (एक से अधिक चुन सकते हैं, जैसे 1,3):\n"
@@ -226,6 +298,7 @@ def get_message(response_language: str, key: str, **kwargs: object) -> str:
         ),
         "ask_date_manual": "कृपया तारीख YYYY-MM-DD फॉर्मेट में टाइप करें।",
         "invalid_date": "तारीख अमान्य है। कृपया भविष्य की तारीख YYYY-MM-DD फ़ॉर्मेट में भेजें।",
+        "no_date_available": "इस क्लिनिक में फिलहाल कोई उपलब्ध तारीख नहीं है। कृपया दूसरा क्लिनिक चुनें या बाद में कोशिश करें।",
         "date_ack": "तारीख नोट की गई: {appointment_date}।",
         "ask_time": "कृपया पसंदीदा समय भेजें (जैसे 10 am या 14:30)।",
         "ask_time_slots": (
@@ -236,6 +309,7 @@ def get_message(response_language: str, key: str, **kwargs: object) -> str:
             "या दूसरा समय टाइप करें।"
         ),
         "time_not_available": "मांगा गया समय {requested_time} उपलब्ध नहीं है।",
+        "no_time_available": "इस तारीख के लिए कोई उपलब्ध समय स्लॉट नहीं है। कृपया दूसरी तारीख चुनें।",
         "time_ack": "समय नोट किया गया: {appointment_time}।",
         "invalid_time": "समय का फ़ॉर्मेट अमान्य है। उदाहरण: 10 am या 14:30",
         "confirm_summary": (
@@ -320,6 +394,39 @@ def get_message(response_language: str, key: str, **kwargs: object) -> str:
             "Start karne ke liye kabhi bhi 'book appointment' bhejiye."
         ),
         "ask_name": "Please patient ka full name share kariye.",
+        "existing_booking_found": (
+            "Aapka ek booked appointment already hai:\n"
+            "Reference ID: {appointment_id}\n"
+            "Clinic: {clinic_name}\n"
+            "Date: {appointment_date}\n"
+            "Time: {appointment_time}\n"
+            "Please ek option choose kariye:\n"
+            "1. Keep existing appointment\n"
+            "2. Cancel appointment\n"
+            "3. Reschedule (clinic/date/time)"
+        ),
+        "existing_booking_choice_invalid": "Please 1, 2, ya 3 reply kariye.",
+        "existing_booking_choice_again": "Please fir se choose kariye:\n1. Keep existing\n2. Cancel\n3. Reschedule",
+        "existing_booking_keep": "Theek hai. Aapka existing appointment same rahega.",
+        "existing_booking_cancel_only_done": "Done. Aapka appointment cancel ho gaya.",
+        "existing_booking_reschedule_start": "Theek hai. Previous clinic: {clinic_name}. Aap same ya doosra clinic choose karke reschedule kar sakte hain.",
+        "confirm_reschedule_summary": (
+            "Please reschedule confirm kariye:\n"
+            "Clinic: {clinic_name}\n"
+            "Old slot: {old_date} {old_time}\n"
+            "New slot: {new_date} {new_time}\n"
+            "Confirm ke liye YES ya back ke liye NO bhejiye."
+        ),
+        "confirm_reschedule_prompt": "Please reschedule confirm ke liye YES ya back ke liye NO bhejiye.",
+        "reschedule_confirmed": (
+            "Appointment successfully reschedule ho gaya.\n"
+            "Reference ID: {appointment_id}\n"
+            "Clinic: {clinic_name}\n"
+            "Date: {appointment_date}\n"
+            "Time: {appointment_time}"
+        ),
+        "reschedule_failed": "Reschedule fail hua kyunki selected slot ab available nahi hai. Please doosri date/time try kariye.",
+        "existing_booking_cancel_failed": "Existing appointment abhi cancel nahi ho paaya. Please baad mein try kariye.",
         "invalid_name": "Please valid name batayiye. Example: Vineeth Raja Banala",
         "name_ack": "Thank you, {name}.",
         "ask_patient_type": "Patient old hai ya new?\n1. New\n2. Old",
@@ -345,7 +452,9 @@ def get_message(response_language: str, key: str, **kwargs: object) -> str:
             "2. Sunrise Health Center | KPHB, Hyderabad | Aaj ke slots: 5\n"
             "3. Green Valley Clinic | Gachibowli, Hyderabad | Aaj ke slots: 4"
         ),
+        "ask_clinic_header": "Please clinic choose kariye:",
         "invalid_clinic": "Please clinic 1, 2, ya 3 choose kariye.",
+        "no_clinic_available": "Abhi booking ke liye koi clinic available nahi hai. Please thodi der baad try kariye.",
         "clinic_ack": "Clinic noted: {clinic_name}, {clinic_address}.",
         "ask_reason": (
             "Reason select kariye (multiple possible, e.g. 1,3):\n"
@@ -372,6 +481,7 @@ def get_message(response_language: str, key: str, **kwargs: object) -> str:
         ),
         "ask_date_manual": "Please date YYYY-MM-DD format mein type kariye.",
         "invalid_date": "Invalid date. Please future date YYYY-MM-DD format mein bhejiye.",
+        "no_date_available": "Is clinic ke liye abhi koi date available nahi hai. Please doosra clinic choose kariye ya baad mein try kariye.",
         "date_ack": "Date noted: {appointment_date}.",
         "ask_time": "Please preferred time share kariye (e.g., 10 am ya 14:30).",
         "ask_time_slots": (
@@ -382,6 +492,7 @@ def get_message(response_language: str, key: str, **kwargs: object) -> str:
             "Ya apna preferred time type kariye."
         ),
         "time_not_available": "Requested time {requested_time} available nahi hai.",
+        "no_time_available": "Is date ke liye koi time slot available nahi hai. Please doosri date choose kariye.",
         "time_ack": "Time noted: {appointment_time}.",
         "invalid_time": "Invalid time format. Example: 10 am ya 14:30",
         "confirm_summary": (
@@ -487,4 +598,5 @@ def get_message(response_language: str, key: str, **kwargs: object) -> str:
                 "ASK_TIME": "Please preferred time share kariye (e.g., 10 am ya 14:30).",
             }
         return source[key].format(**kwargs) + "\n" + prompts.get(step, "")
-    return source[key].format(**kwargs)
+    template = source.get(key, en.get(key, key))
+    return template.format(**kwargs)

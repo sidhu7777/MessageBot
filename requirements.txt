@@ -4,4 +4,6 @@ python-multipart
 
 twilio
 python-dotenv
-mysql-connector-python
+mysql-connector-python-8.4.0
+
+httpx

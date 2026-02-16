@@ -1,15 +1,13 @@
 import logging
 from dataclasses import dataclass, field
-from datetime import date, timedelta
 from typing import Optional
 
-from src.db_store import BookingRepository
+from src.db_store import BookingRepository, SchedulingRepository
 from src.llm.client import LLMClient
 from src.llm.tasks import (
     llm_change_target,
     llm_detect_confirm_intent,
     llm_extract,
-    polish_response,
 )
 from src.messages.templates import get_message
 from src.nlu.extractors import (
@@ -29,39 +27,11 @@ from src.nlu.extractors import (
     is_yes,
     resolve_change_target,
 )
-from src.nlu.initial_router import route_initial_intent
+from src.nlu.initial_router import route_initial_decision
 from src.nlu.language_detector import update_response_language
 
 
 LOGGER = logging.getLogger(__name__)
-
-STATIC_CLINICS = [
-    {
-        "id": "1",
-        "name": "City Care Clinic",
-        "address": "MG Road, Hyderabad",
-        "today_slots": 7,
-    },
-    {
-        "id": "2",
-        "name": "Sunrise Health Center",
-        "address": "KPHB, Hyderabad",
-        "today_slots": 5,
-    },
-    {
-        "id": "3",
-        "name": "Green Valley Clinic",
-        "address": "Gachibowli, Hyderabad",
-        "today_slots": 4,
-    },
-]
-
-STATIC_SLOT_BY_CLINIC = {
-    "1": ["09:30", "11:00", "16:30"],
-    "2": ["10:00", "13:00", "18:00"],
-    "3": ["09:00", "12:30", "17:30"],
-}
-
 
 @dataclass
 class AppointmentContext:
@@ -86,8 +56,8 @@ class AppointmentFSM:
     llm_client: LLMClient
     mixed_response_language: str = "auto"
     enable_llm_polish: bool = True
-    enable_response_polish: bool = False
     booking_repository: Optional[BookingRepository] = None
+    scheduling_repository: Optional[SchedulingRepository] = None
     state: str = "INIT"
     context: AppointmentContext = field(default_factory=AppointmentContext)
     response_language: str = "en"
@@ -95,7 +65,20 @@ class AppointmentFSM:
     language_turn_count: int = 0
     init_unclear_count: int = 0
     chat_phone_number: Optional[str] = None
+    bot_whatsapp_number: Optional[str] = None
     in_edit_flow: bool = False
+    doctor_id: Optional[int] = None
+    admin_id: Optional[int] = None
+    clinic_options_cache: list[dict] = field(default_factory=list)
+    date_options_cache: list[str] = field(default_factory=list)
+    time_options_cache: list[str] = field(default_factory=list)
+    existing_appointment_id: Optional[int] = None
+    existing_booking_clinic_id: Optional[str] = None
+    existing_booking_clinic_name: Optional[str] = None
+    existing_booking_doctor_id: Optional[int] = None
+    existing_booking_old_date: Optional[str] = None
+    existing_booking_old_time: Optional[str] = None
+    in_reschedule_flow: bool = False
 
     def handle(self, user_text: str) -> str:
         text = (user_text or "").strip()
@@ -128,12 +111,15 @@ class AppointmentFSM:
                 self._reset_all(cancelled=True)
                 return self._respond(self._msg("non_scope_final"), allow_polish=False)
 
-            routed = route_initial_intent(
+            routed, detected_language = route_initial_decision(
                 llm_client=self.llm_client,
                 enable_llm_polish=self.enable_llm_polish,
                 text=text,
                 lower=lower,
             )
+            if detected_language in {"en", "hi", "hinglish"}:
+                self.response_language = detected_language
+                self.language_locked = True
             if routed == "BOOK_APPOINTMENT":
                 self.init_unclear_count = 0
                 self.state = "ASK_NAME"
@@ -173,24 +159,86 @@ class AppointmentFSM:
         if self.state == "ASK_NAME":
             name = extract_name(text)
             if not name:
-                rerouted = route_initial_intent(
+                rerouted, detected_language = route_initial_decision(
                     llm_client=self.llm_client,
                     enable_llm_polish=self.enable_llm_polish,
                     text=text,
                     lower=lower,
                 )
+                if detected_language in {"en", "hi", "hinglish"}:
+                    self.response_language = detected_language
+                    self.language_locked = True
                 if rerouted in {"GENERAL_QUERY", "OTHER", "CHECK_AVAILABILITY"}:
                     self.state = "INIT"
                     self.init_unclear_count = 1
                     return self._respond(self._msg("clarify_intent"), allow_polish=False)
                 return self._respond(self._msg("invalid_name"))
             self.context.patient_name = name
+            self._ensure_actor_defaults()
+            if not self.in_edit_flow and self.booking_repository:
+                existing = self.booking_repository.find_active_appointment_by_patient_name(
+                    patient_name=name,
+                    admin_id=self.admin_id,
+                )
+                if existing:
+                    self.existing_appointment_id = int(existing["appointment_id"])
+                    self.existing_booking_clinic_id = str(existing.get("clinic_id") or "")
+                    self.existing_booking_clinic_name = str(existing.get("clinic_name") or "")
+                    self.existing_booking_doctor_id = int(existing.get("doctor_id") or 0) or None
+                    self.existing_booking_old_date = str(existing.get("slot_date") or "")
+                    self.existing_booking_old_time = str(existing.get("slot_time") or "")
+                    self.state = "ASK_EXISTING_BOOKING_ACTION"
+                    return self._respond(
+                        self._msg(
+                            "existing_booking_found",
+                            appointment_id=existing["appointment_id"],
+                            appointment_date=existing.get("slot_date") or "-",
+                            appointment_time=existing.get("slot_time") or "-",
+                            clinic_name=existing.get("clinic_name") or "-",
+                        )
+                    )
             if self.in_edit_flow:
                 self.in_edit_flow = False
                 self.state = "CONFIRM"
                 return self._respond(self._msg("change_ack", step="ASK_NAME") + "\n" + self._msg("confirm_summary", **self.context.__dict__))
             self.state = "ASK_PATIENT_TYPE"
             return self._respond(self._msg("name_ack", name=name) + "\n" + self._msg("ask_patient_type"))
+
+        if self.state == "ASK_EXISTING_BOOKING_ACTION":
+            normalized = lower.strip()
+            if normalized in {"1", "keep", "no", "do not cancel"}:
+                self.state = "COMPLETED"
+                return self._respond(self._msg("existing_booking_keep"))
+            if normalized in {"2", "cancel", "cancel only"}:
+                if self.booking_repository and self.existing_appointment_id:
+                    cancelled = self.booking_repository.cancel_appointment(
+                        appointment_id=self.existing_appointment_id,
+                        admin_id=self.admin_id,
+                    )
+                    if not cancelled:
+                        self.state = "COMPLETED"
+                        return self._respond(self._msg("existing_booking_cancel_failed"))
+                self.existing_appointment_id = None
+                self._reset_existing_booking_flags()
+                self.state = "COMPLETED"
+                return self._respond(self._msg("existing_booking_cancel_only_done"))
+            if normalized in {"3", "rebook", "reschedule", "cancel and rebook", "yes"}:
+                self.in_reschedule_flow = True
+                self.context.clinic_id = None
+                self.context.clinic_name = None
+                self.context.clinic_address = None
+                self.context.appointment_date = None
+                self.context.appointment_time = None
+                self.clinic_options_cache = []
+                self.date_options_cache = []
+                self.time_options_cache = []
+                self.state = "ASK_CLINIC"
+                return self._respond(
+                    self._msg("existing_booking_reschedule_start", clinic_name=self.existing_booking_clinic_name or "-")
+                    + "\n"
+                    + self._clinic_prompt()
+                )
+            return self._respond(self._msg("existing_booking_choice_invalid"))
 
         if self.state == "ASK_AVAILABILITY_DETAILS":
             if is_booking_intent(lower) or is_restart_intent(lower):
@@ -309,7 +357,7 @@ class AppointmentFSM:
                     return self._respond(self._msg("change_ack", step="ASK_PHONE") + "\n" + self._msg("confirm_summary", **self.context.__dict__))
                 self.state = "ASK_CLINIC"
                 return self._respond(
-                    self._msg("phone_ack", phone_number=self.context.phone_number) + "\n" + self._msg("ask_clinic")
+                    self._msg("phone_ack", phone_number=self.context.phone_number) + "\n" + self._clinic_prompt()
                 )
 
             phone = extract_phone(text)
@@ -331,7 +379,7 @@ class AppointmentFSM:
                 self.state = "CONFIRM"
                 return self._respond(self._msg("change_ack", step="ASK_PHONE") + "\n" + self._msg("confirm_summary", **self.context.__dict__))
             self.state = "ASK_CLINIC"
-            return self._respond(self._msg("phone_ack", phone_number=phone) + "\n" + self._msg("ask_clinic"))
+            return self._respond(self._msg("phone_ack", phone_number=phone) + "\n" + self._clinic_prompt())
 
         if self.state == "ASK_CLINIC":
             selected = self._select_clinic(text, lower)
@@ -340,12 +388,18 @@ class AppointmentFSM:
             self.context.clinic_id = selected["id"]
             self.context.clinic_name = selected["name"]
             self.context.clinic_address = selected["address"]
+            self.date_options_cache = []
+            self.time_options_cache = []
             if self.in_edit_flow:
                 # Clinic change affects slot pool, so re-collect date+time only.
                 self.context.appointment_date = None
                 self.context.appointment_time = None
+            date_options = self._date_options()
+            if not date_options:
+                self.state = "ASK_CLINIC"
+                return self._respond(self._msg("no_date_available") + "\n" + self._clinic_prompt())
             self.state = "ASK_DATE"
-            d1, d2, d3 = self._date_options()
+            d1, d2, d3 = date_options
             return self._respond(
                 self._msg(
                     "clinic_ack",
@@ -358,7 +412,11 @@ class AppointmentFSM:
 
         if self.state == "ASK_DATE":
             normalized = lower.strip()
-            d1, d2, d3 = self._date_options()
+            date_options = self._date_options()
+            if not date_options:
+                self.state = "ASK_CLINIC"
+                return self._respond(self._msg("no_date_available") + "\n" + self._clinic_prompt())
+            d1, d2, d3 = date_options
             if normalized in {"1", "option 1", "date 1"}:
                 parsed_date = d1
             elif normalized in {"2", "option 2", "date 2"}:
@@ -383,8 +441,12 @@ class AppointmentFSM:
                     + self._msg("ask_date_options", date_1=d1, date_2=d2, date_3=d3)
                 )
             self.context.appointment_date = parsed_date
+            self.time_options_cache = []
             self.state = "ASK_TIME"
             slots = self._suggested_slots()
+            if len(slots) < 3:
+                self.state = "ASK_DATE"
+                return self._respond(self._msg("no_time_available"))
             return self._respond(
                 self._msg("date_ack", appointment_date=parsed_date)
                 + "\n"
@@ -396,6 +458,9 @@ class AppointmentFSM:
             if date_from_text and date_from_text != self.context.appointment_date:
                 self.context.appointment_date = date_from_text
                 slots = self._suggested_slots()
+                if len(slots) < 3:
+                    self.state = "ASK_DATE"
+                    return self._respond(self._msg("no_time_available"))
                 return self._respond(
                     self._msg("date_ack", appointment_date=date_from_text)
                     + "\n"
@@ -403,6 +468,9 @@ class AppointmentFSM:
                 )
 
             slots = self._suggested_slots()
+            if len(slots) < 3:
+                self.state = "ASK_DATE"
+                return self._respond(self._msg("no_time_available"))
             selected_time: Optional[str] = None
             normalized = lower.strip()
             if normalized in {"1", "slot 1", "option 1"}:
@@ -429,12 +497,55 @@ class AppointmentFSM:
                     + self._msg("ask_time_slots", slot_1=slots[0], slot_2=slots[1], slot_3=slots[2])
                 )
             self.context.appointment_time = parsed_time
+            if self.in_reschedule_flow:
+                self.state = "CONFIRM_RESCHEDULE"
+                return self._respond(
+                    self._msg(
+                        "confirm_reschedule_summary",
+                        old_date=self.existing_booking_old_date or "-",
+                        old_time=self.existing_booking_old_time or "-",
+                        new_date=self.context.appointment_date or "-",
+                        new_time=self.context.appointment_time or "-",
+                        clinic_name=self.context.clinic_name or "-",
+                    )
+                )
             if self.in_edit_flow:
                 self.in_edit_flow = False
                 self.state = "CONFIRM"
                 return self._respond(self._msg("change_ack", step="ASK_TIME") + "\n" + self._msg("confirm_summary", **self.context.__dict__))
             self.state = "ASK_REASON"
             return self._respond(self._msg("time_ack", appointment_time=parsed_time) + "\n" + self._msg("ask_reason"))
+
+        if self.state == "CONFIRM_RESCHEDULE":
+            if is_yes(lower):
+                if not self.booking_repository or not self.existing_appointment_id:
+                    self.in_reschedule_flow = False
+                    self.state = "COMPLETED"
+                    return self._respond(self._msg("existing_booking_cancel_failed"))
+                result = self.booking_repository.reschedule_appointment_same_clinic(
+                    appointment_id=self.existing_appointment_id,
+                    new_date=self.context.appointment_date or "",
+                    new_time=self.context.appointment_time or "",
+                    admin_id=self.admin_id,
+                )
+                self.in_reschedule_flow = False
+                self.state = "COMPLETED"
+                if result.ok:
+                    return self._respond(
+                        self._msg(
+                            "reschedule_confirmed",
+                            appointment_id=result.appointment_id,
+                            clinic_name=self.context.clinic_name or "-",
+                            appointment_date=self.context.appointment_date or "-",
+                            appointment_time=self.context.appointment_time or "-",
+                        )
+                    )
+                return self._respond(self._msg("reschedule_failed"))
+            if is_no(lower):
+                self.in_reschedule_flow = False
+                self.state = "ASK_EXISTING_BOOKING_ACTION"
+                return self._respond(self._msg("existing_booking_choice_again"))
+            return self._respond(self._msg("confirm_reschedule_prompt"))
 
         if self.state == "ASK_REASON":
             reason_value = self._extract_reason_value(text, lower)
@@ -513,20 +624,13 @@ class AppointmentFSM:
         return self._respond(self._msg("ask_name"))
 
     def _respond(self, base_text: str, allow_polish: bool = True) -> str:
-        if not allow_polish or not self.enable_response_polish:
-            return base_text
-        return polish_response(
-            llm_client=self.llm_client,
-            enable_llm_polish=self.enable_llm_polish,
-            response_language=self.response_language,
-            base_text=base_text,
-        )
+        return base_text
 
     def _persist_confirmed_appointment(self) -> str:
         if not self.booking_repository:
             return ""
         try:
-            result = self.booking_repository.save_confirmed_appointment(self.context)
+            result = self.booking_repository.save_confirmed_appointment(self.context, admin_id=self.admin_id)
         except Exception as exc:
             LOGGER.warning("DB persistence failed: %s", exc)
             return self._msg("db_save_failed")
@@ -553,10 +657,23 @@ class AppointmentFSM:
         self.state = "CANCELLED" if cancelled else "INIT"
         self.init_unclear_count = 0
         self.in_edit_flow = False
+        self.clinic_options_cache = []
+        self.date_options_cache = []
+        self.time_options_cache = []
+        self.existing_appointment_id = None
+        self._reset_existing_booking_flags()
         if not cancelled and self.mixed_response_language.lower() == "auto":
             self.language_locked = False
             self.response_language = "en"
             self.language_turn_count = 0
+
+    def _reset_existing_booking_flags(self) -> None:
+        self.existing_booking_clinic_id = None
+        self.existing_booking_clinic_name = None
+        self.existing_booking_doctor_id = None
+        self.existing_booking_old_date = None
+        self.existing_booking_old_time = None
+        self.in_reschedule_flow = False
 
     def _msg(self, key: str, **kwargs: object) -> str:
         return get_message(self.response_language, key, **kwargs)
@@ -573,18 +690,24 @@ class AppointmentFSM:
             language_locked=self.language_locked,
             language_turn_count=self.language_turn_count,
             llm_client=self.llm_client,
-            enable_llm_fallback=self.enable_llm_polish,
+            enable_llm_fallback=False,
         )
 
     def _select_clinic(self, text: str, lower: str) -> Optional[dict]:
-        cleaned = lower.strip()
-        for clinic in STATIC_CLINICS:
-            if cleaned == clinic["id"]:
-                return clinic
-        for clinic in STATIC_CLINICS:
-            name = clinic["name"].lower()
-            if name in lower or any(token in lower for token in name.split()):
-                return clinic
+        self._ensure_actor_defaults()
+        if self.scheduling_repository and self.doctor_id:
+            if not self.clinic_options_cache:
+                self.clinic_options_cache = self._db_clinic_options()
+            normalized = lower.strip()
+            if normalized.isdigit():
+                idx = int(normalized) - 1
+                if 0 <= idx < len(self.clinic_options_cache):
+                    return self.clinic_options_cache[idx]
+            for clinic in self.clinic_options_cache:
+                name = clinic["name"].lower()
+                if name in lower or any(token in lower for token in name.split()):
+                    return clinic
+            return None
         return None
 
     def _normalize_phone(self, value: str) -> Optional[str]:
@@ -597,13 +720,36 @@ class AppointmentFSM:
             return digits
         return None
 
-    def _date_options(self) -> tuple[str, str, str]:
-        today = date.today()
-        return (
-            (today + timedelta(days=1)).isoformat(),
-            (today + timedelta(days=2)).isoformat(),
-            (today + timedelta(days=3)).isoformat(),
-        )
+    def _date_options(self) -> Optional[tuple[str, str, str]]:
+        self._ensure_actor_defaults()
+        if self.scheduling_repository and self.doctor_id and self.context.clinic_id:
+            if not self.date_options_cache:
+                self.date_options_cache = self.scheduling_repository.list_available_dates(
+                    doctor_id=self.doctor_id,
+                    clinic_id=int(self.context.clinic_id),
+                    admin_id=self.admin_id,
+                    limit=3,
+                )
+            if len(self.date_options_cache) >= 3:
+                return (
+                    self.date_options_cache[0],
+                    self.date_options_cache[1],
+                    self.date_options_cache[2],
+                )
+            if len(self.date_options_cache) == 2:
+                return (
+                    self.date_options_cache[0],
+                    self.date_options_cache[1],
+                    self.date_options_cache[1],
+                )
+            if len(self.date_options_cache) == 1:
+                return (
+                    self.date_options_cache[0],
+                    self.date_options_cache[0],
+                    self.date_options_cache[0],
+                )
+            return None
+        return None
 
     def _extract_reason_value(self, text: str, lower: str) -> Optional[str]:
         reason_map = {
@@ -653,22 +799,27 @@ class AppointmentFSM:
         return None
 
     def _suggested_slots(self) -> list[str]:
-        clinic_id = self.context.clinic_id or "1"
-        slots = STATIC_SLOT_BY_CLINIC.get(clinic_id, ["10:00", "12:00", "17:00"])
-        return slots[:3]
+        self._ensure_actor_defaults()
+        if (
+            self.scheduling_repository
+            and self.doctor_id
+            and self.context.clinic_id
+            and self.context.appointment_date
+        ):
+            self.time_options_cache = self.scheduling_repository.list_available_times(
+                doctor_id=self.doctor_id,
+                clinic_id=int(self.context.clinic_id),
+                slot_date=self.context.appointment_date,
+                admin_id=self.admin_id,
+                limit=3,
+            )
+            if self.time_options_cache:
+                return self.time_options_cache[:3]
+            return []
+        return []
 
     def _is_available_time(self, parsed_time: str) -> bool:
-        if parsed_time in self._suggested_slots():
-            return True
-        parts = parsed_time.split(":")
-        if len(parts) != 2:
-            return False
-        try:
-            hour = int(parts[0])
-            minute = int(parts[1])
-        except ValueError:
-            return False
-        return 9 <= hour <= 18 and minute in {0, 30}
+        return parsed_time in self.time_options_cache
 
     def _change_state_from_option(self, lower: str) -> Optional[str]:
         options = {
@@ -685,3 +836,56 @@ class AppointmentFSM:
         }
         normalized = lower.strip()
         return options.get(normalized)
+
+    def _ensure_actor_defaults(self) -> None:
+        if self.admin_id is None and self.booking_repository:
+            try:
+                self.admin_id = self.booking_repository.default_admin_id()
+            except Exception:
+                self.admin_id = None
+        if self.doctor_id is None and self.scheduling_repository:
+            try:
+                if self.bot_whatsapp_number:
+                    self.doctor_id = self.scheduling_repository.default_doctor_id_by_phone(
+                        phone_number=self.bot_whatsapp_number,
+                        admin_id=self.admin_id,
+                    )
+                if self.doctor_id is None:
+                    self.doctor_id = self.scheduling_repository.default_doctor_id(admin_id=self.admin_id)
+            except Exception:
+                self.doctor_id = None
+
+    def _db_clinic_options(self) -> list[dict]:
+        if not self.scheduling_repository or not self.doctor_id:
+            return []
+        clinics = self.scheduling_repository.list_clinics_for_doctor(
+            doctor_id=self.doctor_id,
+            admin_id=self.admin_id,
+            limit=10,
+        )
+        options: list[dict] = []
+        for index, clinic in enumerate(clinics, start=1):
+            options.append(
+                {
+                    "id": str(clinic.clinic_id),
+                    "ordinal": str(index),
+                    "name": clinic.clinic_name,
+                    "address": clinic.location,
+                    "today_slots": clinic.today_slots,
+                }
+            )
+        return options
+
+    def _clinic_prompt(self) -> str:
+        self._ensure_actor_defaults()
+        if self.scheduling_repository and self.doctor_id:
+            self.clinic_options_cache = self._db_clinic_options()
+            if self.clinic_options_cache:
+                lines = [self._msg("ask_clinic_header")]
+                for clinic in self.clinic_options_cache[:10]:
+                    lines.append(
+                        f"{clinic['ordinal']}. {clinic['name']} | {clinic['address']} | Slots today: {clinic['today_slots']}"
+                    )
+                return "\n".join(lines)
+            return self._msg("no_clinic_available")
+        return self._msg("no_clinic_available")

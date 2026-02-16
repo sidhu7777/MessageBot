@@ -8,6 +8,15 @@ def _as_bool(value: str, default: bool = False) -> bool:
     return value.strip().lower() in {"1", "true", "yes", "y", "on"}
 
 
+def _normalize_whatsapp_sender(value: str) -> str:
+    raw = (value or "").strip()
+    if not raw:
+        return ""
+    if raw.startswith("whatsapp:"):
+        return raw
+    return f"whatsapp:{raw}"
+
+
 @dataclass(frozen=True)
 class Settings:
     app_name: str = "whatsapp-appointment-bot"
@@ -23,7 +32,6 @@ class Settings:
 
     mixed_response_language: str = "auto"
     enable_llm_polish: bool = True
-    enable_response_polish: bool = False
     enable_db_booking: bool = True
 
     enable_twilio_signature_validation: bool = False
@@ -41,6 +49,16 @@ class Settings:
     processing_timeout_seconds: float = 2.5
     twilio_send_retries: int = 2
     twilio_status_callback_url: str = ""
+    queue_worker_count: int = 3
+    queue_max_size: int = 60
+    queue_retry_attempts: int = 2
+    queue_busy_threshold: int = 3
+    queue_overflow_requeue_attempts: int = 30
+    queue_overflow_requeue_backoff_seconds: float = 1.0
+
+    admin_api_key: str = ""
+    admin_api_rate_limit_per_minute: int = 60
+    admin_auth_token_ttl_minutes: int = 480
 
     session_ttl_minutes: int = 120
     max_message_chars: int = 1500
@@ -48,6 +66,7 @@ class Settings:
 
 
 def load_settings() -> Settings:
+    twilio_sender = os.getenv("TWILIO_WHATSAPP_NUMBER", "").strip()
     return Settings(
         app_name=os.getenv("APP_NAME", "whatsapp-appointment-bot"),
         log_level=os.getenv("LOG_LEVEL", "INFO"),
@@ -62,14 +81,13 @@ def load_settings() -> Settings:
         ),
         mixed_response_language=os.getenv("MIXED_RESPONSE_LANGUAGE", "auto"),
         enable_llm_polish=_as_bool(os.getenv("ENABLE_LLM_POLISH", "true")),
-        enable_response_polish=_as_bool(os.getenv("ENABLE_RESPONSE_POLISH", "false")),
         enable_db_booking=_as_bool(os.getenv("ENABLE_DB_BOOKING", "true")),
         enable_twilio_signature_validation=_as_bool(
             os.getenv("ENABLE_TWILIO_SIGNATURE_VALIDATION", "false")
         ),
         twilio_account_sid=os.getenv("TWILIO_ACCOUNT_SID", ""),
         twilio_auth_token=os.getenv("TWILIO_AUTH_TOKEN", ""),
-        twilio_whatsapp_from=os.getenv("TWILIO_WHATSAPP_FROM", ""),
+        twilio_whatsapp_from=_normalize_whatsapp_sender(twilio_sender),
         twilio_use_rest_responses=_as_bool(os.getenv("TWILIO_USE_REST_RESPONSES", "true")),
         twilio_template_patient_type_sid=os.getenv("TWILIO_TEMPLATE_PATIENT_TYPE_SID", ""),
         twilio_template_gender_sid=os.getenv("TWILIO_TEMPLATE_GENDER_SID", ""),
@@ -81,6 +99,15 @@ def load_settings() -> Settings:
         processing_timeout_seconds=float(os.getenv("PROCESSING_TIMEOUT_SECONDS", "2.5")),
         twilio_send_retries=int(os.getenv("TWILIO_SEND_RETRIES", "2")),
         twilio_status_callback_url=os.getenv("TWILIO_STATUS_CALLBACK_URL", ""),
+        queue_worker_count=int(os.getenv("QUEUE_WORKER_COUNT", "3")),
+        queue_max_size=int(os.getenv("QUEUE_MAX_SIZE", "60")),
+        queue_retry_attempts=int(os.getenv("QUEUE_RETRY_ATTEMPTS", "2")),
+        queue_busy_threshold=int(os.getenv("QUEUE_BUSY_THRESHOLD", "3")),
+        queue_overflow_requeue_attempts=int(os.getenv("QUEUE_OVERFLOW_REQUEUE_ATTEMPTS", "30")),
+        queue_overflow_requeue_backoff_seconds=float(os.getenv("QUEUE_OVERFLOW_REQUEUE_BACKOFF_SECONDS", "1.0")),
+        admin_api_key=os.getenv("ADMIN_API_KEY", "").strip(),
+        admin_api_rate_limit_per_minute=int(os.getenv("ADMIN_API_RATE_LIMIT_PER_MINUTE", "60")),
+        admin_auth_token_ttl_minutes=int(os.getenv("ADMIN_AUTH_TOKEN_TTL_MINUTES", "480")),
         session_ttl_minutes=int(os.getenv("SESSION_TTL_MINUTES", "120")),
         max_message_chars=int(os.getenv("MAX_MESSAGE_CHARS", "1500")),
     )
