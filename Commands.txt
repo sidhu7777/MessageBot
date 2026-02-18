@@ -1,0 +1,12 @@
+cd C:\Users\91832\Desktop\Message_bot
+.\venv\Scripts\activate
+uvicorn main:app --port 8000 --reload
+
+
+
+
+Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:8000/webhook" -Body @{
+  From = "whatsapp:+919392569600"
+  Body = "I need to book appointment"
+  MessageSid = "SMLOCAL2"
+}

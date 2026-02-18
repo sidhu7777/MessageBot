@@ -3,10 +3,10 @@ def get_message(response_language: str, key: str, **kwargs: object) -> str:
         "greeting": "Hello, I am your medical appointment assistant. I can help with booking and doctor availability.",
         "general_help": "I can help with appointment booking or doctor availability. Tell me what you need.",
         "intent_ack": "Sure, I can help you book an appointment.",
-        "availability_intro": "Sure, I can help check doctor availability. Please share doctor name and preferred date.",
-        "availability_ask": "Please share doctor name and preferred date (YYYY-MM-DD or 'tomorrow') to check availability.",
-        "availability_ask_doctor": "Please share the doctor name to check availability.",
-        "availability_ask_date": "Please share preferred date (YYYY-MM-DD or 'tomorrow') to check availability.",
+        "availability_intro": "Sure, I can help check doctor availability. Please share preferred date (YYYY-MM-DD or 'today'/'tomorrow'). Doctor name is optional.",
+        "availability_ask": "Please share preferred date (YYYY-MM-DD or 'today'/'tomorrow') to check availability.",
+        "availability_ask_doctor": "Doctor name is optional. Please share preferred date (YYYY-MM-DD or 'today'/'tomorrow').",
+        "availability_ask_date": "Please share preferred date (YYYY-MM-DD or 'today'/'tomorrow') to check availability.",
         "availability_noted": (
             "Noted. You want availability for Dr. {availability_doctor} on {availability_date}.\n"
             "You can continue with booking now by saying 'book appointment'."
@@ -71,9 +71,9 @@ def get_message(response_language: str, key: str, **kwargs: object) -> str:
         "invalid_gender": "Please reply with gender as male, female, or other.",
         "gender_ack": "Gender noted: {gender}.",
         "ask_phone": (
-            "Please confirm contact number:\n"
-            "1. Same as this WhatsApp number\n"
-            "2. Share a different number (10 digits)"
+            "Is the contact number same as this WhatsApp number?\n"
+            "Reply YES or NO.\n"
+            "If NO, please share a 10-digit number."
         ),
         "invalid_phone_same_missing": "I could not read the WhatsApp number. Please share a 10-digit contact number.",
         "invalid_phone": "Please share a valid 10-digit contact number.",
@@ -116,6 +116,9 @@ def get_message(response_language: str, key: str, **kwargs: object) -> str:
         "no_date_available": "No available dates for this clinic right now. Please choose another clinic or try later.",
         "date_ack": "Date noted: {appointment_date}.",
         "ask_time": "Please share preferred time (e.g., 10 am or 14:30).",
+        "ask_time_hour_options": "Which hour is nearest for you to book?",
+        "invalid_time_hour": "Please choose a valid hour option, or type an exact time.",
+        "ask_time_nearest_slots": "Okay, for around {preferred_hour}, please choose an exact slot:",
         "ask_time_slots": (
             "Please choose a time slot:\n"
             "1. {slot_1}\n"
@@ -140,9 +143,9 @@ def get_message(response_language: str, key: str, **kwargs: object) -> str:
             "Symptoms: {symptoms}\n"
             "Date: {appointment_date}\n"
             "Time: {appointment_time}\n"
-            "Reply YES to confirm or NO to restart."
+            "Reply YES to confirm or NO to change details."
         ),
-        "confirm_prompt": "Please reply YES to confirm or NO to restart.",
+        "confirm_prompt": "Please reply YES to confirm or NO to change details.",
         "ask_change_field": (
             "No problem. Which detail do you want to change?\n"
             "1. Name\n"
@@ -325,9 +328,9 @@ def get_message(response_language: str, key: str, **kwargs: object) -> str:
             "लक्षण: {symptoms}\n"
             "तारीख: {appointment_date}\n"
             "समय: {appointment_time}\n"
-            "पुष्टि के लिए YES और दोबारा शुरू करने के लिए NO भेजें।"
+            "पुष्टि के लिए YES और विवरण बदलने के लिए NO भेजें।"
         ),
-        "confirm_prompt": "कृपया पुष्टि के लिए YES या दोबारा शुरू करने के लिए NO भेजें।",
+        "confirm_prompt": "कृपया पुष्टि के लिए YES या विवरण बदलने के लिए NO भेजें।",
         "ask_change_field": (
             "कोई बात नहीं। आप कौन-सा विवरण बदलना चाहते हैं?\n"
             "1. नाम\n"
@@ -373,10 +376,10 @@ def get_message(response_language: str, key: str, **kwargs: object) -> str:
         "greeting": "Hello, main aapka medical appointment assistant hoon. Main booking aur doctor availability mein help kar sakta hoon.",
         "general_help": "Main appointment booking ya doctor availability mein help kar sakta hoon. Aapko kya chahiye?",
         "intent_ack": "Theek hai, main aapki appointment booking mein help kar sakta hoon.",
-        "availability_intro": "Theek hai, main doctor availability check karne mein help kar sakta hoon. Doctor name aur preferred date share kariye.",
-        "availability_ask": "Availability check ke liye doctor name aur preferred date bhejiye (YYYY-MM-DD ya 'tomorrow').",
+        "availability_intro": "Theek hai, main doctor availability check karne mein help kar sakta hoon. Preferred date share kariye (YYYY-MM-DD ya 'today'/'tomorrow'). Doctor name optional hai.",
+        "availability_ask": "Availability check ke liye preferred date bhejiye (YYYY-MM-DD ya 'today'/'tomorrow').",
         "availability_ask_doctor": "Availability check ke liye doctor name share kariye.",
-        "availability_ask_date": "Availability check ke liye preferred date bhejiye (YYYY-MM-DD ya 'tomorrow').",
+        "availability_ask_date": "Availability check ke liye preferred date bhejiye (YYYY-MM-DD ya 'today'/'tomorrow').",
         "availability_noted": (
             "Noted. Aap Dr. {availability_doctor} ki {availability_date} ki availability pooch rahe hain.\n"
             "Booking continue karne ke liye 'book appointment' bhejiye."
@@ -439,9 +442,9 @@ def get_message(response_language: str, key: str, **kwargs: object) -> str:
         "invalid_gender": "Please gender male, female, ya other mein reply kariye.",
         "gender_ack": "Gender noted: {gender}.",
         "ask_phone": (
-            "Please contact number confirm kariye:\n"
-            "1. Same WhatsApp number use karo\n"
-            "2. Different number share karo (10 digits)"
+            "Kya contact number yehi WhatsApp number hai?\n"
+            "Please YES ya NO mein reply kariye.\n"
+            "Agar NO, to 10-digit number share kariye."
         ),
         "invalid_phone_same_missing": "WhatsApp number read nahi hua. Please 10-digit contact number share kariye.",
         "invalid_phone": "Please valid 10-digit contact number bhejiye.",
@@ -508,9 +511,9 @@ def get_message(response_language: str, key: str, **kwargs: object) -> str:
             "Symptoms: {symptoms}\n"
             "Date: {appointment_date}\n"
             "Time: {appointment_time}\n"
-            "Confirm ke liye YES ya restart ke liye NO bhejiye."
+            "Confirm ke liye YES ya details change karne ke liye NO bhejiye."
         ),
-        "confirm_prompt": "Please confirm ke liye YES ya restart ke liye NO bhejiye.",
+        "confirm_prompt": "Please confirm ke liye YES ya details change karne ke liye NO bhejiye.",
         "ask_change_field": (
             "No problem. Kaunsa detail change karna hai?\n"
             "1. Name\n"
@@ -564,7 +567,7 @@ def get_message(response_language: str, key: str, **kwargs: object) -> str:
                 "ASK_PATIENT_TYPE": "Is the patient old or new?",
                 "ASK_AGE": "Please share patient age.",
                 "ASK_GENDER": "Please share patient gender: male, female, or other.",
-                "ASK_PHONE": "Please share contact number (10 digits).",
+                "ASK_PHONE": "Is this WhatsApp number the contact number? Reply YES or NO. If NO, share a 10-digit number.",
                 "ASK_CLINIC": "Please choose clinic 1, 2, or 3.",
                 "ASK_REASON": "What is the reason for the appointment?",
                 "ASK_SYMPTOMS": "Please share the symptoms.",
@@ -590,7 +593,7 @@ def get_message(response_language: str, key: str, **kwargs: object) -> str:
                 "ASK_PATIENT_TYPE": "Patient old hai ya new?",
                 "ASK_AGE": "Please patient age share kariye.",
                 "ASK_GENDER": "Please patient gender share kariye: male, female, ya other.",
-                "ASK_PHONE": "Please contact number share kariye (10 digits).",
+                "ASK_PHONE": "Kya yehi WhatsApp number contact number hai? YES ya NO reply kariye. Agar NO, to 10-digit number share kariye.",
                 "ASK_CLINIC": "Please clinic 1, 2, ya 3 choose kariye.",
                 "ASK_REASON": "Appointment ka reason kya hai?",
                 "ASK_SYMPTOMS": "Please symptoms share kariye.",

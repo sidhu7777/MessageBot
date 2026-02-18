@@ -13,6 +13,7 @@ from twilio.request_validator import RequestValidator
 from twilio.twiml.messaging_response import MessagingResponse
 from dotenv import load_dotenv
 
+from src.automation import AutomationScheduler
 from src.api.admin_router import create_admin_router
 from src.config import load_settings
 from src.db_store import auth_repository_from_env, conversation_repository_from_env, repositories_from_env
@@ -76,6 +77,20 @@ turn_processor = TurnQueueProcessor(
     ),
     retry_attempts=max(0, settings.queue_retry_attempts),
 )
+automation_scheduler = AutomationScheduler(
+    booking_repository=booking_repository if settings.enable_db_booking else None,
+    scheduling_repository=scheduling_repository if settings.enable_db_booking else None,
+    send_message_fn=lambda to_number, body: _send_plain_rest_message(to_number=to_number, body=body),
+    source_whatsapp_number=settings.twilio_whatsapp_from,
+    enabled=settings.automation_enabled,
+    slot_automation_enabled=settings.slot_automation_enabled,
+    slot_generation_interval_seconds=settings.slot_generation_interval_seconds,
+    slot_generation_days_ahead=settings.slot_generation_days_ahead,
+    doctor_reminder_enabled=settings.doctor_reminder_enabled,
+    doctor_reminder_interval_seconds=settings.doctor_reminder_interval_seconds,
+    doctor_reminder_lead_minutes=settings.doctor_reminder_lead_minutes,
+    doctor_reminder_window_seconds=settings.doctor_reminder_window_seconds,
+)
 
 app = FastAPI(title=settings.app_name)
 app.include_router(
@@ -93,6 +108,7 @@ app.include_router(
 @app.on_event("startup")
 async def startup_validation() -> None:
     turn_processor.start()
+    automation_scheduler.start()
     if settings.llm_provider.lower() != "ollama":
         return
     try:
@@ -111,6 +127,7 @@ async def startup_validation() -> None:
 
 @app.on_event("shutdown")
 async def shutdown_workers() -> None:
+    automation_scheduler.stop()
     turn_processor.stop()
 
 
@@ -142,7 +159,16 @@ async def health_queue() -> dict:
             "queue_busy_threshold": settings.queue_busy_threshold,
             "queue_overflow_requeue_attempts": settings.queue_overflow_requeue_attempts,
             "queue_overflow_requeue_backoff_seconds": settings.queue_overflow_requeue_backoff_seconds,
+            "automation_enabled": settings.automation_enabled,
+            "slot_automation_enabled": settings.slot_automation_enabled,
+            "slot_generation_interval_seconds": settings.slot_generation_interval_seconds,
+            "slot_generation_days_ahead": settings.slot_generation_days_ahead,
+            "doctor_reminder_enabled": settings.doctor_reminder_enabled,
+            "doctor_reminder_interval_seconds": settings.doctor_reminder_interval_seconds,
+            "doctor_reminder_lead_minutes": settings.doctor_reminder_lead_minutes,
+            "doctor_reminder_window_seconds": settings.doctor_reminder_window_seconds,
         },
+        "automation": automation_scheduler.snapshot(),
     }
 
 

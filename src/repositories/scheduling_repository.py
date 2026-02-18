@@ -12,6 +12,11 @@ class ClinicOption:
     today_slots: int
 
 
+@dataclass
+class ScheduleRebuildRequest:
+    schedule_id: int
+
+
 class SchedulingRepository:
     def __init__(self, config: MySQLConfig) -> None:
         self._config = config
@@ -255,6 +260,102 @@ class SchedulingRepository:
                 (schedule_id,),
             )
             conn.commit()
+        finally:
+            cur.close()
+            conn.close()
+
+    def list_active_schedule_ids(self, days_ahead: int = 30, admin_id: Optional[int] = None) -> list[int]:
+        conn = self._connect()
+        cur = conn.cursor(dictionary=True)
+        try:
+            horizon_days = max(1, int(days_ahead))
+            params: list[object] = [horizon_days]
+            admin_sql = ""
+            if admin_id is not None:
+                admin_sql = "AND dcs.admin_id = %s"
+                params.append(admin_id)
+            cur.execute(
+                f"""
+                SELECT DISTINCT dcs.schedule_id
+                FROM doctor_clinic_schedule dcs
+                JOIN doctors d ON d.doctor_id = dcs.doctor_id
+                JOIN clinics c ON c.clinic_id = dcs.clinic_id
+                WHERE d.status = 'ACTIVE'
+                  AND c.status = 'ACTIVE'
+                  AND dcs.effective_to >= CURDATE()
+                  AND dcs.effective_from <= DATE_ADD(CURDATE(), INTERVAL %s DAY)
+                  {admin_sql}
+                ORDER BY dcs.schedule_id
+                """,
+                tuple(params),
+            )
+            return [int(row["schedule_id"]) for row in cur.fetchall()]
+        finally:
+            cur.close()
+            conn.close()
+
+    def ensure_rebuild_queue_schema(self) -> None:
+        conn = self._connect()
+        cur = conn.cursor()
+        try:
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS schedule_rebuild_queue (
+                    schedule_id INT NOT NULL,
+                    requested_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                    PRIMARY KEY (schedule_id)
+                ) ENGINE=InnoDB
+                """
+            )
+            conn.commit()
+        finally:
+            cur.close()
+            conn.close()
+
+    def list_pending_schedule_rebuilds(self, limit: int = 50) -> list[ScheduleRebuildRequest]:
+        conn = self._connect()
+        cur = conn.cursor(dictionary=True)
+        try:
+            cur.execute(
+                """
+                SELECT schedule_id
+                FROM schedule_rebuild_queue
+                ORDER BY requested_at ASC, schedule_id ASC
+                LIMIT %s
+                """,
+                (max(1, int(limit)),),
+            )
+            return [ScheduleRebuildRequest(schedule_id=int(row["schedule_id"])) for row in cur.fetchall()]
+        finally:
+            cur.close()
+            conn.close()
+
+    def clear_schedule_rebuild_request(self, schedule_id: int) -> None:
+        conn = self._connect()
+        cur = conn.cursor()
+        try:
+            cur.execute("DELETE FROM schedule_rebuild_queue WHERE schedule_id = %s", (schedule_id,))
+            conn.commit()
+        finally:
+            cur.close()
+            conn.close()
+
+    def cleanup_future_available_slots(self, schedule_id: int) -> int:
+        conn = self._connect()
+        cur = conn.cursor()
+        try:
+            cur.execute(
+                """
+                DELETE FROM slots
+                WHERE schedule_id = %s
+                  AND slot_status = 'AVAILABLE'
+                  AND slot_date >= CURDATE()
+                """,
+                (schedule_id,),
+            )
+            deleted = int(cur.rowcount or 0)
+            conn.commit()
+            return deleted
         finally:
             cur.close()
             conn.close()

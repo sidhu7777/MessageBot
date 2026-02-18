@@ -62,6 +62,14 @@ class Settings:
 
     session_ttl_minutes: int = 120
     max_message_chars: int = 1500
+    automation_enabled: bool = True
+    slot_automation_enabled: bool = True
+    slot_generation_interval_seconds: int = 300
+    slot_generation_days_ahead: int = 30
+    doctor_reminder_enabled: bool = True
+    doctor_reminder_interval_seconds: int = 60
+    doctor_reminder_lead_minutes: int = 10
+    doctor_reminder_window_seconds: int = 30
 
 
 
@@ -110,4 +118,12 @@ def load_settings() -> Settings:
         admin_auth_token_ttl_minutes=int(os.getenv("ADMIN_AUTH_TOKEN_TTL_MINUTES", "480")),
         session_ttl_minutes=int(os.getenv("SESSION_TTL_MINUTES", "120")),
         max_message_chars=int(os.getenv("MAX_MESSAGE_CHARS", "1500")),
+        automation_enabled=_as_bool(os.getenv("AUTOMATION_ENABLED", "true")),
+        slot_automation_enabled=_as_bool(os.getenv("SLOT_AUTOMATION_ENABLED", "true")),
+        slot_generation_interval_seconds=int(os.getenv("SLOT_GENERATION_INTERVAL_SECONDS", "300")),
+        slot_generation_days_ahead=int(os.getenv("SLOT_GENERATION_DAYS_AHEAD", "30")),
+        doctor_reminder_enabled=_as_bool(os.getenv("DOCTOR_REMINDER_ENABLED", "true")),
+        doctor_reminder_interval_seconds=int(os.getenv("DOCTOR_REMINDER_INTERVAL_SECONDS", "60")),
+        doctor_reminder_lead_minutes=int(os.getenv("DOCTOR_REMINDER_LEAD_MINUTES", "10")),
+        doctor_reminder_window_seconds=int(os.getenv("DOCTOR_REMINDER_WINDOW_SECONDS", "30")),
     )

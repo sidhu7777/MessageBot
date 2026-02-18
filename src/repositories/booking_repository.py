@@ -11,6 +11,19 @@ class BookingResult:
     appointment_id: Optional[int] = None
 
 
+@dataclass
+class DoctorReminder:
+    appointment_id: int
+    doctor_whatsapp: str
+    patient_name: str
+    clinic_name: str
+    slot_date: str
+    slot_time: str
+    schedule_id: int
+    schedule_start_time: str
+    schedule_end_time: str
+
+
 class BookingRepository:
     def __init__(self, config: MySQLConfig) -> None:
         self._config = config
@@ -33,6 +46,7 @@ class BookingRepository:
         self,
         patient_name: str,
         admin_id: Optional[int] = None,
+        doctor_id: Optional[int] = None,
     ) -> Optional[dict]:
         if not patient_name:
             return None
@@ -42,8 +56,13 @@ class BookingRepository:
             actual_admin_id = admin_id or self.default_admin_id()
             if not actual_admin_id:
                 return None
+            params: list[object] = [patient_name, actual_admin_id]
+            doctor_sql = ""
+            if doctor_id is not None:
+                doctor_sql = "AND a.doctor_id = %s"
+                params.append(doctor_id)
             cur.execute(
-                """
+                f"""
                 SELECT
                     a.appointment_id,
                     a.clinic_id,
@@ -58,10 +77,11 @@ class BookingRepository:
                 WHERE p.full_name = %s
                   AND a.admin_id = %s
                   AND a.status = 'BOOKED'
+                  {doctor_sql}
                 ORDER BY a.appointment_id DESC
                 LIMIT 1
                 """,
-                (patient_name, actual_admin_id),
+                tuple(params),
             )
             return cur.fetchone()
         finally:
@@ -220,7 +240,12 @@ class BookingRepository:
             cur.close()
             conn.close()
 
-    def save_confirmed_appointment(self, context, admin_id: Optional[int] = None) -> BookingResult:
+    def save_confirmed_appointment(
+        self,
+        context,
+        admin_id: Optional[int] = None,
+        doctor_id: Optional[int] = None,
+    ) -> BookingResult:
         if (
             not context.patient_name
             or not context.appointment_date
@@ -257,6 +282,7 @@ class BookingRepository:
                     UPDATE patients
                     SET age = %s,
                         gender = %s,
+                        phone = %s,
                         patient_type = %s,
                         reason = %s,
                         symptoms = %s
@@ -265,6 +291,7 @@ class BookingRepository:
                     (
                         context.age,
                         context.gender,
+                        context.phone_number,
                         context.patient_type,
                         context.reason,
                         context.symptoms,
@@ -275,13 +302,14 @@ class BookingRepository:
                 cur.execute(
                     """
                     INSERT INTO patients
-                    (full_name, age, gender, admin_id, patient_type, reason, symptoms)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s)
+                    (full_name, age, gender, phone, admin_id, patient_type, reason, symptoms)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
                     """,
                     (
                         context.patient_name,
                         context.age,
                         context.gender,
+                        context.phone_number,
                         actual_admin_id,
                         context.patient_type,
                         context.reason,
@@ -291,8 +319,18 @@ class BookingRepository:
                 patient_id = int(cur.lastrowid)
 
             # Idempotency guard: if same patient already has the same booked slot, return existing appointment.
+            params: list[object] = [
+                patient_id,
+                int(context.clinic_id),
+                actual_admin_id,
+            ]
+            doctor_sql = ""
+            if doctor_id is not None:
+                doctor_sql = "AND a.doctor_id = %s"
+                params.append(doctor_id)
+            params.extend([context.appointment_date, context.appointment_time])
             cur.execute(
-                """
+                f"""
                 SELECT a.appointment_id
                 FROM appointments a
                 JOIN slots s ON s.slot_id = a.slot_id
@@ -300,18 +338,13 @@ class BookingRepository:
                   AND a.clinic_id = %s
                   AND a.admin_id = %s
                   AND a.status = 'BOOKED'
+                  {doctor_sql}
                   AND s.slot_date = %s
                   AND TIME_FORMAT(s.slot_time, '%H:%i') = %s
                 ORDER BY a.appointment_id DESC
                 LIMIT 1
                 """,
-                (
-                    patient_id,
-                    int(context.clinic_id),
-                    actual_admin_id,
-                    context.appointment_date,
-                    context.appointment_time,
-                ),
+                tuple(params),
             )
             existing = cur.fetchone()
             if existing:
@@ -322,8 +355,14 @@ class BookingRepository:
                     appointment_id=int(existing["appointment_id"]),
                 )
 
+            params = [int(context.clinic_id), actual_admin_id]
+            doctor_sql = ""
+            if doctor_id is not None:
+                doctor_sql = "AND dcs.doctor_id = %s"
+                params.append(doctor_id)
+            params.extend([context.appointment_date, context.appointment_time])
             cur.execute(
-                """
+                f"""
                 SELECT
                     s.slot_id,
                     dcs.doctor_id,
@@ -332,6 +371,7 @@ class BookingRepository:
                 JOIN doctor_clinic_schedule dcs ON dcs.schedule_id = s.schedule_id
                 WHERE dcs.clinic_id = %s
                   AND s.admin_id = %s
+                  {doctor_sql}
                   AND s.slot_date = %s
                   AND TIME_FORMAT(s.slot_time, '%H:%i') = %s
                   AND s.slot_status = 'AVAILABLE'
@@ -339,12 +379,7 @@ class BookingRepository:
                 LIMIT 1
                 FOR UPDATE
                 """,
-                (
-                    int(context.clinic_id),
-                    actual_admin_id,
-                    context.appointment_date,
-                    context.appointment_time,
-                ),
+                tuple(params),
             )
             slot_row = cur.fetchone()
             if not slot_row:
@@ -404,6 +439,75 @@ class BookingRepository:
                 (appointment_id,),
             )
             return cur.fetchone()
+        finally:
+            cur.close()
+            conn.close()
+
+    def list_due_doctor_reminders(
+        self,
+        lookahead_minutes: int = 180,
+        admin_id: Optional[int] = None,
+    ) -> list[DoctorReminder]:
+        conn = self._connect()
+        cur = conn.cursor(dictionary=True)
+        try:
+            horizon_minutes = max(1, int(lookahead_minutes))
+            params: list[object] = [horizon_minutes]
+            admin_sql = ""
+            if admin_id is not None:
+                admin_sql = "AND a.admin_id = %s"
+                params.append(admin_id)
+            cur.execute(
+                f"""
+                SELECT
+                    a.appointment_id,
+                    NULLIF(d.whatsapp_number, '') AS doctor_whatsapp,
+                    COALESCE(p.full_name, '') AS patient_name,
+                    COALESCE(c.clinic_name, '') AS clinic_name,
+                    DATE_FORMAT(s.slot_date, '%Y-%m-%d') AS slot_date,
+                    TIME_FORMAT(s.slot_time, '%H:%i') AS slot_time,
+                    s.schedule_id AS schedule_id,
+                    TIME_FORMAT(dcs.start_time, '%H:%i') AS schedule_start_time,
+                    TIME_FORMAT(dcs.end_time, '%H:%i') AS schedule_end_time
+                FROM appointments a
+                JOIN slots s ON s.slot_id = a.slot_id
+                JOIN doctor_clinic_schedule dcs ON dcs.schedule_id = s.schedule_id
+                LEFT JOIN doctors d ON d.doctor_id = a.doctor_id
+                LEFT JOIN clinics c ON c.clinic_id = a.clinic_id
+                LEFT JOIN patients p ON p.patient_id = a.patient_id
+                WHERE a.status = 'BOOKED'
+                  AND s.slot_status = 'BOOKED'
+                  AND s.schedule_id IS NOT NULL
+                  AND TIMESTAMP(s.slot_date, s.slot_time) >= NOW()
+                  AND TIMESTAMP(s.slot_date, s.slot_time) <= DATE_ADD(NOW(), INTERVAL %s MINUTE)
+                  {admin_sql}
+                ORDER BY doctor_whatsapp, s.slot_date, s.schedule_id, s.slot_time, a.appointment_id
+                """,
+                tuple(params),
+            )
+            rows = cur.fetchall()
+            results: list[DoctorReminder] = []
+            for row in rows:
+                doctor_whatsapp = str(row.get("doctor_whatsapp") or "").strip()
+                if not doctor_whatsapp:
+                    continue
+                schedule_id = int(row.get("schedule_id") or 0)
+                if schedule_id <= 0:
+                    continue
+                results.append(
+                    DoctorReminder(
+                        appointment_id=int(row["appointment_id"]),
+                        doctor_whatsapp=doctor_whatsapp,
+                        patient_name=str(row.get("patient_name") or ""),
+                        clinic_name=str(row.get("clinic_name") or ""),
+                        slot_date=str(row.get("slot_date") or ""),
+                        slot_time=str(row.get("slot_time") or ""),
+                        schedule_id=schedule_id,
+                        schedule_start_time=str(row.get("schedule_start_time") or ""),
+                        schedule_end_time=str(row.get("schedule_end_time") or ""),
+                    )
+                )
+            return results
         finally:
             cur.close()
             conn.close()

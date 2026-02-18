@@ -92,6 +92,10 @@ def is_availability_intent(lower: str) -> bool:
     ]
     patterns = [
         r"\bavailability\b",
+        r"\bavailabilty\b",
+        r"\bavailabilyty\b",
+        r"\bavailablity\b",
+        r"\bavailab\w*\b",
         r"\bavailable\b",
         r"\bslot\b",
         r"\bslots\b",
@@ -157,7 +161,8 @@ def resolve_change_target(lower: str) -> Optional[str]:
 
 
 def extract_name(text: str) -> Optional[str]:
-    cleaned = text.strip()
+    cleaned = " ".join((text or "").strip().split())
+    cleaned = cleaned.strip(".,:-")
     if cleaned.lower() in {"hi", "hello", "hey", "namaste", "hii", "end", "end now"}:
         return None
     reject_tokens = {
@@ -180,9 +185,9 @@ def extract_name(text: str) -> Optional[str]:
         return None
 
     patterns = [
-        r"(?:my name is|i am|this is)\s+([a-zA-Z][a-zA-Z ]{1,48})$",
-        r"(?:mera naam|mai|main)\s+([a-zA-Z][a-zA-Z ]{1,48})$",
-        r"(?:name)\s*[:\-]\s*([a-zA-Z][a-zA-Z ]{1,48})$",
+        r"^\s*(?:my\s+name\s+is|i\s+am|this\s+is)\s*[:\-]?\s*([a-zA-Z][a-zA-Z ]{1,48})\s*$",
+        r"^\s*(?:mera\s+naam|mai|main)\s*[:\-]?\s*([a-zA-Z][a-zA-Z ]{1,48})\s*$",
+        r"^\s*(?:name)\s*[:\-]\s*([a-zA-Z][a-zA-Z ]{1,48})\s*$",
     ]
     for pattern in patterns:
         match = re.search(pattern, cleaned, flags=re.IGNORECASE)
@@ -195,7 +200,8 @@ def extract_name(text: str) -> Optional[str]:
 
 
 def clean_name(name: str) -> str:
-    cleaned = name.strip()
+    cleaned = " ".join((name or "").strip().split())
+    cleaned = cleaned.strip(".,:-")
     intro_patterns = [
         r"^(my\s+name\s+is)\s+",
         r"^(i\s+am)\s+",
@@ -215,6 +221,7 @@ def clean_name(name: str) -> str:
             match = re.search(pattern, lowered)
             if match:
                 cleaned = cleaned[match.end():].strip()
+                cleaned = cleaned.lstrip(".,:- ").strip()
                 lowered = cleaned.lower()
                 changed = True
                 break
@@ -253,7 +260,27 @@ def extract_doctor_name(text: str) -> Optional[str]:
     match = re.search(r"(?:dr\.?|doctor)\s+([a-zA-Z][a-zA-Z ]{1,48})", text, flags=re.IGNORECASE)
     if not match:
         return None
-    return " ".join(part.capitalize() for part in match.group(1).split())
+    candidate = " ".join(part for part in match.group(1).split() if part).strip()
+    if not candidate:
+        return None
+    lowered = candidate.lower()
+    blocked_tokens = {
+        "availability",
+        "availabilty",
+        "availabilyty",
+        "availablity",
+        "available",
+        "slot",
+        "slots",
+        "today",
+        "tomorrow",
+        "date",
+        "time",
+    }
+    words = lowered.split()
+    if any(token in blocked_tokens for token in words):
+        return None
+    return " ".join(part.capitalize() for part in candidate.split())
 
 
 def extract_phone(text: str) -> Optional[str]:
