@@ -1,8 +1,11 @@
 from dataclasses import dataclass
+from datetime import date, datetime, time, timedelta
 from typing import Optional
+import logging
 
 from src.db.connection import MySQLConfig, connect_mysql
 
+LOGGER = logging.getLogger(__name__)
 
 @dataclass
 class ClinicOption:
@@ -23,6 +26,103 @@ class SchedulingRepository:
 
     def _connect(self):
         return connect_mysql(self._config)
+
+    def _table_exists(self, table_name: str) -> bool:
+        conn = self._connect()
+        cur = conn.cursor()
+        try:
+            cur.execute(
+                """
+                SELECT 1
+                FROM INFORMATION_SCHEMA.TABLES
+                WHERE TABLE_SCHEMA = DATABASE()
+                  AND TABLE_NAME = %s
+                LIMIT 1
+                """,
+                (table_name,),
+            )
+            return cur.fetchone() is not None
+        finally:
+            cur.close()
+            conn.close()
+
+    def _use_appointment_mode(self) -> bool:
+        return self._table_exists("appointment") and not self._table_exists("slots")
+
+    @staticmethod
+    def _parse_time_value(raw: object) -> Optional[time]:
+        if raw is None:
+            return None
+        if isinstance(raw, time):
+            return raw
+        text = str(raw).strip()
+        if not text:
+            return None
+        fmts = ("%H:%M:%S", "%H:%M", "%I:%M %p", "%I:%M:%S %p")
+        for fmt in fmts:
+            try:
+                return datetime.strptime(text, fmt).time()
+            except ValueError:
+                continue
+        return None
+
+    def _appointment_windows_for_date(
+        self,
+        *,
+        doctor_id: int,
+        clinic_id: int,
+        slot_date: str,
+        admin_id: Optional[int],
+    ) -> list[tuple[time, time, int]]:
+        conn = self._connect()
+        cur = conn.cursor(dictionary=True)
+        try:
+            params: list[object] = [doctor_id, clinic_id, slot_date, slot_date]
+            admin_sql = ""
+            if admin_id is not None:
+                admin_sql = "AND dcs.admin_id = %s"
+                params.append(admin_id)
+            cur.execute(
+                f"""
+                SELECT dcs.start_time, dcs.end_time, dcs.slot_duration
+                FROM doctor_clinic_schedule dcs
+                WHERE dcs.doctor_id = %s
+                  AND dcs.clinic_id = %s
+                  AND dcs.effective_from <= %s
+                  AND dcs.effective_to >= %s
+                  AND dcs.day_of_week = WEEKDAY(%s)
+                  {admin_sql}
+                ORDER BY dcs.schedule_id
+                """,
+                tuple(params[:4] + [slot_date] + params[4:]),
+            )
+            rows = cur.fetchall()
+            windows: list[tuple[time, time, int]] = []
+            for row in rows:
+                start_t = self._parse_time_value(row.get("start_time"))
+                end_t = self._parse_time_value(row.get("end_time"))
+                duration = int(row.get("slot_duration") or 0)
+                if not start_t or not end_t or duration <= 0:
+                    continue
+                if (datetime.combine(date.today(), end_t) <= datetime.combine(date.today(), start_t)):
+                    continue
+                windows.append((start_t, end_t, duration))
+            return windows
+        finally:
+            cur.close()
+            conn.close()
+
+    @staticmethod
+    def _times_from_windows(windows: list[tuple[time, time, int]]) -> list[str]:
+        all_times: set[str] = set()
+        for start_t, end_t, duration in windows:
+            cursor = datetime.combine(date.today(), start_t)
+            end_dt = datetime.combine(date.today(), end_t)
+            step = timedelta(minutes=duration)
+            while cursor < end_dt:
+                all_times.add(cursor.strftime("%H:%M"))
+                cursor += step
+        return sorted(all_times)
 
     @staticmethod
     def _normalize_phone(value: str) -> str:
@@ -122,6 +222,56 @@ class SchedulingRepository:
         admin_id: Optional[int] = None,
         limit: int = 10,
     ) -> list[ClinicOption]:
+        if self._use_appointment_mode():
+            conn = self._connect()
+            cur = conn.cursor(dictionary=True)
+            try:
+                params = [doctor_id]
+                admin_sql = ""
+                if admin_id is not None:
+                    admin_sql = "AND c.admin_id = %s"
+                    params.append(admin_id)
+                params.append(limit)
+                cur.execute(
+                    f"""
+                    SELECT DISTINCT
+                        c.clinic_id,
+                        c.clinic_name,
+                        COALESCE(c.location, '') AS location
+                    FROM clinics c
+                    JOIN doctor_clinic_schedule dcs ON dcs.clinic_id = c.clinic_id
+                    WHERE dcs.doctor_id = %s
+                      AND c.status = 'ACTIVE'
+                      {admin_sql}
+                    ORDER BY c.clinic_name
+                    LIMIT %s
+                    """,
+                    tuple(params),
+                )
+                rows = cur.fetchall()
+                options: list[ClinicOption] = []
+                today = date.today().isoformat()
+                for row in rows:
+                    times = self.list_available_times(
+                        doctor_id=doctor_id,
+                        clinic_id=int(row["clinic_id"]),
+                        slot_date=today,
+                        admin_id=admin_id,
+                        limit=500,
+                    )
+                    options.append(
+                        ClinicOption(
+                            clinic_id=int(row["clinic_id"]),
+                            clinic_name=row["clinic_name"] or "",
+                            location=row["location"] or "",
+                            today_slots=len(times),
+                        )
+                    )
+                return options
+            finally:
+                cur.close()
+                conn.close()
+
         conn = self._connect()
         cur = conn.cursor(dictionary=True)
         try:
@@ -176,6 +326,25 @@ class SchedulingRepository:
         admin_id: Optional[int] = None,
         limit: int = 3,
     ) -> list[str]:
+        if self._use_appointment_mode():
+            today = date.today()
+            max_days = 14
+            available: list[str] = []
+            for offset in range(max_days + 1):
+                d = (today + timedelta(days=offset)).isoformat()
+                times = self.list_available_times(
+                    doctor_id=doctor_id,
+                    clinic_id=clinic_id,
+                    slot_date=d,
+                    admin_id=admin_id,
+                    limit=1,
+                )
+                if times:
+                    available.append(d)
+                if len(available) >= max(1, int(limit)):
+                    break
+            return available
+
         conn = self._connect()
         cur = conn.cursor(dictionary=True)
         try:
@@ -213,6 +382,52 @@ class SchedulingRepository:
         admin_id: Optional[int] = None,
         limit: int = 3,
     ) -> list[str]:
+        if self._use_appointment_mode():
+            windows = self._appointment_windows_for_date(
+                doctor_id=doctor_id,
+                clinic_id=clinic_id,
+                slot_date=slot_date,
+                admin_id=admin_id,
+            )
+            if not windows:
+                return []
+            candidate_times = self._times_from_windows(windows)
+            if not candidate_times:
+                return []
+
+            conn = self._connect()
+            cur = conn.cursor(dictionary=True)
+            try:
+                params: list[object] = [doctor_id, clinic_id, slot_date]
+                admin_sql = ""
+                if admin_id is not None:
+                    admin_sql = "AND a.admin_id = %s"
+                    params.append(admin_id)
+                cur.execute(
+                    f"""
+                    SELECT DISTINCT TIME_FORMAT(a.start_time, '%H:%i') AS hhmm
+                    FROM appointment a
+                    WHERE a.doctor_id = %s
+                      AND a.clinic_id = %s
+                      AND a.appointment_date = %s
+                      AND a.status IN ('BOOKED', 'PENDING', 'CONFIRMED')
+                      {admin_sql}
+                    """,
+                    tuple(params),
+                )
+                booked = {str(row["hhmm"]) for row in cur.fetchall() if row.get("hhmm")}
+            finally:
+                cur.close()
+                conn.close()
+
+            free = [t for t in candidate_times if t not in booked]
+            # For today's date, hide already elapsed times from user choices.
+            today = date.today().isoformat()
+            if slot_date == today:
+                now_hhmm = datetime.now().strftime("%H:%M")
+                free = [t for t in free if t >= now_hhmm]
+            return free[: max(1, int(limit))]
+
         conn = self._connect()
         cur = conn.cursor(dictionary=True)
         try:
@@ -243,6 +458,8 @@ class SchedulingRepository:
             conn.close()
 
     def generate_slots_for_schedule(self, schedule_id: int, days_ahead: int) -> None:
+        if self._use_appointment_mode():
+            return
         conn = self._connect()
         cur = conn.cursor()
         try:
@@ -312,6 +529,32 @@ class SchedulingRepository:
             cur.close()
             conn.close()
 
+    def ensure_slot_dedup_index(self) -> bool:
+        """Best-effort unique guard for generated AVAILABLE rows."""
+        if self._use_appointment_mode():
+            return False
+        conn = self._connect()
+        cur = conn.cursor()
+        try:
+            cur.execute(
+                """
+                ALTER TABLE slots
+                ADD UNIQUE KEY uq_slots_schedule_date_time_status (
+                    schedule_id, slot_date, slot_time, slot_status
+                )
+                """
+            )
+            conn.commit()
+            return True
+        except Exception as exc:
+            # Index may already exist, or legacy duplicates may block creation.
+            conn.rollback()
+            LOGGER.debug("Slot dedup unique index not created: %s", exc)
+            return False
+        finally:
+            cur.close()
+            conn.close()
+
     def list_pending_schedule_rebuilds(self, limit: int = 50) -> list[ScheduleRebuildRequest]:
         conn = self._connect()
         cur = conn.cursor(dictionary=True)
@@ -341,6 +584,8 @@ class SchedulingRepository:
             conn.close()
 
     def cleanup_future_available_slots(self, schedule_id: int) -> int:
+        if self._use_appointment_mode():
+            return 0
         conn = self._connect()
         cur = conn.cursor()
         try:
@@ -352,6 +597,67 @@ class SchedulingRepository:
                   AND slot_date >= CURDATE()
                 """,
                 (schedule_id,),
+            )
+            deleted = int(cur.rowcount or 0)
+            conn.commit()
+            return deleted
+        finally:
+            cur.close()
+            conn.close()
+
+    def deduplicate_future_available_slots(self, schedule_id: int, days_ahead: int) -> int:
+        if self._use_appointment_mode():
+            return 0
+        conn = self._connect()
+        cur = conn.cursor()
+        try:
+            horizon_days = max(1, int(days_ahead))
+            cur.execute(
+                """
+                DELETE s1
+                FROM slots s1
+                JOIN slots s2
+                  ON s1.schedule_id = s2.schedule_id
+                 AND s1.slot_date = s2.slot_date
+                 AND s1.slot_time = s2.slot_time
+                 AND s1.slot_id > s2.slot_id
+                WHERE s1.schedule_id = %s
+                  AND s1.slot_status = 'AVAILABLE'
+                  AND s2.slot_status = 'AVAILABLE'
+                  AND s1.slot_date >= CURDATE()
+                  AND s1.slot_date <= DATE_ADD(CURDATE(), INTERVAL %s DAY)
+                """,
+                (schedule_id, horizon_days),
+            )
+            deleted = int(cur.rowcount or 0)
+            conn.commit()
+            return deleted
+        finally:
+            cur.close()
+            conn.close()
+
+    def deduplicate_all_future_available_slots(self, days_ahead: int) -> int:
+        if self._use_appointment_mode():
+            return 0
+        conn = self._connect()
+        cur = conn.cursor()
+        try:
+            horizon_days = max(1, int(days_ahead))
+            cur.execute(
+                """
+                DELETE s1
+                FROM slots s1
+                JOIN slots s2
+                  ON s1.schedule_id = s2.schedule_id
+                 AND s1.slot_date = s2.slot_date
+                 AND s1.slot_time = s2.slot_time
+                 AND s1.slot_id > s2.slot_id
+                WHERE s1.slot_status = 'AVAILABLE'
+                  AND s2.slot_status = 'AVAILABLE'
+                  AND s1.slot_date >= CURDATE()
+                  AND s1.slot_date <= DATE_ADD(CURDATE(), INTERVAL %s DAY)
+                """,
+                (horizon_days,),
             )
             deleted = int(cur.rowcount or 0)
             conn.commit()

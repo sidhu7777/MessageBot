@@ -1,6 +1,8 @@
 def get_message(response_language: str, key: str, **kwargs: object) -> str:
     en = {
         "greeting": "Hello, I am your medical appointment assistant. I can help with booking and doctor availability.",
+        "welcome_known_patient": "Welcome to Dr. {doctor_name} clinic, {patient_name}. How can I help you today?",
+        "welcome_new_patient": "Welcome to Dr. {doctor_name} clinic. How can I help you today?",
         "general_help": "I can help with appointment booking or doctor availability. Tell me what you need.",
         "intent_ack": "Sure, I can help you book an appointment.",
         "availability_intro": "Sure, I can help check doctor availability. Please share preferred date (YYYY-MM-DD or 'today'/'tomorrow'). Doctor name is optional.",
@@ -26,6 +28,15 @@ def get_message(response_language: str, key: str, **kwargs: object) -> str:
             "Send 'book appointment' anytime to start."
         ),
         "ask_name": "Please share the patient full name.",
+        "ask_booking_for": (
+            "Who is this appointment for?\n"
+            "1. Self\n"
+            "2. Another person"
+        ),
+        "invalid_booking_for": "Please reply with 1 or 2.",
+        "booking_for_self_ack": "Noted. Booking for self.",
+        "booking_for_other_ack": "Noted. Booking for another person.",
+        "go_back_hint": "0. Go back",
         "existing_booking_found": (
             "You already have a booked appointment:\n"
             "Reference ID: {appointment_id}\n"
@@ -61,14 +72,33 @@ def get_message(response_language: str, key: str, **kwargs: object) -> str:
         "existing_booking_cancel_failed": "I could not cancel the existing appointment right now. Please try again later.",
         "invalid_name": "Please provide a valid name. Example: Vineeth Raja Banala",
         "name_ack": "Thank you, {name}.",
-        "ask_patient_type": "Is the patient old or new?\n1. New\n2. Old",
-        "invalid_patient_type": "Please reply with 'old' or 'new'.",
+        "ask_appointment_mode": (
+            "Please choose appointment type:\n"
+            "1. Online appointment\n"
+            "2. Walk-in appointment\n"
+            "Reply with 1 or 2."
+        ),
+        "invalid_appointment_mode": "Please reply with 1 or 2.",
+        "appointment_mode_ack": "Noted. Appointment type: {appointment_mode}.",
+        "ask_patient_type": (
+            "Is the patient old or new?\n"
+            "1. New\n"
+            "2. Old\n"
+            "Reply with 1 or 2."
+        ),
+        "invalid_patient_type": "Please reply with 1 or 2.",
         "patient_type_ack": "Noted. Patient type: {patient_type}.",
         "ask_age": "Please share patient age.",
         "invalid_age": "Please share a valid age between 1 and 120.",
         "age_ack": "Age noted: {age}.",
-        "ask_gender": "Please share patient gender:\n1. Male\n2. Female\n3. Other",
-        "invalid_gender": "Please reply with gender as male, female, or other.",
+        "ask_gender": (
+            "Please share patient gender:\n"
+            "1. Male\n"
+            "2. Female\n"
+            "3. Other\n"
+            "Reply with 1, 2, or 3."
+        ),
+        "invalid_gender": "Please reply with 1, 2, or 3.",
         "gender_ack": "Gender noted: {gender}.",
         "ask_phone": (
             "Is the contact number same as this WhatsApp number?\n"
@@ -85,7 +115,7 @@ def get_message(response_language: str, key: str, **kwargs: object) -> str:
             "3. Green Valley Clinic | Gachibowli, Hyderabad | Slots today: 4"
         ),
         "ask_clinic_header": "Please choose clinic:",
-        "invalid_clinic": "Please choose clinic 1, 2, or 3.",
+        "invalid_clinic": "Please reply with a valid option number, or type clinic name.",
         "no_clinic_available": "No clinics are available for booking right now. Please try again later.",
         "clinic_ack": "Clinic noted: {clinic_name}, {clinic_address}.",
         "ask_reason": (
@@ -94,7 +124,8 @@ def get_message(response_language: str, key: str, **kwargs: object) -> str:
             "2. Headache\n"
             "3. Stomach pain\n"
             "4. Cold\n"
-            "5. Other (type reason)"
+            "5. Other (type reason)\n"
+            "Reply with 1, 2, 3, 4, or 5."
         ),
         "ask_reason_other": "Please type your reason.",
         "invalid_reason_option": "Please choose valid reason option(s), or type reason text.",
@@ -108,22 +139,22 @@ def get_message(response_language: str, key: str, **kwargs: object) -> str:
             "Please choose appointment date:\n"
             "1. {date_1}\n"
             "2. {date_2}\n"
-            "3. {date_3}\n"
-            "4. Other date"
+            "Reply with 1 or 2."
         ),
-        "ask_date_manual": "Please type preferred date in YYYY-MM-DD format.",
+        "ask_date_manual": "Please choose only 1 or 2.",
         "invalid_date": "Invalid date. Please send a future date in YYYY-MM-DD format.",
         "no_date_available": "No available dates for this clinic right now. Please choose another clinic or try later.",
         "date_ack": "Date noted: {appointment_date}.",
         "ask_time": "Please share preferred time (e.g., 10 am or 14:30).",
         "ask_time_hour_options": "Which hour is nearest for you to book?",
-        "invalid_time_hour": "Please choose a valid hour option, or type an exact time.",
+        "invalid_time_hour": "Please reply with a valid option number, or type an exact time.",
         "ask_time_nearest_slots": "Okay, for around {preferred_hour}, please choose an exact slot:",
         "ask_time_slots": (
             "Please choose a time slot:\n"
             "1. {slot_1}\n"
             "2. {slot_2}\n"
             "3. {slot_3}\n"
+            "Reply with 1, 2, or 3.\n"
             "Or type another preferred time."
         ),
         "time_not_available": "Requested time {requested_time} is not available.",
@@ -133,14 +164,9 @@ def get_message(response_language: str, key: str, **kwargs: object) -> str:
         "confirm_summary": (
             "Please confirm your appointment details:\n"
             "Name: {patient_name}\n"
-            "Patient type: {patient_type}\n"
-            "Age: {age}\n"
-            "Gender: {gender}\n"
             "Contact: {phone_number}\n"
             "Clinic: {clinic_name}\n"
             "Clinic address: {clinic_address}\n"
-            "Reason: {reason}\n"
-            "Symptoms: {symptoms}\n"
             "Date: {appointment_date}\n"
             "Time: {appointment_time}\n"
             "Reply YES to confirm or NO to change details."
@@ -149,38 +175,30 @@ def get_message(response_language: str, key: str, **kwargs: object) -> str:
         "ask_change_field": (
             "No problem. Which detail do you want to change?\n"
             "1. Name\n"
-            "2. Patient type\n"
-            "3. Age\n"
-            "4. Gender\n"
-            "5. Contact number\n"
-            "6. Clinic\n"
-            "7. Date\n"
-            "8. Time\n"
-            "9. Reason\n"
-            "10. Symptoms"
+            "2. Contact number\n"
+            "3. Clinic\n"
+            "4. Date\n"
+            "5. Time\n"
+            "Reply with 1, 2, 3, 4, or 5."
         ),
-        "invalid_change_field": "Please choose a valid detail number (1-10), or type the field name.",
+        "invalid_change_field": "Please choose a valid detail number (1-5).",
         "change_ack": (
             "No problem. Let's update that detail."
         ),
         "confirmed": (
             "Appointment request confirmed.\n"
             "Name: {patient_name}\n"
-            "Patient type: {patient_type}\n"
-            "Age: {age}\n"
-            "Gender: {gender}\n"
             "Contact: {phone_number}\n"
             "Clinic: {clinic_name}\n"
             "Clinic address: {clinic_address}\n"
-            "Reason: {reason}\n"
-            "Symptoms: {symptoms}\n"
             "Date: {appointment_date}\n"
             "Time: {appointment_time}\n"
             "Send 'new appointment' for another booking."
         ),
+        "reply_with_numbers": "Reply with {numbers}.",
         "not_confirmed": "No problem. Restarting booking flow. Please share the patient full name.",
         "completed_hint": "This appointment flow is complete. Send 'new appointment' to start another.",
-        "db_save_ok": "Database booking saved. Reference ID: {appointment_id}.",
+        "db_save_ok": "Appointment booked successfully.\n*Booking Number:* {appointment_id}",
         "db_save_failed": "Booking confirmation received, but database save is pending manual follow-up.",
         "ended": "Understood. I have ended the process. Send 'book appointment' whenever you want to start again.",
         "cancelled_hint": "Process is ended. Send 'book appointment' to start a new booking.",
@@ -296,8 +314,7 @@ def get_message(response_language: str, key: str, **kwargs: object) -> str:
             "कृपया अपॉइंटमेंट तारीख चुनें:\n"
             "1. {date_1}\n"
             "2. {date_2}\n"
-            "3. {date_3}\n"
-            "4. Other date"
+            "3. Other date"
         ),
         "ask_date_manual": "कृपया तारीख YYYY-MM-DD फॉर्मेट में टाइप करें।",
         "invalid_date": "तारीख अमान्य है। कृपया भविष्य की तारीख YYYY-MM-DD फ़ॉर्मेट में भेजें।",
@@ -325,7 +342,6 @@ def get_message(response_language: str, key: str, **kwargs: object) -> str:
             "क्लिनिक: {clinic_name}\n"
             "क्लिनिक पता: {clinic_address}\n"
             "कारण: {reason}\n"
-            "लक्षण: {symptoms}\n"
             "तारीख: {appointment_date}\n"
             "समय: {appointment_time}\n"
             "पुष्टि के लिए YES और विवरण बदलने के लिए NO भेजें।"
@@ -358,14 +374,13 @@ def get_message(response_language: str, key: str, **kwargs: object) -> str:
             "क्लिनिक: {clinic_name}\n"
             "क्लिनिक पता: {clinic_address}\n"
             "कारण: {reason}\n"
-            "लक्षण: {symptoms}\n"
             "तारीख: {appointment_date}\n"
             "समय: {appointment_time}\n"
             "नई बुकिंग के लिए 'new appointment' भेजें।"
         ),
         "not_confirmed": "कोई बात नहीं। प्रक्रिया दोबारा शुरू कर रहा हूँ। कृपया मरीज का पूरा नाम बताएं।",
         "completed_hint": "यह बुकिंग पूरी हो चुकी है। नई बुकिंग के लिए 'new appointment' भेजें।",
-        "db_save_ok": "बुकिंग डेटाबेस में सेव हो गई। रेफरेंस आईडी: {appointment_id}।",
+        "db_save_ok": "अपॉइंटमेंट सफलतापूर्वक बुक हो गई।\n*बुकिंग नंबर:* {appointment_id}",
         "db_save_failed": "बुकिंग कन्फर्म हुई, लेकिन डेटाबेस सेव लंबित है। मैनुअल फॉलो-अप आवश्यक है।",
         "ended": "ठीक है, प्रक्रिया समाप्त कर दी गई है। दोबारा शुरू करने के लिए 'book appointment' भेजें।",
         "cancelled_hint": "प्रक्रिया समाप्त है। नई बुकिंग के लिए 'book appointment' भेजें।",
@@ -374,6 +389,17 @@ def get_message(response_language: str, key: str, **kwargs: object) -> str:
 
     hinglish = {
         "greeting": "Hello, main aapka medical appointment assistant hoon. Main booking aur doctor availability mein help kar sakta hoon.",
+        "ask_booking_for": (
+            "Yeh appointment kiske liye hai?\n"
+            "1. Self\n"
+            "2. Another person"
+        ),
+        "invalid_booking_for": "Please 1 ya 2 mein reply kariye.",
+        "booking_for_self_ack": "Noted. Booking for self.",
+        "booking_for_other_ack": "Noted. Booking for another person.",
+        "go_back_hint": "0. Go back",
+        "welcome_known_patient": "Welcome to Dr. {doctor_name} clinic, {patient_name}. How can I help you today?",
+        "welcome_new_patient": "Welcome to Dr. {doctor_name} clinic. How can I help you today?",
         "general_help": "Main appointment booking ya doctor availability mein help kar sakta hoon. Aapko kya chahiye?",
         "intent_ack": "Theek hai, main aapki appointment booking mein help kar sakta hoon.",
         "availability_intro": "Theek hai, main doctor availability check karne mein help kar sakta hoon. Preferred date share kariye (YYYY-MM-DD ya 'today'/'tomorrow'). Doctor name optional hai.",
@@ -432,6 +458,14 @@ def get_message(response_language: str, key: str, **kwargs: object) -> str:
         "existing_booking_cancel_failed": "Existing appointment abhi cancel nahi ho paaya. Please baad mein try kariye.",
         "invalid_name": "Please valid name batayiye. Example: Vineeth Raja Banala",
         "name_ack": "Thank you, {name}.",
+        "ask_appointment_mode": (
+            "Please appointment type choose kariye:\n"
+            "1. Online appointment\n"
+            "2. Walk-in appointment\n"
+            "Please 1 ya 2 number mein reply kariye."
+        ),
+        "invalid_appointment_mode": "Please 1 ya 2 number mein reply kariye.",
+        "appointment_mode_ack": "Noted. Appointment type: {appointment_mode}.",
         "ask_patient_type": "Patient old hai ya new?\n1. New\n2. Old",
         "invalid_patient_type": "Please 'old' ya 'new' mein reply kariye.",
         "patient_type_ack": "Noted. Patient type: {patient_type}.",
@@ -479,8 +513,7 @@ def get_message(response_language: str, key: str, **kwargs: object) -> str:
             "Please appointment date choose kariye:\n"
             "1. {date_1}\n"
             "2. {date_2}\n"
-            "3. {date_3}\n"
-            "4. Other date"
+            "3. Other date"
         ),
         "ask_date_manual": "Please date YYYY-MM-DD format mein type kariye.",
         "invalid_date": "Invalid date. Please future date YYYY-MM-DD format mein bhejiye.",
@@ -501,14 +534,9 @@ def get_message(response_language: str, key: str, **kwargs: object) -> str:
         "confirm_summary": (
             "Please appointment details confirm kariye:\n"
             "Name: {patient_name}\n"
-            "Patient type: {patient_type}\n"
-            "Age: {age}\n"
-            "Gender: {gender}\n"
             "Contact: {phone_number}\n"
             "Clinic: {clinic_name}\n"
             "Clinic address: {clinic_address}\n"
-            "Reason: {reason}\n"
-            "Symptoms: {symptoms}\n"
             "Date: {appointment_date}\n"
             "Time: {appointment_time}\n"
             "Confirm ke liye YES ya details change karne ke liye NO bhejiye."
@@ -517,36 +545,26 @@ def get_message(response_language: str, key: str, **kwargs: object) -> str:
         "ask_change_field": (
             "No problem. Kaunsa detail change karna hai?\n"
             "1. Name\n"
-            "2. Patient type\n"
-            "3. Age\n"
-            "4. Gender\n"
-            "5. Contact number\n"
-            "6. Clinic\n"
-            "7. Date\n"
-            "8. Time\n"
-            "9. Reason\n"
-            "10. Symptoms"
+            "2. Contact number\n"
+            "3. Clinic\n"
+            "4. Date\n"
+            "5. Time"
         ),
-        "invalid_change_field": "Please valid option choose kariye (1-10), ya field name type kariye.",
+        "invalid_change_field": "Please valid option choose kariye (1-5).",
         "change_ack": "No problem. Chaliye woh detail update karte hain.",
         "confirmed": (
             "Appointment request confirm ho gaya.\n"
             "Name: {patient_name}\n"
-            "Patient type: {patient_type}\n"
-            "Age: {age}\n"
-            "Gender: {gender}\n"
             "Contact: {phone_number}\n"
             "Clinic: {clinic_name}\n"
             "Clinic address: {clinic_address}\n"
-            "Reason: {reason}\n"
-            "Symptoms: {symptoms}\n"
             "Date: {appointment_date}\n"
             "Time: {appointment_time}\n"
             "Nayi booking ke liye 'new appointment' bhejiye."
         ),
         "not_confirmed": "No problem. Booking flow restart kar raha hoon. Please patient ka full name share kariye.",
         "completed_hint": "Yeh appointment flow complete ho chuka hai. Nayi booking ke liye 'new appointment' bhejiye.",
-        "db_save_ok": "Booking database mein save ho gayi. Reference ID: {appointment_id}.",
+        "db_save_ok": "Appointment successfully book ho gaya.\n*Booking Number:* {appointment_id}",
         "db_save_failed": "Booking confirm ho gayi, lekin database save pending hai. Manual follow-up zaroori hai.",
         "ended": "Theek hai, process end kar diya gaya hai. Dobara start karne ke liye 'book appointment' bhejiye.",
         "cancelled_hint": "Process ended hai. Nayi booking ke liye 'book appointment' bhejiye.",
@@ -559,11 +577,23 @@ def get_message(response_language: str, key: str, **kwargs: object) -> str:
         source = hinglish
     else:
         source = en
+    if response_language == "hi" and key == "ask_appointment_mode":
+        return (
+            "कृपया नियुक्ति प्रकार चुनें:\n"
+            "1. ऑनलाइन परामर्श\n"
+            "2. क्लिनिक में परामर्श\n"
+            "कृपया 1 या 2 में उत्तर दें।"
+        )
+    if response_language == "hi" and key == "invalid_appointment_mode":
+        return "कृपया 1 या 2 में उत्तर दें।"
+    if response_language == "hi" and key == "appointment_mode_ack":
+        return f"नोट किया गया। अपॉइंटमेंट प्रकार: {kwargs.get('appointment_mode', '-')}।"
     if key == "change_ack":
         step = kwargs.get("step")
         if source is en:
             prompts = {
                 "ASK_NAME": "Please share the patient full name.",
+                "ASK_APPOINTMENT_MODE": "Please choose appointment type: 1. Online appointment 2. Walk-in appointment.",
                 "ASK_PATIENT_TYPE": "Is the patient old or new?",
                 "ASK_AGE": "Please share patient age.",
                 "ASK_GENDER": "Please share patient gender: male, female, or other.",
@@ -590,6 +620,7 @@ def get_message(response_language: str, key: str, **kwargs: object) -> str:
         else:
             prompts = {
                 "ASK_NAME": "Please patient ka full name share kariye.",
+                "ASK_APPOINTMENT_MODE": "Please appointment type choose kariye: 1. Online appointment 2. Walk-in appointment.",
                 "ASK_PATIENT_TYPE": "Patient old hai ya new?",
                 "ASK_AGE": "Please patient age share kariye.",
                 "ASK_GENDER": "Please patient gender share kariye: male, female, ya other.",

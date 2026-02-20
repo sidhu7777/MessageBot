@@ -65,7 +65,7 @@ class Settings:
     automation_enabled: bool = True
     slot_automation_enabled: bool = True
     slot_generation_interval_seconds: int = 300
-    slot_generation_days_ahead: int = 30
+    slot_generation_days_ahead: int = 2
     doctor_reminder_enabled: bool = True
     doctor_reminder_interval_seconds: int = 60
     doctor_reminder_lead_minutes: int = 10
@@ -121,7 +121,7 @@ def load_settings() -> Settings:
         automation_enabled=_as_bool(os.getenv("AUTOMATION_ENABLED", "true")),
         slot_automation_enabled=_as_bool(os.getenv("SLOT_AUTOMATION_ENABLED", "true")),
         slot_generation_interval_seconds=int(os.getenv("SLOT_GENERATION_INTERVAL_SECONDS", "300")),
-        slot_generation_days_ahead=int(os.getenv("SLOT_GENERATION_DAYS_AHEAD", "30")),
+        slot_generation_days_ahead=int(os.getenv("SLOT_GENERATION_DAYS_AHEAD", "2")),
         doctor_reminder_enabled=_as_bool(os.getenv("DOCTOR_REMINDER_ENABLED", "true")),
         doctor_reminder_interval_seconds=int(os.getenv("DOCTOR_REMINDER_INTERVAL_SECONDS", "60")),
         doctor_reminder_lead_minutes=int(os.getenv("DOCTOR_REMINDER_LEAD_MINUTES", "10")),

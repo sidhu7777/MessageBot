@@ -125,7 +125,11 @@ class AutomationScheduler:
     def start(self) -> None:
         if not self._enabled or self._threads:
             return
-        if self._slot_automation_enabled and self._scheduling_repository:
+        if (
+            self._slot_automation_enabled
+            and self._scheduling_repository
+            and not self._scheduling_repository._use_appointment_mode()
+        ):
             thread = threading.Thread(target=self._slot_loop, name="slot-automation", daemon=True)
             thread.start()
             self._threads.append(thread)
@@ -162,17 +166,34 @@ class AutomationScheduler:
     def _run_slot_generation_once(self) -> None:
         if not self._scheduling_repository:
             return
+        if self._scheduling_repository._use_appointment_mode():
+            return
         self._scheduling_repository.ensure_rebuild_queue_schema()
+        # Best-effort DB guard; no-op when already present or temporarily blocked.
+        self._scheduling_repository.ensure_slot_dedup_index()
+        # One global cleanup first to stop growth from legacy duplicate rows.
+        global_deduped = self._scheduling_repository.deduplicate_all_future_available_slots(
+            days_ahead=self._slot_generation_days_ahead
+        )
         self._run_schedule_rebuild_queue_once()
         schedule_ids = self._scheduling_repository.list_active_schedule_ids(
             days_ahead=self._slot_generation_days_ahead
         )
         generated = 0
+        deduplicated = 0
         for schedule_id in schedule_ids:
             if self._stop.is_set():
                 break
             try:
+                deduplicated += self._scheduling_repository.deduplicate_future_available_slots(
+                    schedule_id=schedule_id,
+                    days_ahead=self._slot_generation_days_ahead,
+                )
                 self._scheduling_repository.generate_slots_for_schedule(
+                    schedule_id=schedule_id,
+                    days_ahead=self._slot_generation_days_ahead,
+                )
+                deduplicated += self._scheduling_repository.deduplicate_future_available_slots(
                     schedule_id=schedule_id,
                     days_ahead=self._slot_generation_days_ahead,
                 )
@@ -188,9 +209,11 @@ class AutomationScheduler:
         self._inc_metric("slot_runs", 1)
         self._inc_metric("slot_generated_for_schedules", generated)
         LOGGER.info(
-            "Slot automation run completed schedules=%d generated=%d days_ahead=%d",
+            "Slot automation run completed schedules=%d generated=%d deduplicated=%d global_deduplicated=%d days_ahead=%d",
             len(schedule_ids),
             generated,
+            deduplicated,
+            global_deduped,
             self._slot_generation_days_ahead,
         )
 
@@ -206,6 +229,10 @@ class AutomationScheduler:
             try:
                 dropped = self._scheduling_repository.cleanup_future_available_slots(request.schedule_id)
                 self._scheduling_repository.generate_slots_for_schedule(
+                    schedule_id=request.schedule_id,
+                    days_ahead=self._slot_generation_days_ahead,
+                )
+                dropped += self._scheduling_repository.deduplicate_future_available_slots(
                     schedule_id=request.schedule_id,
                     days_ahead=self._slot_generation_days_ahead,
                 )
@@ -289,12 +316,14 @@ class AutomationScheduler:
             rows_sorted = sorted(rows, key=lambda r: (r.slot_time, r.appointment_id))
             lines = [
                 f"Reminder: Upcoming appointments in {self._doctor_reminder_lead_minutes} minutes.",
-                f"Slot window: {slot_date} {start_time}-{end_time}",
+                f"Slot window: {slot_date} {self._format_display_time(start_time)}-{self._format_display_time(end_time)}",
                 f"Total patients: {len(rows_sorted)}",
                 "Patient list:",
             ]
             for idx, row in enumerate(rows_sorted, start=1):
-                lines.append(f"{idx}. {row.slot_time} | {row.patient_name or '-'} | {row.clinic_name or '-'}")
+                lines.append(
+                    f"{idx}. {self._format_display_time(row.slot_time)} | {row.patient_name or '-'} | {row.clinic_name or '-'}"
+                )
             text = "\n".join(lines)
             try:
                 self._send_message_fn(to_number, text)
@@ -341,3 +370,15 @@ class AutomationScheduler:
         if len(digits) == 10:
             digits = f"91{digits}"
         return f"whatsapp:+{digits}"
+
+    @staticmethod
+    def _format_display_time(raw: str) -> str:
+        text = (raw or "").strip()
+        if not text:
+            return text
+        for fmt in ("%H:%M", "%H:%M:%S", "%I:%M %p", "%I:%M:%S %p"):
+            try:
+                return datetime.strptime(text, fmt).strftime("%I:%M %p")
+            except ValueError:
+                continue
+        return text

@@ -137,6 +137,8 @@ def is_no(lower: str) -> bool:
 
 
 def resolve_change_target(lower: str) -> Optional[str]:
+    if "appointment type" in lower or "online" in lower or "walkin" in lower or "walk-in" in lower or "clinic visit" in lower:
+        return "ASK_APPOINTMENT_MODE"
     if "time" in lower:
         return "ASK_TIME"
     if "date" in lower or "day" in lower:
@@ -233,6 +235,14 @@ def extract_patient_type(lower: str) -> Optional[str]:
         return "New"
     if re.search(r"\b(2|old|existing|returning)\b", lower):
         return "Old"
+    return None
+
+
+def extract_appointment_mode(lower: str) -> Optional[str]:
+    if re.search(r"\b(1|online|video|virtual)\b", lower):
+        return "Online appointment"
+    if re.search(r"\b(2|walkin|walk-in|walk in|clinic\s+visit|in\s*person|inperson)\b", lower):
+        return "Walk-in appointment"
     return None
 
 

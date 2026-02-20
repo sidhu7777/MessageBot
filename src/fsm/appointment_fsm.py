@@ -1,6 +1,6 @@
 import logging
 from dataclasses import dataclass, field
-from datetime import date
+from datetime import date, datetime
 from typing import Optional
 
 from src.db_store import BookingRepository, SchedulingRepository
@@ -12,6 +12,7 @@ from src.llm.tasks import (
 )
 from src.messages.templates import get_message
 from src.nlu.extractors import (
+    extract_appointment_mode,
     capture_prefill_entities,
     extract_age,
     extract_date,
@@ -37,6 +38,7 @@ LOGGER = logging.getLogger(__name__)
 @dataclass
 class AppointmentContext:
     patient_name: Optional[str] = None
+    appointment_mode: Optional[str] = None
     patient_type: Optional[str] = None
     age: Optional[int] = None
     gender: Optional[str] = None
@@ -75,7 +77,9 @@ class AppointmentFSM:
     time_options_cache: list[str] = field(default_factory=list)
     time_hour_options_cache: list[str] = field(default_factory=list)
     time_slot_options_cache: list[str] = field(default_factory=list)
+    time_window_labels_cache: list[str] = field(default_factory=list)
     selected_time_hour: Optional[str] = None
+    selected_time_period: Optional[str] = None
     existing_appointment_id: Optional[int] = None
     existing_booking_clinic_id: Optional[str] = None
     existing_booking_clinic_name: Optional[str] = None
@@ -95,6 +99,11 @@ class AppointmentFSM:
             self._reset_all(cancelled=True)
             return self._respond(self._msg("ended"))
 
+        if self._is_go_back(lower):
+            go_back_reply = self._handle_go_back()
+            if go_back_reply:
+                return self._respond(go_back_reply)
+
         self._update_response_language(lower)
         capture_prefill_entities(self.context, text)
 
@@ -107,9 +116,9 @@ class AppointmentFSM:
             if self.init_unclear_count >= 3:
                 if is_yes(lower) or is_booking_intent(lower):
                     self.init_unclear_count = 0
-                    self.state = "ASK_NAME"
+                    self.state = "ASK_BOOKING_FOR"
                     return self._respond(
-                        self._msg("intent_ack") + "\n" + self._msg("ask_name"),
+                        self._msg("intent_ack") + "\n" + self._with_back(self._msg("ask_booking_for"), option_count=2),
                         allow_polish=False,
                     )
                 self._reset_all(cancelled=True)
@@ -126,9 +135,9 @@ class AppointmentFSM:
                 self.language_locked = True
             if routed == "BOOK_APPOINTMENT":
                 self.init_unclear_count = 0
-                self.state = "ASK_NAME"
+                self.state = "ASK_BOOKING_FOR"
                 return self._respond(
-                    self._msg("intent_ack") + "\n" + self._msg("ask_name"),
+                    self._msg("intent_ack") + "\n" + self._with_back(self._msg("ask_booking_for"), option_count=2),
                     allow_polish=False,
                 )
             if routed == "CHECK_AVAILABILITY":
@@ -152,7 +161,7 @@ class AppointmentFSM:
             if routed == "GREETING":
                 # Greeting is treated as a soft-init turn so that next unclear turn can move to disambiguation.
                 self.init_unclear_count = 1
-                return self._respond(self._msg("greeting"), allow_polish=False)
+                return self._respond(self._welcome_greeting(), allow_polish=False)
             if routed == "GENERAL_QUERY":
                 self.init_unclear_count += 1
                 if self.init_unclear_count == 2:
@@ -174,6 +183,21 @@ class AppointmentFSM:
                 return self._respond(self._msg("ask_name"))
             return self._respond(self._msg("cancelled_hint"))
 
+        if self.state == "ASK_BOOKING_FOR":
+            choice = lower.strip()
+            if choice in {"1", "a", "self", "myself"}:
+                self.booking_for_self = True
+                self.state = "ASK_NAME"
+                return self._respond(self._msg("booking_for_self_ack") + "\n" + self._with_back(self._msg("ask_name")))
+            if choice in {"2", "b", "another", "another person", "other"}:
+                self.booking_for_self = False
+                self.state = "ASK_NAME"
+                return self._respond(self._msg("booking_for_other_ack") + "\n" + self._with_back(self._msg("ask_name")))
+            if choice in {"3", "c"}:
+                self.state = "INIT"
+                return self._respond(self._msg("no_intent"))
+            return self._respond(self._with_back(self._msg("invalid_booking_for"), option_count=2))
+
         if self.state == "ASK_NAME":
             name = extract_name(text)
             if not name:
@@ -194,17 +218,21 @@ class AppointmentFSM:
             self.context.patient_name = name
             self._ensure_actor_defaults()
             if not self.in_edit_flow and self.booking_repository:
+                chat_phone = self._normalize_phone(self.chat_phone_number or "")
                 try:
-                    existing = self.booking_repository.find_active_appointment_by_patient_name(
-                        patient_name=name,
+                    existing = self.booking_repository.find_active_appointment_by_phone_number(
+                        phone_number=chat_phone,
                         admin_id=self.admin_id,
                         doctor_id=self.doctor_id,
                     )
                 except TypeError:
-                    existing = self.booking_repository.find_active_appointment_by_patient_name(
-                        patient_name=name,
-                        admin_id=self.admin_id,
-                    )
+                    try:
+                        existing = self.booking_repository.find_active_appointment_by_phone_number(
+                            phone_number=chat_phone,
+                            admin_id=self.admin_id,
+                        )
+                    except Exception:
+                        existing = None
                 if existing:
                     self.existing_appointment_id = int(existing["appointment_id"])
                     self.existing_booking_clinic_id = str(existing.get("clinic_id") or "")
@@ -218,16 +246,37 @@ class AppointmentFSM:
                             "existing_booking_found",
                             appointment_id=existing["appointment_id"],
                             appointment_date=existing.get("slot_date") or "-",
-                            appointment_time=existing.get("slot_time") or "-",
+                            appointment_time=self._format_time_for_display(existing.get("slot_time") or "-"),
                             clinic_name=existing.get("clinic_name") or "-",
                         )
                     )
             if self.in_edit_flow:
                 self.in_edit_flow = False
                 self.state = "CONFIRM"
-                return self._respond(self._msg("change_ack", step="ASK_NAME") + "\n" + self._msg("confirm_summary", **self.context.__dict__))
-            self.state = "ASK_PATIENT_TYPE"
-            return self._respond(self._msg("name_ack", name=name) + "\n" + self._msg("ask_patient_type"))
+                return self._respond(self._msg("change_ack", step="ASK_NAME") + "\n" + self._msg("confirm_summary", **self._display_context()))
+            if self.booking_for_self:
+                chat_phone = self._normalize_phone(self.chat_phone_number or "")
+                if chat_phone:
+                    self.context.phone_number = chat_phone
+                    auto = self._auto_select_single_clinic_after_phone()
+                    if auto:
+                        return self._respond(
+                            self._msg("name_ack", name=name)
+                            + "\n"
+                            + self._msg("phone_ack", phone_number=chat_phone)
+                            + "\n"
+                            + self._with_back(auto)
+                        )
+                    self.state = "ASK_CLINIC"
+                    return self._respond(
+                        self._msg("name_ack", name=name)
+                        + "\n"
+                        + self._msg("phone_ack", phone_number=chat_phone)
+                        + "\n"
+                        + self._with_back(self._clinic_prompt())
+                    )
+            self.state = "ASK_PHONE"
+            return self._respond(self._msg("name_ack", name=name) + "\n" + self._with_back(self._msg("ask_phone")))
 
         if self.state == "ASK_EXISTING_BOOKING_ACTION":
             normalized = lower.strip()
@@ -259,7 +308,9 @@ class AppointmentFSM:
                 self.time_options_cache = []
                 self.time_hour_options_cache = []
                 self.time_slot_options_cache = []
+                self.time_window_labels_cache = []
                 self.selected_time_hour = None
+                self.selected_time_period = None
                 self.state = "ASK_CLINIC"
                 return self._respond(
                     self._msg("existing_booking_reschedule_start", clinic_name=self.existing_booking_clinic_name or "-")
@@ -271,8 +322,8 @@ class AppointmentFSM:
         if self.state == "ASK_AVAILABILITY_DETAILS":
             if is_booking_intent(lower) or is_restart_intent(lower):
                 self.context = AppointmentContext()
-                self.state = "ASK_NAME"
-                return self._respond(self._msg("intent_ack") + "\n" + self._msg("ask_name"))
+                self.state = "ASK_BOOKING_FOR"
+                return self._respond(self._msg("intent_ack") + "\n" + self._with_back(self._msg("ask_booking_for"), option_count=2))
 
             doctor_name = extract_doctor_name(text)
             if doctor_name:
@@ -310,7 +361,7 @@ class AppointmentFSM:
             if self.in_edit_flow:
                 self.in_edit_flow = False
                 self.state = "CONFIRM"
-                return self._respond(self._msg("change_ack", step="ASK_PATIENT_TYPE") + "\n" + self._msg("confirm_summary", **self.context.__dict__))
+                return self._respond(self._msg("change_ack", step="ASK_PATIENT_TYPE") + "\n" + self._msg("confirm_summary", **self._display_context()))
             self.state = "ASK_AGE"
             return self._respond(self._msg("patient_type_ack", patient_type=patient_type) + "\n" + self._msg("ask_age"))
 
@@ -330,7 +381,7 @@ class AppointmentFSM:
             if self.in_edit_flow:
                 self.in_edit_flow = False
                 self.state = "CONFIRM"
-                return self._respond(self._msg("change_ack", step="ASK_AGE") + "\n" + self._msg("confirm_summary", **self.context.__dict__))
+                return self._respond(self._msg("change_ack", step="ASK_AGE") + "\n" + self._msg("confirm_summary", **self._display_context()))
             self.state = "ASK_GENDER"
             return self._respond(self._msg("age_ack", age=age) + "\n" + self._msg("ask_gender"))
 
@@ -349,7 +400,7 @@ class AppointmentFSM:
             if self.in_edit_flow:
                 self.in_edit_flow = False
                 self.state = "CONFIRM"
-                return self._respond(self._msg("change_ack", step="ASK_GENDER") + "\n" + self._msg("confirm_summary", **self.context.__dict__))
+                return self._respond(self._msg("change_ack", step="ASK_GENDER") + "\n" + self._msg("confirm_summary", **self._display_context()))
             self.state = "ASK_PHONE"
             return self._respond(self._msg("gender_ack", gender=gender) + "\n" + self._msg("ask_phone"))
 
@@ -380,20 +431,23 @@ class AppointmentFSM:
             }
             if normalized in same_number_markers:
                 if not chat_phone:
-                    return self._respond(self._msg("invalid_phone_same_missing"))
+                    return self._respond(self._with_back(self._msg("invalid_phone_same_missing")))
                 self.context.phone_number = chat_phone
                 if self.in_edit_flow:
                     self.in_edit_flow = False
                     self.state = "CONFIRM"
-                    return self._respond(self._msg("change_ack", step="ASK_PHONE") + "\n" + self._msg("confirm_summary", **self.context.__dict__))
+                    return self._respond(self._msg("change_ack", step="ASK_PHONE") + "\n" + self._msg("confirm_summary", **self._display_context()))
+                auto = self._auto_select_single_clinic_after_phone()
+                if auto:
+                    return self._respond(self._msg("phone_ack", phone_number=self.context.phone_number) + "\n" + self._with_back(auto))
                 self.state = "ASK_CLINIC"
                 return self._respond(
-                    self._msg("phone_ack", phone_number=self.context.phone_number) + "\n" + self._clinic_prompt()
+                    self._msg("phone_ack", phone_number=self.context.phone_number) + "\n" + self._with_back(self._clinic_prompt())
                 )
 
             phone = extract_phone(text)
             if not phone and normalized in different_number_markers:
-                return self._respond(self._msg("invalid_phone"))
+                return self._respond(self._with_back(self._msg("invalid_phone")))
             if not phone:
                 llm_phone = llm_extract(
                     llm_client=self.llm_client,
@@ -403,14 +457,17 @@ class AppointmentFSM:
                 )
                 phone = self._normalize_phone(str(llm_phone)) if llm_phone else None
             if not phone:
-                return self._respond(self._msg("invalid_phone"))
+                return self._respond(self._with_back(self._msg("invalid_phone")))
             self.context.phone_number = phone
             if self.in_edit_flow:
                 self.in_edit_flow = False
                 self.state = "CONFIRM"
-                return self._respond(self._msg("change_ack", step="ASK_PHONE") + "\n" + self._msg("confirm_summary", **self.context.__dict__))
+                return self._respond(self._msg("change_ack", step="ASK_PHONE") + "\n" + self._msg("confirm_summary", **self._display_context()))
+            auto = self._auto_select_single_clinic_after_phone()
+            if auto:
+                return self._respond(self._msg("phone_ack", phone_number=phone) + "\n" + self._with_back(auto))
             self.state = "ASK_CLINIC"
-            return self._respond(self._msg("phone_ack", phone_number=phone) + "\n" + self._clinic_prompt())
+            return self._respond(self._msg("phone_ack", phone_number=phone) + "\n" + self._with_back(self._clinic_prompt()))
 
         if self.state == "ASK_CLINIC":
             selected = self._select_clinic(text, lower)
@@ -423,7 +480,9 @@ class AppointmentFSM:
             self.time_options_cache = []
             self.time_hour_options_cache = []
             self.time_slot_options_cache = []
+            self.time_window_labels_cache = []
             self.selected_time_hour = None
+            self.selected_time_period = None
             if self.in_edit_flow:
                 # Clinic change affects slot pool, so re-collect date+time only.
                 self.context.appointment_date = None
@@ -433,7 +492,7 @@ class AppointmentFSM:
                 self.state = "ASK_CLINIC"
                 return self._respond(self._msg("no_date_available") + "\n" + self._clinic_prompt())
             self.state = "ASK_DATE"
-            d1, d2, d3 = date_options
+            d1, d2 = date_options
             return self._respond(
                 self._msg(
                     "clinic_ack",
@@ -441,7 +500,7 @@ class AppointmentFSM:
                     clinic_address=self.context.clinic_address,
                 )
                 + "\n"
-                + self._msg("ask_date_options", date_1=d1, date_2=d2, date_3=d3)
+                + self._with_back(self._msg("ask_date_options", date_1=d1, date_2=d2), option_count=2)
             )
 
         if self.state == "ASK_DATE":
@@ -450,35 +509,29 @@ class AppointmentFSM:
             if not date_options:
                 self.state = "ASK_CLINIC"
                 return self._respond(self._msg("no_date_available") + "\n" + self._clinic_prompt())
-            d1, d2, d3 = date_options
+            d1, d2 = date_options
             if normalized in {"1", "option 1", "date 1"}:
                 parsed_date = d1
             elif normalized in {"2", "option 2", "date 2"}:
                 parsed_date = d2
-            elif normalized in {"3", "option 3", "date 3"}:
-                parsed_date = d3
-            elif normalized in {"4", "other", "other date"}:
-                return self._respond(self._msg("ask_date_manual"))
+            elif normalized == "3":
+                back_text = self._handle_go_back()
+                if back_text:
+                    return self._respond(back_text)
+                return self._respond(self._msg("invalid_date"))
             else:
-                parsed_date = extract_date(text)
-            if not parsed_date:
-                parsed_date = llm_extract(
-                    llm_client=self.llm_client,
-                    enable_llm_polish=self.enable_llm_polish,
-                    field_name="date",
-                    text=text,
-                )
-            if not parsed_date:
                 return self._respond(
                     self._msg("invalid_date")
                     + "\n"
-                    + self._msg("ask_date_options", date_1=d1, date_2=d2, date_3=d3)
+                    + self._with_back(self._msg("ask_date_options", date_1=d1, date_2=d2), option_count=2)
                 )
             self.context.appointment_date = parsed_date
             self.time_options_cache = []
             self.time_hour_options_cache = []
             self.time_slot_options_cache = []
+            self.time_window_labels_cache = []
             self.selected_time_hour = None
+            self.selected_time_period = None
             self.state = "ASK_TIME"
             if not self._load_time_options(limit=60):
                 self.state = "ASK_DATE"
@@ -486,7 +539,7 @@ class AppointmentFSM:
             return self._respond(
                 self._msg("date_ack", appointment_date=parsed_date)
                 + "\n"
-                + self._time_hour_prompt()
+                + self._initial_time_prompt()
             )
 
         if self.state == "ASK_TIME":
@@ -496,14 +549,16 @@ class AppointmentFSM:
                 self.time_options_cache = []
                 self.time_hour_options_cache = []
                 self.time_slot_options_cache = []
+                self.time_window_labels_cache = []
                 self.selected_time_hour = None
+                self.selected_time_period = None
                 if not self._load_time_options(limit=60):
                     self.state = "ASK_DATE"
                     return self._respond(self._msg("no_time_available"))
                 return self._respond(
                     self._msg("date_ack", appointment_date=date_from_text)
                     + "\n"
-                    + self._time_hour_prompt()
+                    + self._initial_time_prompt()
                 )
 
             if not self._load_time_options(limit=60):
@@ -525,31 +580,48 @@ class AppointmentFSM:
             if parsed_time and self._is_available_time(parsed_time):
                 self.context.appointment_time = parsed_time
                 self.time_slot_options_cache = []
+                self.time_window_labels_cache = []
                 self.selected_time_hour = None
+                self.selected_time_period = None
             else:
-                # First pick an hour bucket, then show nearest exact slots.
+                # If total hours <= 4, show one-hour slots directly.
+                # If total hours > 4, ask morning/afternoon/evening first.
                 if not self.time_slot_options_cache:
-                    hour_choice = self._resolve_hour_choice(text, normalized)
-                    if hour_choice is None:
-                        if parsed_time and not self._is_available_time(parsed_time):
-                            return self._respond(
-                                self._msg("time_not_available", requested_time=parsed_time)
-                                + "\n"
-                                + self._time_hour_prompt()
-                            )
-                        return self._respond(self._msg("invalid_time_hour") + "\n" + self._time_hour_prompt())
-                    self.selected_time_hour = hour_choice
-                    self.time_slot_options_cache = self._nearest_slots_for_hour(hour_choice, limit=3)
-                    if not self.time_slot_options_cache:
-                        return self._respond(self._msg("no_time_available"))
+                    if len(self.time_hour_options_cache) > 4:
+                        if not self.selected_time_period:
+                            period = self._resolve_time_period_choice(text, normalized)
+                            if not period:
+                                return self._respond(self._time_period_prompt())
+                            if period == "__BACK__":
+                                back_text = self._handle_go_back()
+                                if back_text:
+                                    return self._respond(back_text)
+                                return self._respond(self._msg("invalid_time"))
+                            self.selected_time_period = period
+                        hour_choices = self._hour_slot_choices_for_period(self.selected_time_period)
+                        if not hour_choices:
+                            self.selected_time_period = None
+                            return self._respond(self._time_period_prompt())
+                    else:
+                        hour_choices = self._hour_slot_choices_for_period(None)
+                        if not hour_choices:
+                            return self._respond(self._msg("no_time_available"))
+
+                    self.time_window_labels_cache = [label for label, _ in hour_choices]
+                    self.time_slot_options_cache = [actual_time for _, actual_time in hour_choices]
                     return self._respond(self._time_slot_prompt())
 
                 selected_time: Optional[str] = None
                 if normalized.isdigit():
                     idx = int(normalized) - 1
+                    if idx == len(self.time_slot_options_cache):
+                        back_text = self._handle_go_back()
+                        if back_text:
+                            return self._respond(back_text)
+                        return self._respond(self._msg("invalid_time"))
                     if 0 <= idx < len(self.time_slot_options_cache):
                         selected_time = self.time_slot_options_cache[idx]
-                parsed_time = selected_time if selected_time else parsed_time
+                parsed_time = selected_time
                 if not parsed_time:
                     return self._respond(self._msg("invalid_time") + "\n" + self._time_slot_prompt())
                 if not self._is_available_time(parsed_time):
@@ -560,7 +632,9 @@ class AppointmentFSM:
                     )
                 self.context.appointment_time = parsed_time
                 self.time_slot_options_cache = []
+                self.time_window_labels_cache = []
                 self.selected_time_hour = None
+                self.selected_time_period = None
 
             if self.in_reschedule_flow:
                 self.state = "CONFIRM_RESCHEDULE"
@@ -568,18 +642,19 @@ class AppointmentFSM:
                     self._msg(
                         "confirm_reschedule_summary",
                         old_date=self.existing_booking_old_date or "-",
-                        old_time=self.existing_booking_old_time or "-",
+                        old_time=self._format_time_for_display(self.existing_booking_old_time or "-"),
                         new_date=self.context.appointment_date or "-",
-                        new_time=self.context.appointment_time or "-",
+                        new_time=self._format_time_for_display(self.context.appointment_time or "-"),
                         clinic_name=self.context.clinic_name or "-",
                     )
                 )
             if self.in_edit_flow:
                 self.in_edit_flow = False
                 self.state = "CONFIRM"
-                return self._respond(self._msg("change_ack", step="ASK_TIME") + "\n" + self._msg("confirm_summary", **self.context.__dict__))
-            self.state = "ASK_REASON"
-            return self._respond(self._msg("time_ack", appointment_time=parsed_time) + "\n" + self._msg("ask_reason"))
+                return self._respond(self._msg("change_ack", step="ASK_TIME") + "\n" + self._msg("confirm_summary", **self._display_context()))
+            self.context.reason = None
+            self.state = "CONFIRM"
+            return self._respond(self._msg("time_ack", appointment_time=self._format_time_for_display(parsed_time)) + "\n" + self._msg("confirm_summary", **self._display_context()))
 
         if self.state == "CONFIRM_RESCHEDULE":
             if is_yes(lower):
@@ -602,7 +677,7 @@ class AppointmentFSM:
                             appointment_id=result.appointment_id,
                             clinic_name=self.context.clinic_name or "-",
                             appointment_date=self.context.appointment_date or "-",
-                            appointment_time=self.context.appointment_time or "-",
+                            appointment_time=self._format_time_for_display(self.context.appointment_time or "-"),
                         )
                     )
                 return self._respond(self._msg("reschedule_failed"))
@@ -619,29 +694,25 @@ class AppointmentFSM:
             if reason_value == "__ASK_OTHER__":
                 return self._respond(self._msg("ask_reason_other"))
             self.context.reason = reason_value
-            if self.in_edit_flow:
-                # Reason and symptoms are coupled; if reason changes, recollect symptoms.
-                self.context.symptoms = None
-                self.in_edit_flow = False
-                self.state = "ASK_SYMPTOMS"
-                return self._respond(self._msg("reason_ack") + "\n" + self._msg("ask_symptoms"))
-            self.state = "ASK_SYMPTOMS"
-            return self._respond(self._msg("reason_ack") + "\n" + self._msg("ask_symptoms"))
-
-        if self.state == "ASK_SYMPTOMS":
-            if len(text) < 3:
-                return self._respond(self._msg("invalid_symptoms"))
-            self.context.symptoms = text
+            self.context.symptoms = None
             if self.in_edit_flow:
                 self.in_edit_flow = False
             self.state = "CONFIRM"
-            return self._respond(self._msg("symptoms_ack") + "\n" + self._msg("confirm_summary", **self.context.__dict__))
+            return self._respond(self._msg("reason_ack") + "\n" + self._msg("confirm_summary", **self._display_context()))
+
+        if self.state == "ASK_SYMPTOMS":
+            # Legacy compatibility: older sessions may still enter ASK_SYMPTOMS.
+            self.context.symptoms = text if len(text) >= 3 else None
+            if self.in_edit_flow:
+                self.in_edit_flow = False
+            self.state = "CONFIRM"
+            return self._respond(self._msg("confirm_summary", **self._display_context()))
 
         if self.state == "CONFIRM":
             confirm_intent = self._detect_confirm_intent(text)
             if confirm_intent == "yes":
                 self.state = "COMPLETED"
-                confirmed = self._msg("confirmed", **self.context.__dict__)
+                confirmed = self._msg("confirmed", **self._display_context())
                 persist_note = self._persist_confirmed_appointment()
                 if persist_note:
                     confirmed = confirmed + "\n" + persist_note
@@ -684,8 +755,8 @@ class AppointmentFSM:
         if self.state == "COMPLETED":
             if is_booking_intent(lower) or is_restart_intent(lower):
                 self._reset_all(cancelled=False)
-                self.state = "ASK_NAME"
-                return self._respond(self._msg("ask_name"))
+                self.state = "ASK_BOOKING_FOR"
+                return self._respond(self._with_back(self._msg("ask_booking_for")))
             return self._respond(self._msg("completed_hint"))
 
         self._reset_all(cancelled=False)
@@ -714,7 +785,9 @@ class AppointmentFSM:
             LOGGER.warning("DB persistence failed: %s", exc)
             return self._msg("db_save_failed")
         if result.ok:
-            return self._msg("db_save_ok", appointment_id=result.appointment_id)
+            display_number = result.queue_number if result.queue_number is not None else result.appointment_id
+            return self._msg("db_save_ok", appointment_id=display_number)
+        LOGGER.warning("DB persistence returned failure: %s", result.message)
         return self._msg("db_save_failed")
 
     def _detect_confirm_intent(self, text: str) -> str:
@@ -741,7 +814,10 @@ class AppointmentFSM:
         self.time_options_cache = []
         self.time_hour_options_cache = []
         self.time_slot_options_cache = []
+        self.time_window_labels_cache = []
         self.selected_time_hour = None
+        self.selected_time_period = None
+        self.booking_for_self = None
         self.existing_appointment_id = None
         self._reset_existing_booking_flags()
         if not cancelled and self.mixed_response_language.lower() == "auto":
@@ -759,6 +835,76 @@ class AppointmentFSM:
 
     def _msg(self, key: str, **kwargs: object) -> str:
         return get_message(self.response_language, key, **kwargs)
+
+    def _with_back(self, text: str, option_count: Optional[int] = None) -> str:
+        if option_count is not None and option_count >= 1:
+            return text + "\n" + f"{option_count + 1}. Go back"
+        return text + "\n" + self._msg("go_back_hint")
+
+    @staticmethod
+    def _is_go_back(lower_text: str) -> bool:
+        val = (lower_text or "").strip().lower()
+        return val in {"go back", "back", "previous", "prev", "menu", "0", "c"}
+
+    def _handle_go_back(self) -> Optional[str]:
+        if self.state == "ASK_BOOKING_FOR":
+            self.state = "INIT"
+            return self._msg("no_intent")
+        if self.state == "ASK_NAME":
+            self.state = "ASK_BOOKING_FOR"
+            return self._with_back(self._msg("ask_booking_for"), option_count=2)
+        if self.state == "ASK_PHONE":
+            self.state = "ASK_NAME"
+            return self._with_back(self._msg("ask_name"))
+        if self.state == "ASK_CLINIC":
+            self.state = "ASK_PHONE" if not self.booking_for_self else "ASK_NAME"
+            return self._with_back(self._msg("ask_phone") if not self.booking_for_self else self._msg("ask_name"))
+        if self.state == "ASK_DATE":
+            self.state = "ASK_CLINIC"
+            return self._with_back(self._clinic_prompt())
+        if self.state == "ASK_TIME":
+            self.state = "ASK_DATE"
+            dates = self._date_options()
+            if not dates:
+                return self._with_back(self._msg("no_date_available"))
+            d1, d2 = dates
+            return self._with_back(self._msg("ask_date_options", date_1=d1, date_2=d2), option_count=2)
+        if self.state == "CONFIRM":
+            self.state = "ASK_TIME"
+            return self._with_back(self._initial_time_prompt())
+        return None
+
+    def _welcome_greeting(self) -> str:
+        self._ensure_actor_defaults()
+        doctor_name = "Doctor"
+        patient_name: Optional[str] = None
+        if self.booking_repository:
+            try:
+                doctor_from_db = self.booking_repository.get_doctor_display_name(
+                    doctor_id=self.doctor_id,
+                    admin_id=self.admin_id,
+                )
+                if doctor_from_db:
+                    doctor_name = doctor_from_db
+            except Exception:
+                pass
+            try:
+                chat_phone = self._normalize_phone(self.chat_phone_number or "")
+                if chat_phone:
+                    patient_name = self.booking_repository.find_patient_name_by_phone_number(
+                        phone_number=chat_phone,
+                        admin_id=self.admin_id,
+                        doctor_id=self.doctor_id,
+                    )
+            except Exception:
+                patient_name = None
+        if patient_name:
+            return self._msg(
+                "welcome_known_patient",
+                doctor_name=doctor_name,
+                patient_name=patient_name,
+            )
+        return self._msg("welcome_new_patient", doctor_name=doctor_name)
 
     def _update_response_language(self, lower: str) -> None:
         (
@@ -810,6 +956,8 @@ class AppointmentFSM:
             limit=limit,
         )
         self.time_hour_options_cache = []
+        self.time_window_labels_cache = []
+        self.selected_time_period = None
         seen: set[str] = set()
         for hhmm in self.time_options_cache:
             hour = hhmm.split(":")[0]
@@ -823,10 +971,85 @@ class AppointmentFSM:
             return self._msg("no_time_available")
         lines = [self._msg("ask_time_hour_options")]
         for index, hour in enumerate(self.time_hour_options_cache, start=1):
-            label = f"{int(hour)}:00"
+            label = self._format_time_for_display(f"{int(hour):02d}:00")
             lines.append(f"{index}. {label}")
+        lines.append(self._reply_with_prompt(len(self.time_hour_options_cache)))
         lines.append("Or type exact time (e.g., 16:20).")
         return "\n".join(lines)
+
+    def _initial_time_prompt(self) -> str:
+        if len(self.time_hour_options_cache) > 4:
+            return self._time_period_prompt()
+        hour_choices = self._hour_slot_choices_for_period(None)
+        if not hour_choices:
+            return self._msg("no_time_available")
+        self.time_window_labels_cache = [label for label, _ in hour_choices]
+        self.time_slot_options_cache = [actual_time for _, actual_time in hour_choices]
+        return self._time_slot_prompt()
+
+    def _time_period_prompt(self) -> str:
+        periods = self._available_periods()
+        if not periods:
+            return self._msg("no_time_available")
+        labels = {
+            "morning": "Morning",
+            "afternoon": "Afternoon",
+            "evening": "Evening",
+        }
+        lines = ["Please choose preferred time period:"]
+        for idx, period in enumerate(periods, start=1):
+            lines.append(f"{idx}. {labels.get(period, period.title())}")
+        lines.append(f"{len(periods) + 1}. Go back")
+        lines.append(self._reply_with_prompt(len(periods) + 1))
+        return "\n".join(lines)
+
+    def _resolve_time_period_choice(self, text: str, normalized: str) -> Optional[str]:
+        periods = self._available_periods()
+        if not periods:
+            return None
+        if normalized.isdigit():
+            idx = int(normalized) - 1
+            if idx == len(periods):
+                return "__BACK__"
+            if 0 <= idx < len(periods):
+                return periods[idx]
+        lower = (text or "").strip().lower()
+        for period in periods:
+            if period in lower:
+                return period
+        return None
+
+    def _available_periods(self) -> list[str]:
+        periods: list[str] = []
+        for hour_str in self.time_hour_options_cache:
+            p = self._hour_to_period(int(hour_str))
+            if p not in periods:
+                periods.append(p)
+        return periods
+
+    def _hour_slot_choices_for_period(self, period: Optional[str]) -> list[tuple[str, str]]:
+        hours = [int(h) for h in self.time_hour_options_cache]
+        if period:
+            hours = [h for h in hours if self._hour_to_period(h) == period]
+        hours = sorted(hours)
+        choices: list[tuple[str, str]] = []
+        for h in hours:
+            hour_times = [t for t in self.time_options_cache if t.startswith(f"{h:02d}:")]
+            if not hour_times:
+                continue
+            start = f"{h:02d}:00"
+            end = f"{(h + 1) % 24:02d}:00"
+            label = f"{self._format_time_for_display(start)} - {self._format_time_for_display(end)}"
+            choices.append((label, hour_times[0]))
+        return choices
+
+    @staticmethod
+    def _hour_to_period(hour: int) -> str:
+        if hour < 12:
+            return "morning"
+        if hour < 16:
+            return "afternoon"
+        return "evening"
 
     def _resolve_hour_choice(self, text: str, normalized: str) -> Optional[str]:
         if not self.time_hour_options_cache:
@@ -873,14 +1096,46 @@ class AppointmentFSM:
         # Keep chronological order in the final display.
         return sorted(result, key=to_minutes)
 
+    def _window_choices_for_hour(self, hour: str) -> list[tuple[str, str]]:
+        if not self.time_options_cache:
+            return []
+        try:
+            hour_int = int(hour)
+        except ValueError:
+            return []
+
+        hour_times = [t for t in self.time_options_cache if t.startswith(f"{hour_int:02d}:")]
+        if not hour_times:
+            return []
+
+        first_half = [t for t in hour_times if int(t.split(":")[1]) < 30]
+        second_half = [t for t in hour_times if int(t.split(":")[1]) >= 30]
+
+        choices: list[tuple[str, str]] = []
+        if first_half:
+            start = f"{hour_int:02d}:00"
+            end = f"{hour_int:02d}:30"
+            label = f"{self._format_time_for_display(start)} - {self._format_time_for_display(end)}"
+            choices.append((label, first_half[0]))
+        if second_half:
+            start = f"{hour_int:02d}:30"
+            end = f"{(hour_int + 1) % 24:02d}:00"
+            label = f"{self._format_time_for_display(start)} - {self._format_time_for_display(end)}"
+            choices.append((label, second_half[0]))
+        return choices
+
     def _time_slot_prompt(self) -> str:
         if not self.time_slot_options_cache:
             return self._msg("no_time_available")
-        preferred_hour = f"{int(self.selected_time_hour or '0')}:00"
-        lines = [self._msg("ask_time_nearest_slots", preferred_hour=preferred_hour)]
-        for idx, hhmm in enumerate(self.time_slot_options_cache, start=1):
-            lines.append(f"{idx}. {hhmm}")
-        lines.append("Or type another exact time.")
+        lines = ["Please choose one-hour slot:"]
+        if self.time_window_labels_cache:
+            for idx, label in enumerate(self.time_window_labels_cache, start=1):
+                lines.append(f"{idx}. {label}")
+        else:
+            for idx, hhmm in enumerate(self.time_slot_options_cache, start=1):
+                lines.append(f"{idx}. {self._format_time_for_display(hhmm)}")
+        lines.append(f"{len(self.time_slot_options_cache) + 1}. Go back")
+        lines.append(self._reply_with_prompt(len(self.time_slot_options_cache) + 1))
         return "\n".join(lines)
 
     def _normalize_phone(self, value: str) -> Optional[str]:
@@ -893,7 +1148,7 @@ class AppointmentFSM:
             return digits
         return None
 
-    def _date_options(self) -> Optional[tuple[str, str, str]]:
+    def _date_options(self) -> Optional[tuple[str, str]]:
         self._ensure_actor_defaults()
         if self.scheduling_repository and self.doctor_id and self.context.clinic_id:
             if not self.date_options_cache:
@@ -901,23 +1156,15 @@ class AppointmentFSM:
                     doctor_id=self.doctor_id,
                     clinic_id=int(self.context.clinic_id),
                     admin_id=self.admin_id,
-                    limit=3,
-                )
-            if len(self.date_options_cache) >= 3:
-                return (
-                    self.date_options_cache[0],
-                    self.date_options_cache[1],
-                    self.date_options_cache[2],
+                    limit=2,
                 )
             if len(self.date_options_cache) == 2:
                 return (
                     self.date_options_cache[0],
                     self.date_options_cache[1],
-                    self.date_options_cache[1],
                 )
             if len(self.date_options_cache) == 1:
                 return (
-                    self.date_options_cache[0],
                     self.date_options_cache[0],
                     self.date_options_cache[0],
                 )
@@ -997,15 +1244,10 @@ class AppointmentFSM:
     def _change_state_from_option(self, lower: str) -> Optional[str]:
         options = {
             "1": "ASK_NAME",
-            "2": "ASK_PATIENT_TYPE",
-            "3": "ASK_AGE",
-            "4": "ASK_GENDER",
-            "5": "ASK_PHONE",
-            "6": "ASK_CLINIC",
-            "7": "ASK_DATE",
-            "8": "ASK_TIME",
-            "9": "ASK_REASON",
-            "10": "ASK_SYMPTOMS",
+            "2": "ASK_PHONE",
+            "3": "ASK_CLINIC",
+            "4": "ASK_DATE",
+            "5": "ASK_TIME",
         }
         normalized = lower.strip()
         return options.get(normalized)
@@ -1062,9 +1304,46 @@ class AppointmentFSM:
                     lines.append(
                         f"{clinic['ordinal']}. {clinic['name']} | {clinic['address']} | {availability}"
                     )
+                lines.append(self._reply_with_prompt(len(self.clinic_options_cache[:10])))
                 return "\n".join(lines)
             return self._msg("no_clinic_available")
         return self._msg("no_clinic_available")
+
+    def _auto_select_single_clinic_after_phone(self) -> Optional[str]:
+        self._ensure_actor_defaults()
+        if not self.scheduling_repository or not self.doctor_id:
+            return None
+        self.clinic_options_cache = self._db_clinic_options()
+        if len(self.clinic_options_cache) != 1:
+            return None
+
+        selected = self.clinic_options_cache[0]
+        self.context.clinic_id = selected["id"]
+        self.context.clinic_name = selected["name"]
+        self.context.clinic_address = selected["address"]
+        self.date_options_cache = []
+        self.time_options_cache = []
+        self.time_hour_options_cache = []
+        self.time_slot_options_cache = []
+        self.time_window_labels_cache = []
+        self.selected_time_hour = None
+        self.selected_time_period = None
+
+        date_options = self._date_options()
+        if not date_options:
+            self.state = "ASK_CLINIC"
+            return self._msg("no_date_available") + "\n" + self._clinic_prompt()
+        self.state = "ASK_DATE"
+        d1, d2 = date_options
+        return (
+            self._with_back(self._msg("ask_date_options", date_1=d1, date_2=d2), option_count=2)
+        )
+
+    def _reply_with_prompt(self, option_count: int) -> str:
+        if option_count <= 0:
+            return self._msg("reply_with_numbers", numbers="1")
+        numbers = ", ".join(str(i) for i in range(1, option_count + 1))
+        return self._msg("reply_with_numbers", numbers=numbers)
 
     def _clinic_availability_line(self, clinic: dict) -> str:
         today_slots = int(clinic.get("today_slots") or 0)
@@ -1084,7 +1363,10 @@ class AppointmentFSM:
                     limit=50,
                 )
                 if today_times:
-                    return f"Slots today: {today_slots} | Timing: {today_times[0]}-{today_times[-1]}"
+                    return (
+                        f"Slots today: {today_slots} | Timing: "
+                        f"{self._format_time_for_display(today_times[0])}-{self._format_time_for_display(today_times[-1])}"
+                    )
                 return f"Slots today: {today_slots}"
 
             next_dates = self.scheduling_repository.list_available_dates(
@@ -1107,11 +1389,29 @@ class AppointmentFSM:
             if next_times:
                 return (
                     f"Next available: {next_date} | Slots: {len(next_times)} | "
-                    f"Timing: {next_times[0]}-{next_times[-1]}"
+                    f"Timing: {self._format_time_for_display(next_times[0])}-{self._format_time_for_display(next_times[-1])}"
                 )
             return f"Next available: {next_date}"
         except Exception:
             return f"Slots today: {today_slots}"
+
+    def _display_context(self) -> dict:
+        data = dict(self.context.__dict__)
+        if data.get("appointment_time"):
+            data["appointment_time"] = self._format_time_for_display(str(data["appointment_time"]))
+        return data
+
+    @staticmethod
+    def _format_time_for_display(raw_time: str) -> str:
+        text = (raw_time or "").strip()
+        if not text:
+            return text
+        for fmt in ("%H:%M", "%H:%M:%S", "%I:%M %p", "%I:%M:%S %p"):
+            try:
+                return datetime.strptime(text, fmt).strftime("%I:%M %p")
+            except ValueError:
+                continue
+        return text
 
     def _availability_reply(self, slot_date: str) -> str:
         self._ensure_actor_defaults()
@@ -1147,7 +1447,7 @@ class AppointmentFSM:
                 )
                 if times:
                     available_lines.append(
-                        f"- {clinic.clinic_name}: {len(times)} slots ({times[0]}-{times[-1]})"
+                        f"- {clinic.clinic_name}: {len(times)} slots ({self._format_time_for_display(times[0])}-{self._format_time_for_display(times[-1])})"
                     )
 
             if available_lines:
