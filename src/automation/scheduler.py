@@ -6,6 +6,9 @@ import time
 from datetime import datetime
 from typing import Callable, Optional
 
+from openpyxl import Workbook
+from openpyxl.styles import Font
+
 from src.repositories.booking_repository import BookingRepository
 from src.repositories.scheduling_repository import SchedulingRepository
 
@@ -80,6 +83,7 @@ class AutomationScheduler:
         booking_repository: Optional[BookingRepository],
         scheduling_repository: Optional[SchedulingRepository],
         send_message_fn: Callable[[str, str], None],
+        send_document_fn: Optional[Callable[[str, str, str], None]] = None,
         source_whatsapp_number: str = "",
         enabled: bool = True,
         slot_automation_enabled: bool = True,
@@ -93,6 +97,7 @@ class AutomationScheduler:
         self._booking_repository = booking_repository
         self._scheduling_repository = scheduling_repository
         self._send_message_fn = send_message_fn
+        self._send_document_fn = send_document_fn
         self._source_whatsapp_number = self._normalize_whatsapp_number(source_whatsapp_number)
         self._enabled = enabled
         self._slot_automation_enabled = slot_automation_enabled
@@ -280,11 +285,16 @@ class AutomationScheduler:
         now = datetime.now()
         grouped: dict[tuple[str, str, int, str, str], list] = {}
         for row in due_rows:
-            to_number = self._normalize_whatsapp_number(row.doctor_whatsapp)
-            if not to_number:
+            wa_number = self._normalize_whatsapp_number(row.doctor_whatsapp)
+            tg_chat_id = self._normalize_telegram_chat_id(row.doctor_telegram_chat_id)
+            if wa_number:
+                to_number = wa_number
+            elif tg_chat_id:
+                to_number = f"telegram:{tg_chat_id}"
+            else:
                 skipped += 1
                 continue
-            if self._source_whatsapp_number and to_number == self._source_whatsapp_number:
+            if self._source_whatsapp_number and to_number.startswith("whatsapp:") and to_number == self._source_whatsapp_number:
                 skipped += 1
                 continue
             try:
@@ -314,19 +324,28 @@ class AutomationScheduler:
                 skipped += 1
                 continue
             rows_sorted = sorted(rows, key=lambda r: (r.slot_time, r.appointment_id))
-            lines = [
+            summary_lines = [
                 f"Reminder: Upcoming appointments in {self._doctor_reminder_lead_minutes} minutes.",
                 f"Slot window: {slot_date} {self._format_display_time(start_time)}-{self._format_display_time(end_time)}",
                 f"Total patients: {len(rows_sorted)}",
-                "Patient list:",
             ]
-            for idx, row in enumerate(rows_sorted, start=1):
-                lines.append(
-                    f"{idx}. {self._format_display_time(row.slot_time)} | {row.patient_name or '-'} | {row.clinic_name or '-'}"
-                )
-            text = "\n".join(lines)
+            summary_text = "\n".join(summary_lines)
             try:
-                self._send_message_fn(to_number, text)
+                report_path = self._build_doctor_report_xlsx(
+                    rows=rows_sorted,
+                    to_number=to_number,
+                    slot_date=slot_date,
+                    schedule_id=schedule_id,
+                    start_time=start_time,
+                    end_time=end_time,
+                )
+                if self._send_document_fn:
+                    self._send_document_fn(to_number, report_path, summary_text)
+                else:
+                    self._send_message_fn(
+                        to_number,
+                        summary_text + "\nReport generated: " + os.path.basename(report_path),
+                    )
                 self._reminder_keys.add(dedup_key)
                 sent += 1
             except Exception as exc:
@@ -349,6 +368,70 @@ class AutomationScheduler:
             self._doctor_reminder_lead_minutes,
         )
 
+    def _build_doctor_report_xlsx(
+        self,
+        *,
+        rows: list,
+        to_number: str,
+        slot_date: str,
+        schedule_id: int,
+        start_time: str,
+        end_time: str,
+    ) -> str:
+        os.makedirs(os.path.join("data", "reports"), exist_ok=True)
+        safe_to = "".join(ch for ch in to_number if ch.isalnum() or ch in {"-", "_"})
+        filename = (
+            f"doctor_reminder_{slot_date}_{schedule_id}_"
+            f"{start_time.replace(':', '')}_{end_time.replace(':', '')}_{safe_to}.xlsx"
+        )
+        path = os.path.join("data", "reports", filename)
+
+        workbook = Workbook()
+        sheet = workbook.active
+        sheet.title = "Appointments"
+
+        headers = [
+            "Booking Number",
+            "Patient Name",
+            "Contact",
+            "Clinic",
+            "Appointment Date",
+            "Appointment Time",
+            "Status",
+        ]
+        sheet.append(headers)
+        for idx in range(1, len(headers) + 1):
+            sheet.cell(row=1, column=idx).font = Font(bold=True)
+
+        for row in rows:
+            booking_number = row.booking_number if row.booking_number is not None else row.appointment_id
+            sheet.append(
+                [
+                    booking_number,
+                    row.patient_name or "-",
+                    row.patient_contact or "-",
+                    row.clinic_name or "-",
+                    row.slot_date or "-",
+                    self._format_display_time(row.slot_time),
+                    row.status or "-",
+                ]
+            )
+
+        widths = {
+            "A": 16,
+            "B": 28,
+            "C": 18,
+            "D": 32,
+            "E": 18,
+            "F": 18,
+            "G": 14,
+        }
+        for col, width in widths.items():
+            sheet.column_dimensions[col].width = width
+
+        workbook.save(path)
+        return path
+
     def _inc_metric(self, name: str, value: int) -> None:
         with self._metrics_lock:
             self._metrics[name] = int(self._metrics.get(name, 0)) + int(value)
@@ -370,6 +453,13 @@ class AutomationScheduler:
         if len(digits) == 10:
             digits = f"91{digits}"
         return f"whatsapp:+{digits}"
+
+    @staticmethod
+    def _normalize_telegram_chat_id(value: str) -> str:
+        raw = (value or "").strip()
+        if raw.startswith("telegram:"):
+            raw = raw[len("telegram:") :].strip()
+        return raw
 
     @staticmethod
     def _format_display_time(raw: str) -> str:

@@ -216,6 +216,113 @@ class SchedulingRepository:
             cur.close()
             conn.close()
 
+    def default_doctor_id_by_username(
+        self,
+        username: str,
+        admin_id: Optional[int] = None,
+    ) -> Optional[int]:
+        target = (username or "").strip().lstrip("@").lower()
+        if not target:
+            return None
+
+        conn = self._connect()
+        cur = conn.cursor(dictionary=True)
+        try:
+            cur.execute(
+                """
+                SELECT COLUMN_NAME
+                FROM INFORMATION_SCHEMA.COLUMNS
+                WHERE TABLE_SCHEMA = DATABASE()
+                  AND TABLE_NAME = 'doctors'
+                """
+            )
+            cols = {str(r["COLUMN_NAME"]).lower() for r in cur.fetchall()}
+            candidate_cols = ["username", "telegram_username", "telegram_bot_username"]
+            username_col = next((c for c in candidate_cols if c in cols), None)
+            if not username_col:
+                return None
+
+            if admin_id is not None:
+                cur.execute(
+                    f"""
+                    SELECT doctor_id, COALESCE({username_col}, '') AS username_value
+                    FROM doctors
+                    WHERE status = 'ACTIVE' AND admin_id = %s
+                    ORDER BY doctor_id
+                    """,
+                    (admin_id,),
+                )
+            else:
+                cur.execute(
+                    f"""
+                    SELECT doctor_id, COALESCE({username_col}, '') AS username_value
+                    FROM doctors
+                    WHERE status = 'ACTIVE'
+                    ORDER BY doctor_id
+                    """
+                )
+            for row in cur.fetchall():
+                value = str(row.get("username_value") or "").strip().lstrip("@").lower()
+                if value and value == target:
+                    return int(row["doctor_id"])
+            return None
+        finally:
+            cur.close()
+            conn.close()
+
+    def doctor_accept_days(self, doctor_id: int, admin_id: Optional[int] = None) -> int:
+        """Return doctor booking acceptance window in days ahead.
+
+        Semantics:
+        - 0 => today only
+        - 1 => today + tomorrow
+        """
+        conn = self._connect()
+        cur = conn.cursor(dictionary=True)
+        try:
+            cur.execute(
+                """
+                SELECT COLUMN_NAME
+                FROM INFORMATION_SCHEMA.COLUMNS
+                WHERE TABLE_SCHEMA = DATABASE()
+                  AND TABLE_NAME = 'doctors'
+                """
+            )
+            cols = {str(r["COLUMN_NAME"]).lower() for r in cur.fetchall()}
+            column = None
+            for candidate in ("acceptdays", "accept_days"):
+                if candidate in cols:
+                    column = candidate
+                    break
+            if not column:
+                return 1
+
+            params: list[object] = [doctor_id]
+            admin_sql = ""
+            if admin_id is not None:
+                admin_sql = "AND admin_id = %s"
+                params.append(admin_id)
+            cur.execute(
+                f"""
+                SELECT {column} AS accept_days
+                FROM doctors
+                WHERE doctor_id = %s
+                  {admin_sql}
+                LIMIT 1
+                """,
+                tuple(params),
+            )
+            row = cur.fetchone()
+            raw = row.get("accept_days") if row else None
+            try:
+                value = int(raw) if raw is not None else 1
+            except Exception:
+                value = 1
+            return max(0, value)
+        finally:
+            cur.close()
+            conn.close()
+
     def list_clinics_for_doctor(
         self,
         doctor_id: int,

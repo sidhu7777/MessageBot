@@ -3,6 +3,9 @@ import json
 import os
 import time
 import threading
+import uuid
+from urllib import error as urlerror
+from urllib import request as urlrequest
 from threading import Lock
 from typing import Dict, Tuple
 
@@ -31,6 +34,7 @@ logging.basicConfig(
     format="%(asctime)s %(levelname)s %(name)s - %(message)s",
 )
 LOGGER = logging.getLogger(settings.app_name)
+_telegram_bot_username_runtime = ""
 
 llm_client = LLMClient(
     model=settings.llm_model,
@@ -49,7 +53,7 @@ session_manager = SessionManager(
     booking_repository=booking_repository if settings.enable_db_booking else None,
     scheduling_repository=scheduling_repository if settings.enable_db_booking else None,
     conversation_repository=conversation_repository if settings.enable_db_booking else None,
-    bot_whatsapp_number=settings.twilio_whatsapp_from,
+    bot_whatsapp_number="",
     ttl_minutes=settings.session_ttl_minutes,
 )
 request_validator = RequestValidator(settings.twilio_auth_token)
@@ -68,7 +72,7 @@ turn_processor = TurnQueueProcessor(
     worker_count=max(1, settings.queue_worker_count),
     max_queue_size=max(1, settings.queue_max_size),
     process_fn=lambda from_number, body: _process_turn(from_number, body),
-    send_fn=lambda to_number, reply, post_state, inbound_sid: _send_whatsapp_response(
+    send_fn=lambda to_number, reply, post_state, inbound_sid: _send_channel_response(
         to_number=to_number,
         reply_text=reply,
         fsm_state=post_state,
@@ -80,7 +84,12 @@ turn_processor = TurnQueueProcessor(
 automation_scheduler = AutomationScheduler(
     booking_repository=booking_repository if settings.enable_db_booking else None,
     scheduling_repository=scheduling_repository if settings.enable_db_booking else None,
-    send_message_fn=lambda to_number, body: _send_plain_rest_message(to_number=to_number, body=body),
+    send_message_fn=lambda to_number, body: _send_plain_channel_message(to_number=to_number, body=body),
+    send_document_fn=lambda to_number, file_path, caption: _send_plain_channel_document(
+        to_number=to_number,
+        file_path=file_path,
+        caption=caption,
+    ),
     source_whatsapp_number=settings.twilio_whatsapp_from,
     enabled=settings.automation_enabled,
     slot_automation_enabled=settings.slot_automation_enabled,
@@ -107,8 +116,19 @@ app.include_router(
 
 @app.on_event("startup")
 async def startup_validation() -> None:
+    global _telegram_bot_username_runtime
     turn_processor.start()
     automation_scheduler.start()
+    resolved_username = _resolve_telegram_bot_username()
+    if resolved_username:
+        _telegram_bot_username_runtime = resolved_username
+        LOGGER.info("Telegram bot username resolved dynamically: @%s", resolved_username)
+    elif settings.telegram_bot_username:
+        _telegram_bot_username_runtime = settings.telegram_bot_username
+        LOGGER.warning(
+            "Telegram bot username dynamic resolution failed; using TELEGRAM_BOT_USERNAME fallback: @%s",
+            settings.telegram_bot_username,
+        )
     if settings.llm_provider.lower() != "ollama":
         return
     try:
@@ -185,6 +205,7 @@ async def webhook(request: Request):
         or (form.get("Body") or "").strip()
     )
     from_number = form.get("From") or "unknown"
+    to_number = (form.get("To") or settings.twilio_whatsapp_from or "").strip()
 
     if settings.enable_twilio_signature_validation:
         signature = request.headers.get("X-Twilio-Signature", "")
@@ -220,6 +241,8 @@ async def webhook(request: Request):
             return PlainTextResponse("", status_code=200)
 
     fsm = session_manager.get_or_create(from_number)
+    if to_number:
+        fsm.bot_whatsapp_number = to_number
     pre_state = fsm.state
 
     if settings.twilio_use_rest_responses and twilio_client and settings.twilio_whatsapp_from:
@@ -233,7 +256,7 @@ async def webhook(request: Request):
             enqueued = turn_processor.submit(task)
             if not enqueued:
                 busy_msg = _busy_message(fsm.response_language, pre_state)
-                _send_plain_rest_message(to_number=from_number, body=busy_msg, inbound_sid=inbound_sid)
+                _send_plain_channel_message(to_number=from_number, body=busy_msg, inbound_sid=inbound_sid)
                 _schedule_overflow_requeue(task)
                 LOGGER.warning(
                     "Queue full. Busy message sent sid=%s from=%s backlog=%d",
@@ -246,7 +269,7 @@ async def webhook(request: Request):
             # If queue is already backlogged, proactively send processing notice.
             if turn_processor.backlog_size() >= max(1, settings.queue_busy_threshold):
                 safe_msg = _processing_message(fsm.response_language, pre_state)
-                _send_plain_rest_message(to_number=from_number, body=safe_msg, inbound_sid=inbound_sid)
+                _send_plain_channel_message(to_number=from_number, body=safe_msg, inbound_sid=inbound_sid)
 
             elapsed_ms = int((time.perf_counter() - started) * 1000)
             LOGGER.info(
@@ -276,6 +299,98 @@ async def webhook(request: Request):
     twiml = MessagingResponse()
     twiml.message(reply)
     return PlainTextResponse(str(twiml), media_type="application/xml")
+
+
+@app.post("/telegram/webhook")
+async def telegram_webhook(request: Request):
+    if settings.telegram_webhook_secret:
+        secret = request.headers.get("X-Telegram-Bot-Api-Secret-Token", "")
+        if secret != settings.telegram_webhook_secret:
+            LOGGER.warning("Rejected Telegram webhook due to invalid secret token")
+            raise HTTPException(status_code=403, detail="Invalid Telegram webhook secret")
+
+    started = time.perf_counter()
+    payload = await request.json()
+    message = payload.get("message") or payload.get("edited_message") or {}
+    text = str(message.get("text") or "").strip()
+    from_user = message.get("from") or {}
+    chat = message.get("chat") or {}
+    telegram_user_id = str(from_user.get("id") or chat.get("id") or "").strip()
+    inbound_sid = str(message.get("message_id") or "").strip()
+    if not telegram_user_id:
+        return PlainTextResponse("", status_code=200)
+    from_number = f"telegram:{telegram_user_id}"
+
+    LOGGER.info(
+        "Incoming Telegram message sid=%s from=%s body=%s",
+        inbound_sid or "-",
+        from_number,
+        text,
+    )
+
+    if inbound_sid:
+        dedup_sid = f"TG{telegram_user_id}:{inbound_sid}"
+        # Keep Telegram webhook ack path fast to avoid Telegram read timeouts.
+        # Use local/file dedup here; DB dedup can block webhook response under load.
+        duplicate = sid_store.seen_or_add(dedup_sid)
+        if duplicate:
+            LOGGER.info("Duplicate inbound Telegram message ignored sid=%s from=%s", dedup_sid, from_number)
+            return PlainTextResponse("", status_code=200)
+
+    fsm = session_manager.get_or_create(from_number)
+    if _telegram_bot_username_runtime:
+        fsm.bot_whatsapp_number = f"telegram_username:{_telegram_bot_username_runtime}"
+    pre_state = fsm.state
+    try:
+        task = TurnTask(
+            from_number=from_number,
+            body=text,
+            inbound_sid=inbound_sid,
+            pre_state=pre_state,
+        )
+        enqueued = turn_processor.submit(task)
+        if not enqueued:
+            busy_msg = _busy_message(fsm.response_language, pre_state)
+            _send_plain_channel_message(to_number=from_number, body=busy_msg, inbound_sid=inbound_sid)
+            _schedule_overflow_requeue(task)
+            LOGGER.warning(
+                "Queue full. Busy message sent sid=%s from=%s backlog=%d",
+                inbound_sid or "-",
+                from_number,
+                turn_processor.backlog_size(),
+            )
+            return PlainTextResponse("", status_code=200)
+
+        if turn_processor.backlog_size() >= max(1, settings.queue_busy_threshold):
+            safe_msg = _processing_message(fsm.response_language, pre_state)
+            _send_plain_channel_message(to_number=from_number, body=safe_msg, inbound_sid=inbound_sid)
+
+        elapsed_ms = int((time.perf_counter() - started) * 1000)
+        LOGGER.info(
+            "Queued inbound Telegram sid=%s from=%s state=%s backlog=%d ack_ms=%d",
+            inbound_sid or "-",
+            from_number,
+            pre_state,
+            turn_processor.backlog_size(),
+            elapsed_ms,
+        )
+        return PlainTextResponse("", status_code=200)
+    except Exception:
+        LOGGER.warning("Falling back to direct Telegram response after queue failure.")
+        reply, post_state = _process_turn(from_number, text)
+        reply = reply[: settings.max_message_chars]
+        _send_plain_channel_message(to_number=from_number, body=reply, inbound_sid=inbound_sid)
+        elapsed_ms = int((time.perf_counter() - started) * 1000)
+        LOGGER.info(
+            "Telegram fallback reply generated in %dms sid=%s from=%s state=%s->%s chars=%d",
+            elapsed_ms,
+            inbound_sid or "-",
+            from_number,
+            pre_state,
+            post_state,
+            len(reply),
+        )
+        return PlainTextResponse("", status_code=200)
 
 
 @app.post("/twilio/status")
@@ -346,6 +461,13 @@ def _busy_message(language: str, state: str) -> str:
     return "All assistants are busy right now. Please try again shortly."
 
 
+def _send_channel_response(to_number: str, reply_text: str, fsm_state: str, fsm, inbound_sid: str = "") -> None:
+    if (to_number or "").strip().lower().startswith("telegram:"):
+        _send_plain_channel_message(to_number=to_number, body=reply_text, inbound_sid=inbound_sid)
+        return
+    _send_whatsapp_response(to_number=to_number, reply_text=reply_text, fsm_state=fsm_state, fsm=fsm, inbound_sid=inbound_sid)
+
+
 def _send_whatsapp_response(to_number: str, reply_text: str, fsm_state: str, fsm, inbound_sid: str = "") -> None:
     if not twilio_client:
         return
@@ -390,7 +512,10 @@ def _send_whatsapp_response(to_number: str, reply_text: str, fsm_state: str, fsm
         raise
 
 
-def _send_plain_rest_message(to_number: str, body: str, inbound_sid: str = "") -> None:
+def _send_plain_channel_message(to_number: str, body: str, inbound_sid: str = "") -> None:
+    if (to_number or "").strip().lower().startswith("telegram:"):
+        _send_telegram_message(to_number=to_number, body=body, inbound_sid=inbound_sid)
+        return
     sid = _send_with_retries(
         {
             "from_": settings.twilio_whatsapp_from,
@@ -399,6 +524,140 @@ def _send_plain_rest_message(to_number: str, body: str, inbound_sid: str = "") -
         }
     )
     LOGGER.info("Sent safe processing message sid=%s inbound_sid=%s to=%s", sid, inbound_sid or "-", to_number)
+
+def _send_plain_channel_document(to_number: str, file_path: str, caption: str = "", inbound_sid: str = "") -> None:
+    if (to_number or "").strip().lower().startswith("telegram:"):
+        _send_telegram_document(
+            to_number=to_number,
+            file_path=file_path,
+            caption=caption,
+            inbound_sid=inbound_sid,
+        )
+        return
+    # Twilio WhatsApp media requires a publicly reachable media URL.
+    # For local scheduler exports, keep a safe fallback text notification.
+    msg = caption.strip() if caption else "Doctor reminder report generated."
+    msg = f"{msg}\nReport file: {os.path.basename(file_path)}"
+    _send_plain_channel_message(to_number=to_number, body=msg, inbound_sid=inbound_sid)
+
+
+def _send_telegram_message(to_number: str, body: str, inbound_sid: str = "") -> None:
+    if not settings.telegram_bot_token:
+        raise RuntimeError("TELEGRAM_BOT_TOKEN is not configured.")
+    chat_id = _telegram_chat_id_from_user(to_number)
+    if not chat_id:
+        raise RuntimeError(f"Invalid Telegram destination: {to_number}")
+    url = f"https://api.telegram.org/bot{settings.telegram_bot_token}/sendMessage"
+    payload = json.dumps({"chat_id": chat_id, "text": body}).encode("utf-8")
+    req = urlrequest.Request(
+        url=url,
+        data=payload,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urlrequest.urlopen(req, timeout=10) as resp:
+            raw = resp.read().decode("utf-8", errors="replace")
+            LOGGER.info(
+                "Sent Telegram message inbound_sid=%s to=%s response=%s",
+                inbound_sid or "-",
+                to_number,
+                raw[:200],
+            )
+    except urlerror.HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="replace")
+        LOGGER.error("Telegram send failed status=%s body=%s", exc.code, detail[:400])
+        raise
+    except Exception as exc:
+        LOGGER.error("Telegram send failed error=%s", exc)
+        raise
+
+def _send_telegram_document(to_number: str, file_path: str, caption: str = "", inbound_sid: str = "") -> None:
+    if not settings.telegram_bot_token:
+        raise RuntimeError("TELEGRAM_BOT_TOKEN is not configured.")
+    chat_id = _telegram_chat_id_from_user(to_number)
+    if not chat_id:
+        raise RuntimeError(f"Invalid Telegram destination: {to_number}")
+    if not os.path.exists(file_path):
+        raise RuntimeError(f"Report file not found: {file_path}")
+
+    url = f"https://api.telegram.org/bot{settings.telegram_bot_token}/sendDocument"
+    boundary = f"----CodexBoundary{uuid.uuid4().hex}"
+    file_name = os.path.basename(file_path)
+    with open(file_path, "rb") as handle:
+        file_bytes = handle.read()
+
+    parts = bytearray()
+
+    def _append_field(name: str, value: str) -> None:
+        parts.extend(f"--{boundary}\r\n".encode("utf-8"))
+        parts.extend(f'Content-Disposition: form-data; name="{name}"\r\n\r\n'.encode("utf-8"))
+        parts.extend((value or "").encode("utf-8"))
+        parts.extend(b"\r\n")
+
+    _append_field("chat_id", chat_id)
+    if caption:
+        _append_field("caption", caption)
+
+    parts.extend(f"--{boundary}\r\n".encode("utf-8"))
+    parts.extend(
+        (
+            f'Content-Disposition: form-data; name="document"; filename="{file_name}"\r\n'
+            "Content-Type: application/vnd.openxmlformats-officedocument.spreadsheetml.sheet\r\n\r\n"
+        ).encode("utf-8")
+    )
+    parts.extend(file_bytes)
+    parts.extend(b"\r\n")
+    parts.extend(f"--{boundary}--\r\n".encode("utf-8"))
+
+    req = urlrequest.Request(
+        url=url,
+        data=bytes(parts),
+        headers={"Content-Type": f"multipart/form-data; boundary={boundary}"},
+        method="POST",
+    )
+    try:
+        with urlrequest.urlopen(req, timeout=20) as resp:
+            raw = resp.read().decode("utf-8", errors="replace")
+            LOGGER.info(
+                "Sent Telegram document inbound_sid=%s to=%s file=%s response=%s",
+                inbound_sid or "-",
+                to_number,
+                file_name,
+                raw[:200],
+            )
+    except urlerror.HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="replace")
+        LOGGER.error("Telegram document send failed status=%s body=%s", exc.code, detail[:400])
+        raise
+    except Exception as exc:
+        LOGGER.error("Telegram document send failed error=%s", exc)
+        raise
+
+
+def _telegram_chat_id_from_user(user_id: str) -> str:
+    raw = (user_id or "").strip()
+    if raw.startswith("telegram:"):
+        return raw[len("telegram:") :]
+    return raw
+
+
+def _resolve_telegram_bot_username() -> str:
+    token = (settings.telegram_bot_token or "").strip()
+    if not token:
+        return ""
+    url = f"https://api.telegram.org/bot{token}/getMe"
+    req = urlrequest.Request(url=url, method="GET")
+    try:
+        with urlrequest.urlopen(req, timeout=10) as resp:
+            payload = json.loads(resp.read().decode("utf-8", errors="replace"))
+        if not isinstance(payload, dict) or not payload.get("ok"):
+            return ""
+        result = payload.get("result") or {}
+        username = str(result.get("username") or "").strip().lstrip("@")
+        return username
+    except Exception:
+        return ""
 
 
 def _send_with_retries(kwargs: dict) -> str:

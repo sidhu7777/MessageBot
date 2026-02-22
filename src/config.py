@@ -49,6 +49,9 @@ class Settings:
     processing_timeout_seconds: float = 2.5
     twilio_send_retries: int = 2
     twilio_status_callback_url: str = ""
+    telegram_bot_token: str = ""
+    telegram_webhook_secret: str = ""
+    telegram_bot_username: str = ""
     queue_worker_count: int = 3
     queue_max_size: int = 60
     queue_retry_attempts: int = 2
@@ -107,6 +110,9 @@ def load_settings() -> Settings:
         processing_timeout_seconds=float(os.getenv("PROCESSING_TIMEOUT_SECONDS", "2.5")),
         twilio_send_retries=int(os.getenv("TWILIO_SEND_RETRIES", "2")),
         twilio_status_callback_url=os.getenv("TWILIO_STATUS_CALLBACK_URL", ""),
+        telegram_bot_token=os.getenv("TELEGRAM_BOT_TOKEN", "").strip(),
+        telegram_webhook_secret=os.getenv("TELEGRAM_WEBHOOK_SECRET", "").strip(),
+        telegram_bot_username=os.getenv("TELEGRAM_BOT_USERNAME", "").strip().lstrip("@"),
         queue_worker_count=int(os.getenv("QUEUE_WORKER_COUNT", "3")),
         queue_max_size=int(os.getenv("QUEUE_MAX_SIZE", "60")),
         queue_retry_attempts=int(os.getenv("QUEUE_RETRY_ATTEMPTS", "2")),

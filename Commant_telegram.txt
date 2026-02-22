@@ -1,0 +1,45 @@
+$tgUserId = "535939353"   # keep same for same session
+>> $msgId = 1
+>> 
+>> while ($true) {
+>>   $text = Read-Host "You"
+>>   if ($text -eq "exit") { break }
+>>
+>>   $payload = @{
+>>     update_id = [int](Get-Random -Minimum 100000 -Maximum 999999)
+>>     message = @{
+>>       message_id = $msgId
+>>       from = @{
+>>         id = [int]$tgUserId
+>>         is_bot = $false
+>>         first_name = "Local"
+>>       }
+>>       chat = @{
+>>         id = [int]$tgUserId
+>>         ype = "private"
+>>       }
+>>       date = [int][double]::Parse((Get-Date -UFormat %s))
+>>       text = $text
+>>     }
+>>   } | ConvertTo-Json -Depth 6
+>> 
+>>   Invoke-WebRequest -Method POST `
+>>     -Uri "http://127.0.0.1:8000/telegram/webhook" `
+>>     -ContentType "application/json" `
+>>     -Body $payload | Out-Null
+>> 
+>>   "Sent to /telegram/webhook"
+>>   $msgId++
+>> }
+
+
+# to the current message id
+
+Invoke-RestMethod "https://api.telegram.org/bot8299507232:AAGtw36UswCYcnreYa54yS5CsyPzKW2SIoM/getUpdates"
+
+
+Invoke-RestMethod -Method POST `
+  -Uri "https://api.telegram.org/bot8299507232:AAGtw36UswCYcnreYa54yS5CsyPzKW2SIoM/sendMessage" `
+  -ContentType "application/json" `
+  -Body '{"chat_id":"8299824956","text":"test from api"}'
+

@@ -17,10 +17,14 @@ class BookingResult:
 class DoctorReminder:
     appointment_id: int
     doctor_whatsapp: str
+    doctor_telegram_chat_id: str
     patient_name: str
+    patient_contact: str
     clinic_name: str
     slot_date: str
     slot_time: str
+    status: str
+    booking_number: Optional[int]
     schedule_id: int
     schedule_start_time: str
     schedule_end_time: str
@@ -57,6 +61,13 @@ class BookingRepository:
 
     def _use_appointment_mode(self) -> bool:
         return self._table_exists("appointment") and not self._table_exists("slots")
+
+    @staticmethod
+    def _normalize_chat_user_id(value: str) -> str:
+        raw = (value or "").strip()
+        if raw.startswith("telegram:"):
+            raw = raw[len("telegram:") :].strip()
+        return raw
 
     @staticmethod
     def _parse_time_value(raw: object) -> Optional[time]:
@@ -181,7 +192,7 @@ class BookingRepository:
             cur.execute(
                 f"""
                 SELECT
-                    COALESCE(NULLIF(TRIM(name), ''), NULLIF(TRIM(full_name), ''), 'Doctor') AS doctor_name
+                    COALESCE(NULLIF(TRIM(doctor_name), ''), 'Doctor') AS doctor_name
                 FROM doctors
                 WHERE doctor_id = %s
                   {admin_sql}
@@ -356,7 +367,7 @@ class BookingRepository:
                     JOIN patients p ON p.patient_id = a.patient_id
                     LEFT JOIN clinics c ON c.clinic_id = a.clinic_id
                     WHERE a.admin_id = %s
-                      AND a.status = 'BOOKED'
+                      AND a.status IN ('BOOKED', 'PENDING', 'CONFIRMED')
                       {doctor_sql}
                     ORDER BY a.appointment_id DESC
                     """,
@@ -393,7 +404,7 @@ class BookingRepository:
                 LEFT JOIN clinics c ON c.clinic_id = a.clinic_id
                 LEFT JOIN slots s ON s.slot_id = a.slot_id
                 WHERE a.admin_id = %s
-                  AND a.status = 'BOOKED'
+                  AND a.status IN ('BOOKED', 'PENDING', 'CONFIRMED')
                   {doctor_sql}
                 ORDER BY a.appointment_id DESC
                 """,
@@ -409,6 +420,189 @@ class BookingRepository:
                 if len(target) >= 10 and len(patient_phone) >= 10 and patient_phone[-10:] == target[-10:]:
                     return row
             return None
+        finally:
+            cur.close()
+            conn.close()
+
+    def list_active_appointments_by_phone_number(
+        self,
+        phone_number: str,
+        admin_id: Optional[int] = None,
+        doctor_id: Optional[int] = None,
+        limit: int = 10,
+    ) -> list[dict]:
+        target = self._normalize_phone(phone_number)
+        if not target:
+            return []
+
+        conn = self._connect()
+        cur = conn.cursor(dictionary=True)
+        try:
+            actual_admin_id = admin_id or self.default_admin_id()
+            if not actual_admin_id:
+                return []
+            appointment_table = self._appointment_table()
+            if self._use_appointment_mode():
+                params: list[object] = [actual_admin_id]
+                doctor_sql = ""
+                if doctor_id is not None:
+                    doctor_sql = "AND a.doctor_id = %s"
+                    params.append(doctor_id)
+                cur.execute(
+                    f"""
+                    SELECT
+                        a.appointment_id,
+                        a.clinic_id,
+                        a.doctor_id,
+                        c.clinic_name,
+                        DATE_FORMAT(a.appointment_date, '%Y-%m-%d') AS slot_date,
+                        TIME_FORMAT(a.start_time, '%H:%i') AS slot_time,
+                        COALESCE(p.phone, '') AS patient_phone
+                    FROM {appointment_table} a
+                    JOIN patients p ON p.patient_id = a.patient_id
+                    LEFT JOIN clinics c ON c.clinic_id = a.clinic_id
+                    WHERE a.admin_id = %s
+                      AND a.status IN ('BOOKED', 'PENDING', 'CONFIRMED')
+                      {doctor_sql}
+                    ORDER BY a.appointment_id DESC
+                    """,
+                    tuple(params),
+                )
+            else:
+                params = [actual_admin_id]
+                doctor_sql = ""
+                if doctor_id is not None:
+                    doctor_sql = "AND a.doctor_id = %s"
+                    params.append(doctor_id)
+                cur.execute(
+                    f"""
+                    SELECT
+                        a.appointment_id,
+                        a.clinic_id,
+                        a.doctor_id,
+                        c.clinic_name,
+                        s.slot_date,
+                        TIME_FORMAT(s.slot_time, '%H:%i') AS slot_time,
+                        COALESCE(p.phone, '') AS patient_phone
+                    FROM {appointment_table} a
+                    JOIN patients p ON p.patient_id = a.patient_id
+                    LEFT JOIN clinics c ON c.clinic_id = a.clinic_id
+                    LEFT JOIN slots s ON s.slot_id = a.slot_id
+                    WHERE a.admin_id = %s
+                      AND a.status IN ('BOOKED', 'PENDING', 'CONFIRMED')
+                      {doctor_sql}
+                    ORDER BY a.appointment_id DESC
+                    """,
+                    tuple(params),
+                )
+
+            matched: list[dict] = []
+            for row in cur.fetchall():
+                patient_phone = self._normalize_phone(str(row.get("patient_phone") or ""))
+                if not patient_phone:
+                    continue
+                if patient_phone == target or (
+                    len(target) >= 10 and len(patient_phone) >= 10 and patient_phone[-10:] == target[-10:]
+                ):
+                    matched.append(row)
+                    if len(matched) >= max(1, limit):
+                        break
+            return matched
+        finally:
+            cur.close()
+            conn.close()
+
+    def list_active_appointments_by_chat_user_id(
+        self,
+        chat_user_id: str,
+        admin_id: Optional[int] = None,
+        doctor_id: Optional[int] = None,
+        limit: int = 10,
+    ) -> list[dict]:
+        target = self._normalize_chat_user_id(chat_user_id)
+        if not target:
+            return []
+
+        conn = self._connect()
+        cur = conn.cursor(dictionary=True)
+        try:
+            actual_admin_id = admin_id or self.default_admin_id()
+            if not actual_admin_id:
+                return []
+
+            cur.execute(
+                """
+                SELECT COLUMN_NAME
+                FROM INFORMATION_SCHEMA.COLUMNS
+                WHERE TABLE_SCHEMA = DATABASE()
+                  AND TABLE_NAME = 'patients'
+                """
+            )
+            cols = {str(r["COLUMN_NAME"]).lower() for r in cur.fetchall()}
+            candidate_cols = ["telegram_chat_id", "telegram_user_id", "user_id"]
+            chat_col = next((c for c in candidate_cols if c in cols), None)
+            if not chat_col:
+                return []
+
+            appointment_table = self._appointment_table()
+            params: list[object] = [actual_admin_id]
+            doctor_sql = ""
+            if doctor_id is not None:
+                doctor_sql = "AND a.doctor_id = %s"
+                params.append(doctor_id)
+
+            if self._use_appointment_mode():
+                cur.execute(
+                    f"""
+                    SELECT
+                        a.appointment_id,
+                        a.clinic_id,
+                        a.doctor_id,
+                        c.clinic_name,
+                        DATE_FORMAT(a.appointment_date, '%Y-%m-%d') AS slot_date,
+                        TIME_FORMAT(a.start_time, '%H:%i') AS slot_time,
+                        COALESCE(p.{chat_col}, '') AS chat_user_value
+                    FROM {appointment_table} a
+                    JOIN patients p ON p.patient_id = a.patient_id
+                    LEFT JOIN clinics c ON c.clinic_id = a.clinic_id
+                    WHERE a.admin_id = %s
+                      AND a.status IN ('BOOKED', 'PENDING', 'CONFIRMED')
+                      {doctor_sql}
+                    ORDER BY a.appointment_id DESC
+                    """,
+                    tuple(params),
+                )
+            else:
+                cur.execute(
+                    f"""
+                    SELECT
+                        a.appointment_id,
+                        a.clinic_id,
+                        a.doctor_id,
+                        c.clinic_name,
+                        s.slot_date,
+                        TIME_FORMAT(s.slot_time, '%H:%i') AS slot_time,
+                        COALESCE(p.{chat_col}, '') AS chat_user_value
+                    FROM {appointment_table} a
+                    JOIN patients p ON p.patient_id = a.patient_id
+                    LEFT JOIN clinics c ON c.clinic_id = a.clinic_id
+                    LEFT JOIN slots s ON s.slot_id = a.slot_id
+                    WHERE a.admin_id = %s
+                      AND a.status IN ('BOOKED', 'PENDING', 'CONFIRMED')
+                      {doctor_sql}
+                    ORDER BY a.appointment_id DESC
+                    """,
+                    tuple(params),
+                )
+
+            matched: list[dict] = []
+            for row in cur.fetchall():
+                value = self._normalize_chat_user_id(str(row.get("chat_user_value") or ""))
+                if value and value == target:
+                    matched.append(row)
+                    if len(matched) >= max(1, limit):
+                        break
+            return matched
         finally:
             cur.close()
             conn.close()
@@ -432,7 +626,7 @@ class BookingRepository:
                     SET status = 'CANCELLED'
                     WHERE appointment_id = %s
                       AND admin_id = %s
-                      AND status = 'BOOKED'
+                      AND status IN ('BOOKED', 'PENDING', 'CONFIRMED')
                     """,
                     (appointment_id, actual_admin_id),
                 )
@@ -448,7 +642,7 @@ class BookingRepository:
                 FROM {appointment_table}
                 WHERE appointment_id = %s
                   AND admin_id = %s
-                  AND status = 'BOOKED'
+                  AND status IN ('BOOKED', 'PENDING', 'CONFIRMED')
                 LIMIT 1
                 FOR UPDATE
                 """,
@@ -466,7 +660,7 @@ class BookingRepository:
                 SET status = 'CANCELLED'
                 WHERE appointment_id = %s
                   AND admin_id = %s
-                  AND status = 'BOOKED'
+                  AND status IN ('BOOKED', 'PENDING', 'CONFIRMED')
                 """,
                 (appointment_id, actual_admin_id),
             )
@@ -498,6 +692,7 @@ class BookingRepository:
         appointment_id: int,
         new_date: str,
         new_time: str,
+        new_clinic_id: Optional[int] = None,
         admin_id: Optional[int] = None,
     ) -> BookingResult:
         if not appointment_id or not new_date or not new_time:
@@ -515,11 +710,11 @@ class BookingRepository:
             if self._use_appointment_mode():
                 cur.execute(
                     f"""
-                    SELECT appointment_id, clinic_id, doctor_id
+                    SELECT appointment_id, clinic_id, doctor_id, patient_id
                     FROM {appointment_table}
                     WHERE appointment_id = %s
                       AND admin_id = %s
-                      AND status = 'BOOKED'
+                      AND status IN ('BOOKED', 'PENDING', 'CONFIRMED')
                     LIMIT 1
                     FOR UPDATE
                     """,
@@ -532,6 +727,9 @@ class BookingRepository:
 
                 clinic_id = int(current["clinic_id"])
                 doctor_id = int(current["doctor_id"])
+                patient_id = int(current["patient_id"])
+                target_clinic_id = int(new_clinic_id) if new_clinic_id is not None else clinic_id
+                target_doctor_id = doctor_id
                 start_time = datetime.strptime(new_time, "%H:%M").time()
                 cur.execute(
                     f"""
@@ -545,7 +743,7 @@ class BookingRepository:
                       AND appointment_id <> %s
                     LIMIT 1
                     """,
-                    (doctor_id, clinic_id, new_date, start_time, appointment_id),
+                    (target_doctor_id, target_clinic_id, new_date, start_time, appointment_id),
                 )
                 if cur.fetchone():
                     conn.rollback()
@@ -562,25 +760,39 @@ class BookingRepository:
                       AND day_of_week = WEEKDAY(%s)
                     ORDER BY schedule_id
                     """,
-                    (doctor_id, clinic_id, new_date, new_date, new_date),
+                    (target_doctor_id, target_clinic_id, new_date, new_date, new_date),
                 )
                 schedules = cur.fetchall()
                 valid = False
                 end_time = start_time
+                requested_slot_number: Optional[int] = None
+                normalized_schedules: list[tuple[time, time, int]] = []
                 for sch in schedules:
                     s = self._parse_time_value(sch.get("start_time"))
                     e = self._parse_time_value(sch.get("end_time"))
                     d = int(sch.get("slot_duration") or 0)
                     if not s or not e or d <= 0:
                         continue
+                    normalized_schedules.append((s, e, d))
+                normalized_schedules.sort(key=lambda item: item[0])
+                cumulative_slots = 0
+                for s, e, d in normalized_schedules:
                     start_dt = datetime.combine(date.today(), s)
                     end_dt = datetime.combine(date.today(), e)
                     req_dt = datetime.combine(date.today(), start_time)
-                    if req_dt < start_dt or req_dt >= end_dt:
+                    total_minutes = int((end_dt - start_dt).total_seconds() // 60)
+                    if total_minutes <= 0:
                         continue
-                    if int((req_dt - start_dt).total_seconds() // 60) % d != 0:
+                    slots_in_schedule = total_minutes // d
+                    if req_dt < start_dt or req_dt >= end_dt:
+                        cumulative_slots += slots_in_schedule
+                        continue
+                    diff_minutes = int((req_dt - start_dt).total_seconds() // 60)
+                    if diff_minutes % d != 0:
+                        cumulative_slots += slots_in_schedule
                         continue
                     end_time = (req_dt + timedelta(minutes=d)).time()
+                    requested_slot_number = cumulative_slots + (diff_minutes // d) + 1
                     valid = True
                     break
                 if not valid:
@@ -592,14 +804,39 @@ class BookingRepository:
                     UPDATE {appointment_table}
                     SET appointment_date = %s,
                         start_time = %s,
-                        end_time = %s
+                        end_time = %s,
+                        clinic_id = %s,
+                        doctor_id = %s
                     WHERE appointment_id = %s
                       AND admin_id = %s
                     """,
-                    (new_date, start_time, end_time, appointment_id, actual_admin_id),
+                    (new_date, start_time, end_time, target_clinic_id, target_doctor_id, appointment_id, actual_admin_id),
                 )
+                cur.execute(
+                    """
+                    SELECT COLUMN_NAME
+                    FROM INFORMATION_SCHEMA.COLUMNS
+                    WHERE TABLE_SCHEMA = DATABASE()
+                      AND TABLE_NAME = 'patients'
+                      AND COLUMN_NAME = 'booking_id'
+                    """
+                )
+                if cur.fetchone() and requested_slot_number is not None:
+                    cur.execute(
+                        """
+                        UPDATE patients
+                        SET booking_id = %s
+                        WHERE patient_id = %s
+                        """,
+                        (requested_slot_number, patient_id),
+                    )
                 conn.commit()
-                return BookingResult(True, "Appointment rescheduled.", appointment_id=appointment_id)
+                return BookingResult(
+                    True,
+                    "Appointment rescheduled.",
+                    appointment_id=appointment_id,
+                    queue_number=requested_slot_number if requested_slot_number is not None else self.get_daily_queue_number(appointment_id),
+                )
 
             cur.execute(
                 f"""
@@ -607,7 +844,7 @@ class BookingRepository:
                 FROM {appointment_table}
                 WHERE appointment_id = %s
                   AND admin_id = %s
-                  AND status = 'BOOKED'
+                  AND status IN ('BOOKED', 'PENDING', 'CONFIRMED')
                 LIMIT 1
                 FOR UPDATE
                 """,
@@ -621,6 +858,8 @@ class BookingRepository:
             current_slot_id = int(current["slot_id"])
             clinic_id = int(current["clinic_id"])
             doctor_id = int(current["doctor_id"])
+            target_clinic_id = int(new_clinic_id) if new_clinic_id is not None else clinic_id
+            target_doctor_id = doctor_id
 
             cur.execute(
                 """
@@ -640,7 +879,7 @@ class BookingRepository:
                 LIMIT 1
                 FOR UPDATE
                 """,
-                (clinic_id, doctor_id, actual_admin_id, new_date, new_time),
+                (target_clinic_id, target_doctor_id, actual_admin_id, new_date, new_time),
             )
             target = cur.fetchone()
             if not target:
@@ -665,7 +904,12 @@ class BookingRepository:
                 (new_slot_id, new_doctor_id, new_clinic_id, appointment_id, actual_admin_id),
             )
             conn.commit()
-            return BookingResult(True, "Appointment rescheduled.", appointment_id=appointment_id)
+            return BookingResult(
+                True,
+                "Appointment rescheduled.",
+                appointment_id=appointment_id,
+                queue_number=self.get_daily_queue_number(appointment_id),
+            )
         except Exception as exc:
             conn.rollback()
             return BookingResult(False, f"Reschedule transaction failed: {exc}")
@@ -724,6 +968,16 @@ class BookingRepository:
                 patient_values["admin_id"] = actual_admin_id
             if "phone" in patient_columns:
                 patient_values["phone"] = context.phone_number
+            chat_user_id_value = self._normalize_chat_user_id(
+                str(getattr(context, "chat_user_id", "") or "")
+            )
+            chat_column: Optional[str] = None
+            for candidate in ("telegram_chat_id", "telegram_user_id", "user_id"):
+                if candidate in patient_columns:
+                    chat_column = candidate
+                    break
+            if chat_column and chat_user_id_value:
+                patient_values[chat_column] = chat_user_id_value
             if "age" in patient_columns:
                 patient_values["age"] = context.age
             if "gender" in patient_columns:
@@ -751,7 +1005,7 @@ class BookingRepository:
                 patient_id = int(patient_row["patient_id"])
                 update_columns = [
                     col
-                    for col in ("phone", "age", "gender", "patient_type", "reason", mode_column)
+                    for col in ("phone", "age", "gender", "patient_type", "reason", mode_column, chat_column)
                     if col and col in patient_values
                 ]
                 if update_columns:
@@ -769,7 +1023,7 @@ class BookingRepository:
             else:
                 insert_columns = [
                     col
-                    for col in ("full_name", "admin_id", "phone", "age", "gender", "patient_type", "reason", mode_column)
+                    for col in ("full_name", "admin_id", "phone", "age", "gender", "patient_type", "reason", mode_column, chat_column)
                     if col and col in patient_values
                 ]
                 if "full_name" not in insert_columns or "admin_id" not in insert_columns:
@@ -839,20 +1093,36 @@ class BookingRepository:
                 schedules = cur.fetchall()
                 matched = False
                 requested_end = requested_start
+                requested_slot_number: Optional[int] = None
+                normalized_schedules: list[tuple[time, time, int]] = []
                 for sch in schedules:
                     s = self._parse_time_value(sch.get("start_time"))
                     e = self._parse_time_value(sch.get("end_time"))
                     d = int(sch.get("slot_duration") or 0)
                     if not s or not e or d <= 0:
                         continue
+                    normalized_schedules.append((s, e, d))
+
+                # Daily slot index: cumulative across same-day schedules (sorted by start time).
+                normalized_schedules.sort(key=lambda item: item[0])
+                cumulative_slots = 0
+                for s, e, d in normalized_schedules:
                     start_dt = datetime.combine(date.today(), s)
                     end_dt = datetime.combine(date.today(), e)
                     req_dt = datetime.combine(date.today(), requested_start)
-                    if req_dt < start_dt or req_dt >= end_dt:
+                    total_minutes = int((end_dt - start_dt).total_seconds() // 60)
+                    if total_minutes <= 0:
                         continue
-                    if int((req_dt - start_dt).total_seconds() // 60) % d != 0:
+                    slots_in_schedule = total_minutes // d
+                    if req_dt < start_dt or req_dt >= end_dt:
+                        cumulative_slots += slots_in_schedule
+                        continue
+                    diff_minutes = int((req_dt - start_dt).total_seconds() // 60)
+                    if diff_minutes % d != 0:
+                        cumulative_slots += slots_in_schedule
                         continue
                     requested_end = (req_dt + timedelta(minutes=d)).time()
+                    requested_slot_number = cumulative_slots + (diff_minutes // d) + 1
                     matched = True
                     break
                 if not matched:
@@ -884,13 +1154,22 @@ class BookingRepository:
                 )
                 existing = cur.fetchone()
                 if existing:
+                    if "booking_id" in patient_columns and requested_slot_number is not None:
+                        cur.execute(
+                            """
+                            UPDATE patients
+                            SET booking_id = %s
+                            WHERE patient_id = %s
+                            """,
+                            (requested_slot_number, patient_id),
+                        )
                     conn.commit()
                     appt_id = int(existing["appointment_id"])
                     return BookingResult(
                         True,
                         "Appointment already exists.",
                         appointment_id=appt_id,
-                        queue_number=self.get_daily_queue_number(appt_id),
+                        queue_number=requested_slot_number if requested_slot_number is not None else self.get_daily_queue_number(appt_id),
                     )
 
                 # Handle unique key (doctor_id, appointment_date, start_time):
@@ -934,12 +1213,21 @@ class BookingRepository:
                                 slot_appointment_id,
                             ),
                         )
+                        if "booking_id" in patient_columns and requested_slot_number is not None:
+                            cur.execute(
+                                """
+                                UPDATE patients
+                                SET booking_id = %s
+                                WHERE patient_id = %s
+                                """,
+                                (requested_slot_number, patient_id),
+                            )
                         conn.commit()
                         return BookingResult(
                             True,
                             "Appointment persisted.",
                             appointment_id=slot_appointment_id,
-                            queue_number=self.get_daily_queue_number(slot_appointment_id),
+                            queue_number=requested_slot_number if requested_slot_number is not None else self.get_daily_queue_number(slot_appointment_id),
                         )
                     conn.rollback()
                     return BookingResult(False, "Selected slot is not available.")
@@ -961,12 +1249,21 @@ class BookingRepository:
                     ),
                 )
                 appointment_id = int(cur.lastrowid)
+                if "booking_id" in patient_columns and requested_slot_number is not None:
+                    cur.execute(
+                        """
+                        UPDATE patients
+                        SET booking_id = %s
+                        WHERE patient_id = %s
+                        """,
+                        (requested_slot_number, patient_id),
+                    )
                 conn.commit()
                 return BookingResult(
                     True,
                     "Appointment persisted.",
                     appointment_id=appointment_id,
-                    queue_number=self.get_daily_queue_number(appointment_id),
+                    queue_number=requested_slot_number if requested_slot_number is not None else self.get_daily_queue_number(appointment_id),
                 )
 
             # Idempotency guard: if same patient already has the same booked slot, return existing appointment.
@@ -1130,6 +1427,23 @@ class BookingRepository:
         try:
             horizon_minutes = max(1, int(lookahead_minutes))
             appointment_table = self._appointment_table()
+            cur.execute(
+                """
+                SELECT COLUMN_NAME
+                FROM INFORMATION_SCHEMA.COLUMNS
+                WHERE TABLE_SCHEMA = DATABASE()
+                  AND TABLE_NAME = 'doctors'
+                """
+            )
+            doctor_columns = {str(row.get("COLUMN_NAME") or "").lower() for row in cur.fetchall()}
+            whatsapp_col = "whatsapp_number" if "whatsapp_number" in doctor_columns else None
+            telegram_col = None
+            for candidate in ("telegram_chat_id", "telegram_user_id", "telegram_id", "user_id"):
+                if candidate in doctor_columns:
+                    telegram_col = candidate
+                    break
+            whatsapp_select = f"NULLIF(d.{whatsapp_col}, '')" if whatsapp_col else "NULL"
+            telegram_select = f"NULLIF(d.{telegram_col}, '')" if telegram_col else "NULL"
             if self._use_appointment_mode():
                 params: list[object] = [horizon_minutes]
                 admin_sql = ""
@@ -1140,11 +1454,15 @@ class BookingRepository:
                     f"""
                     SELECT
                         a.appointment_id,
-                        NULLIF(d.whatsapp_number, '') AS doctor_whatsapp,
+                        {whatsapp_select} AS doctor_whatsapp,
+                        {telegram_select} AS doctor_telegram_chat_id,
                         COALESCE(p.full_name, '') AS patient_name,
+                        COALESCE(p.phone, '') AS patient_contact,
                         COALESCE(c.clinic_name, '') AS clinic_name,
                         DATE_FORMAT(a.appointment_date, '%Y-%m-%d') AS slot_date,
                         TIME_FORMAT(a.start_time, '%H:%i') AS slot_time,
+                        COALESCE(a.status, '') AS status,
+                        p.booking_id AS booking_number,
                         dcs.schedule_id AS schedule_id,
                         TIME_FORMAT(
                           COALESCE(TIME(dcs.start_time), TIME(STR_TO_DATE(dcs.start_time, '%h:%i %p')), TIME(STR_TO_DATE(dcs.start_time, '%H:%i'))),
@@ -1164,7 +1482,7 @@ class BookingRepository:
                      AND dcs.day_of_week = WEEKDAY(a.appointment_date)
                      AND dcs.effective_from <= a.appointment_date
                      AND dcs.effective_to >= a.appointment_date
-                    WHERE a.status = 'BOOKED'
+                    WHERE a.status IN ('BOOKED', 'PENDING', 'CONFIRMED')
                       AND TIMESTAMP(a.appointment_date, a.start_time) >= NOW()
                       AND TIMESTAMP(a.appointment_date, a.start_time) <= DATE_ADD(NOW(), INTERVAL %s MINUTE)
                       {admin_sql}
@@ -1176,7 +1494,8 @@ class BookingRepository:
                 results: list[DoctorReminder] = []
                 for row in rows:
                     doctor_whatsapp = str(row.get("doctor_whatsapp") or "").strip()
-                    if not doctor_whatsapp:
+                    doctor_telegram_chat_id = str(row.get("doctor_telegram_chat_id") or "").strip()
+                    if not doctor_whatsapp and not doctor_telegram_chat_id:
                         continue
                     schedule_id = int(row.get("schedule_id") or 0)
                     if schedule_id <= 0:
@@ -1185,10 +1504,14 @@ class BookingRepository:
                         DoctorReminder(
                             appointment_id=int(row["appointment_id"]),
                             doctor_whatsapp=doctor_whatsapp,
+                            doctor_telegram_chat_id=doctor_telegram_chat_id,
                             patient_name=str(row.get("patient_name") or ""),
+                            patient_contact=str(row.get("patient_contact") or ""),
                             clinic_name=str(row.get("clinic_name") or ""),
                             slot_date=str(row.get("slot_date") or ""),
                             slot_time=str(row.get("slot_time") or ""),
+                            status=str(row.get("status") or ""),
+                            booking_number=int(row["booking_number"]) if row.get("booking_number") is not None else None,
                             schedule_id=schedule_id,
                             schedule_start_time=str(row.get("schedule_start_time") or ""),
                             schedule_end_time=str(row.get("schedule_end_time") or ""),
@@ -1205,11 +1528,15 @@ class BookingRepository:
                 f"""
                 SELECT
                     a.appointment_id,
-                    NULLIF(d.whatsapp_number, '') AS doctor_whatsapp,
+                    {whatsapp_select} AS doctor_whatsapp,
+                    {telegram_select} AS doctor_telegram_chat_id,
                     COALESCE(p.full_name, '') AS patient_name,
+                    COALESCE(p.phone, '') AS patient_contact,
                     COALESCE(c.clinic_name, '') AS clinic_name,
                     DATE_FORMAT(s.slot_date, '%Y-%m-%d') AS slot_date,
                     TIME_FORMAT(s.slot_time, '%H:%i') AS slot_time,
+                    COALESCE(a.status, '') AS status,
+                    p.booking_id AS booking_number,
                     s.schedule_id AS schedule_id,
                     TIME_FORMAT(dcs.start_time, '%H:%i') AS schedule_start_time,
                     TIME_FORMAT(dcs.end_time, '%H:%i') AS schedule_end_time
@@ -1219,7 +1546,7 @@ class BookingRepository:
                 LEFT JOIN doctors d ON d.doctor_id = a.doctor_id
                 LEFT JOIN clinics c ON c.clinic_id = a.clinic_id
                 LEFT JOIN patients p ON p.patient_id = a.patient_id
-                WHERE a.status = 'BOOKED'
+                WHERE a.status IN ('BOOKED', 'PENDING', 'CONFIRMED')
                   AND s.slot_status = 'BOOKED'
                   AND s.schedule_id IS NOT NULL
                   AND TIMESTAMP(s.slot_date, s.slot_time) >= NOW()
@@ -1233,7 +1560,8 @@ class BookingRepository:
             results: list[DoctorReminder] = []
             for row in rows:
                 doctor_whatsapp = str(row.get("doctor_whatsapp") or "").strip()
-                if not doctor_whatsapp:
+                doctor_telegram_chat_id = str(row.get("doctor_telegram_chat_id") or "").strip()
+                if not doctor_whatsapp and not doctor_telegram_chat_id:
                     continue
                 schedule_id = int(row.get("schedule_id") or 0)
                 if schedule_id <= 0:
@@ -1242,10 +1570,14 @@ class BookingRepository:
                     DoctorReminder(
                         appointment_id=int(row["appointment_id"]),
                         doctor_whatsapp=doctor_whatsapp,
+                        doctor_telegram_chat_id=doctor_telegram_chat_id,
                         patient_name=str(row.get("patient_name") or ""),
+                        patient_contact=str(row.get("patient_contact") or ""),
                         clinic_name=str(row.get("clinic_name") or ""),
                         slot_date=str(row.get("slot_date") or ""),
                         slot_time=str(row.get("slot_time") or ""),
+                        status=str(row.get("status") or ""),
+                        booking_number=int(row["booking_number"]) if row.get("booking_number") is not None else None,
                         schedule_id=schedule_id,
                         schedule_start_time=str(row.get("schedule_start_time") or ""),
                         schedule_end_time=str(row.get("schedule_end_time") or ""),
