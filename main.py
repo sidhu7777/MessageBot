@@ -92,7 +92,7 @@ automation_scheduler = AutomationScheduler(
     ),
     source_whatsapp_number=settings.twilio_whatsapp_from,
     enabled=settings.automation_enabled,
-    slot_automation_enabled=settings.slot_automation_enabled,
+    slot_automation_enabled=False,
     slot_generation_interval_seconds=settings.slot_generation_interval_seconds,
     slot_generation_days_ahead=settings.slot_generation_days_ahead,
     doctor_reminder_enabled=settings.doctor_reminder_enabled,
@@ -117,6 +117,11 @@ app.include_router(
 @app.on_event("startup")
 async def startup_validation() -> None:
     global _telegram_bot_username_runtime
+    if settings.enable_db_booking and booking_repository:
+        try:
+            booking_repository.ensure_notification_schema()
+        except Exception as exc:
+            LOGGER.warning("Notification schema ensure failed: %s", exc)
     turn_processor.start()
     automation_scheduler.start()
     resolved_username = _resolve_telegram_bot_username()
@@ -180,9 +185,6 @@ async def health_queue() -> dict:
             "queue_overflow_requeue_attempts": settings.queue_overflow_requeue_attempts,
             "queue_overflow_requeue_backoff_seconds": settings.queue_overflow_requeue_backoff_seconds,
             "automation_enabled": settings.automation_enabled,
-            "slot_automation_enabled": settings.slot_automation_enabled,
-            "slot_generation_interval_seconds": settings.slot_generation_interval_seconds,
-            "slot_generation_days_ahead": settings.slot_generation_days_ahead,
             "doctor_reminder_enabled": settings.doctor_reminder_enabled,
             "doctor_reminder_interval_seconds": settings.doctor_reminder_interval_seconds,
             "doctor_reminder_lead_minutes": settings.doctor_reminder_lead_minutes,

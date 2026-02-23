@@ -287,3 +287,29 @@ def llm_detect_language(
         return None
     except Exception:
         return None
+
+
+def llm_detect_abuse(
+    llm_client: LLMClient,
+    enable_llm_polish: bool,
+    text: str,
+) -> bool:
+    if not enable_llm_polish:
+        return False
+    try:
+        system = (
+            "Classify if the user text contains abusive, insulting, or offensive language. "
+            "Return strict JSON only: {\"label\":\"ABUSE|NONE\",\"confidence\":0.0}."
+        )
+        raw = llm_client.generate(system, f"Text: {text}").strip()
+        parsed = parse_first_json_object(raw)
+        if not parsed:
+            return False
+        label = str(parsed.get("label", "")).upper()
+        try:
+            confidence = float(parsed.get("confidence", 0))
+        except (TypeError, ValueError):
+            confidence = 0.0
+        return label == "ABUSE" and confidence >= 0.70
+    except Exception:
+        return False

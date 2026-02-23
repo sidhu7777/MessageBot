@@ -90,7 +90,7 @@ class SchedulingRepository:
                   AND dcs.clinic_id = %s
                   AND dcs.effective_from <= %s
                   AND dcs.effective_to >= %s
-                  AND dcs.day_of_week = WEEKDAY(%s)
+                  AND dcs.day_of_week = MOD(WEEKDAY(%s) + 1, 7)
                   {admin_sql}
                 ORDER BY dcs.schedule_id
                 """,

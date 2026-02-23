@@ -1,4 +1,5 @@
 import logging
+import re
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
 from typing import Optional
@@ -7,6 +8,7 @@ from src.db_store import BookingRepository, SchedulingRepository
 from src.llm.client import LLMClient
 from src.llm.tasks import (
     llm_change_target,
+    llm_detect_abuse,
     llm_detect_confirm_intent,
     llm_extract,
 )
@@ -34,6 +36,33 @@ from src.nlu.language_detector import update_response_language
 
 
 LOGGER = logging.getLogger(__name__)
+
+ABUSE_TERMS_EN = {
+    "fuck",
+    "shit",
+    "bitch",
+    "asshole",
+    "bastard",
+    "idiot",
+}
+
+ABUSE_TERMS_HINGLISH = {
+    "madarchod",
+    "bhenchod",
+    "chutiya",
+    "harami",
+    "gandu",
+    "bakchod",
+}
+
+ABUSE_TERMS_HI = {
+    "मादरचोद",
+    "बहनचोद",
+    "चूतिया",
+    "हरामी",
+    "गांडू",
+    "भोसड़ी",
+}
 
 @dataclass
 class AppointmentContext:
@@ -90,6 +119,7 @@ class AppointmentFSM:
     in_reschedule_flow: bool = False
     active_booking_options_cache: list[dict] = field(default_factory=list)
     pending_existing_action: Optional[str] = None
+    known_patient_name: Optional[str] = None
 
     def handle(self, user_text: str) -> str:
         text = (user_text or "").strip()
@@ -97,6 +127,9 @@ class AppointmentFSM:
 
         if not text:
             return self._respond(self._msg("empty_input"))
+
+        if self._is_abusive_message(text, lower):
+            return self._respond(self._msg("abusive_language"), allow_polish=False)
 
         if is_end_intent(lower):
             self._reset_all(cancelled=True)
@@ -205,6 +238,41 @@ class AppointmentFSM:
             choice = lower.strip()
             if choice in {"1", "a", "self", "myself"}:
                 self.booking_for_self = True
+                if self.known_patient_name:
+                    self.context.patient_name = self.known_patient_name
+                    self._ensure_actor_defaults()
+                    chat_phone = self._normalize_phone(self.chat_phone_number or "")
+                    if chat_phone and not self._is_telegram_channel():
+                        self.context.phone_number = chat_phone
+                        auto = self._auto_select_single_clinic_after_phone()
+                        if auto:
+                            return self._respond(
+                                self._msg("booking_for_self_ack")
+                                + "\n"
+                                + self._msg("name_ack", name=self.known_patient_name)
+                                + "\n"
+                                + self._msg("phone_ack", phone_number=chat_phone)
+                                + "\n"
+                                + self._with_back(auto)
+                            )
+                        self.state = "ASK_CLINIC"
+                        return self._respond(
+                            self._msg("booking_for_self_ack")
+                            + "\n"
+                            + self._msg("name_ack", name=self.known_patient_name)
+                            + "\n"
+                            + self._msg("phone_ack", phone_number=chat_phone)
+                            + "\n"
+                            + self._clinic_prompt()
+                        )
+                    self.state = "ASK_CLINIC"
+                    return self._respond(
+                        self._msg("booking_for_self_ack")
+                        + "\n"
+                        + self._msg("name_ack", name=self.known_patient_name)
+                        + "\n"
+                        + self._clinic_prompt()
+                    )
                 self.state = "ASK_NAME"
                 return self._respond(self._msg("booking_for_self_ack") + "\n" + self._with_back(self._msg("ask_name")))
             if choice in {"2", "b", "another", "another person", "other"}:
@@ -552,6 +620,9 @@ class AppointmentFSM:
             if self.scheduling_repository and self.doctor_id:
                 if not self.clinic_options_cache:
                     self.clinic_options_cache = self._db_clinic_options()
+                if not self.clinic_options_cache:
+                    self.state = "INIT"
+                    return self._respond(self._msg("no_clinic_available_restart"))
                 if normalized.isdigit():
                     idx = int(normalized)
                     if idx == len(self.clinic_options_cache) + 1:
@@ -941,6 +1012,7 @@ class AppointmentFSM:
         self.state = "CANCELLED" if cancelled else "INIT"
         self.init_unclear_count = 0
         self.in_edit_flow = False
+        self.known_patient_name = None
         self.clinic_options_cache = []
         self.date_options_cache = []
         self.time_options_cache = []
@@ -1016,6 +1088,7 @@ class AppointmentFSM:
         self._ensure_actor_defaults()
         doctor_name = "Doctor"
         patient_name: Optional[str] = None
+        self.known_patient_name = None
         if self.booking_repository:
             try:
                 doctor_from_db = self.booking_repository.get_doctor_display_name(
@@ -1045,12 +1118,31 @@ class AppointmentFSM:
             except Exception:
                 patient_name = None
         if patient_name:
+            self.known_patient_name = patient_name
             return self._msg(
                 "welcome_known_patient",
                 doctor_name=doctor_name,
                 patient_name=patient_name,
             )
         return self._msg("welcome_new_patient", doctor_name=doctor_name)
+
+    def _is_abusive_message(self, text: str, lower: str) -> bool:
+        normalized_latin = re.sub(r"[^a-z0-9]+", " ", lower).strip()
+        padded = f" {normalized_latin} "
+        for term in ABUSE_TERMS_EN:
+            if f" {term} " in padded:
+                return True
+        for term in ABUSE_TERMS_HINGLISH:
+            if f" {term} " in padded:
+                return True
+        for term in ABUSE_TERMS_HI:
+            if term in text:
+                return True
+        return llm_detect_abuse(
+            llm_client=self.llm_client,
+            enable_llm_polish=self.enable_llm_polish,
+            text=text,
+        )
 
     def _existing_booking_entry_response(self) -> Optional[str]:
         if not self.booking_repository:
@@ -1061,9 +1153,12 @@ class AppointmentFSM:
             return None
         self._set_existing_booking_from_row(rows[0])
         self.state = "ASK_EXISTING_BOOKING_ACTION"
+        display_number = rows[0].get("booking_number")
+        if display_number is None:
+            display_number = rows[0]["appointment_id"]
         return self._msg(
             "existing_booking_found",
-            appointment_id=rows[0]["appointment_id"],
+            appointment_id=display_number,
             appointment_date=rows[0].get("slot_date") or "-",
             appointment_time=self._format_time_for_display(rows[0].get("slot_time") or "-"),
             clinic_name=rows[0].get("clinic_name") or "-",
@@ -1117,9 +1212,12 @@ class AppointmentFSM:
             return self._msg("existing_booking_choice_again")
         lines = [self._msg("existing_booking_pick_header")]
         for idx, row in enumerate(self.active_booking_options_cache, start=1):
+            display_number = row.get("booking_number")
+            if display_number is None:
+                display_number = row.get("appointment_id")
             lines.append(
                 f"{idx}. {row.get('clinic_name') or '-'} | {row.get('slot_date') or '-'} | "
-                f"{self._format_time_for_display(str(row.get('slot_time') or '-'))} | Ref: {row.get('appointment_id')}"
+                f"{self._format_time_for_display(str(row.get('slot_time') or '-'))} | Booking Number: {display_number}"
             )
         lines.append(f"{len(self.active_booking_options_cache) + 1}. Go back")
         lines.append(self._reply_with_prompt(len(self.active_booking_options_cache) + 1))
@@ -1554,8 +1652,10 @@ class AppointmentFSM:
                 lines.append(f"{option_count}. Go back")
                 lines.append(self._reply_with_prompt(option_count))
                 return "\n".join(lines)
-            return self._msg("no_clinic_available")
-        return self._msg("no_clinic_available")
+            self.state = "INIT"
+            return self._msg("no_clinic_available_restart")
+        self.state = "INIT"
+        return self._msg("no_clinic_available_restart")
 
     def _auto_select_single_clinic_after_phone(self) -> Optional[str]:
         self._ensure_actor_defaults()

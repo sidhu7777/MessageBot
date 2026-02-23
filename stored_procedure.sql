@@ -30,7 +30,7 @@ BEGIN
     WHILE v_date <= v_end_date DO
 
         -- Check weekday match
-        IF WEEKDAY(v_date) = v_day_of_week THEN
+        IF MOD(WEEKDAY(v_date) + 1, 7) = v_day_of_week THEN
 
             SET @v_time = v_start_time;
 

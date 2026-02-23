@@ -14,6 +14,7 @@
             "You can continue with booking now by saying 'book appointment'."
         ),
         "empty_input": "Please send a message so I can assist you.",
+        "abusive_language": "I can help only with appointment tasks. Please use respectful language.",
         "no_intent": (
             "To begin, please say 'I need to book an appointment'."
         ),
@@ -39,7 +40,7 @@
         "go_back_hint": "0. Go back",
         "existing_booking_found": (
             "You already have a booked appointment:\n"
-            "Reference ID: {appointment_id}\n"
+            "Booking Number: {appointment_id}\n"
             "Clinic: {clinic_name}\n"
             "Date: {appointment_date}\n"
             "Time: {appointment_time}\n"
@@ -122,6 +123,7 @@
         "ask_clinic_header": "Please choose clinic:",
         "invalid_clinic": "Please reply with a valid option number, or type clinic name.",
         "no_clinic_available": "No clinics are available for booking right now. Please try again later.",
+        "no_clinic_available_restart": "No clinics are available right now. Please try later. Send 'book appointment' to restart.",
         "clinic_ack": "Clinic noted: {clinic_name}, {clinic_address}.",
         "ask_reason": (
             "Select reason (you can choose multiple like 1,3):\n"
@@ -196,12 +198,11 @@
             "Clinic: {clinic_name}\n"
             "Clinic address: {clinic_address}\n"
             "Date: {appointment_date}\n"
-            "Time: {appointment_time}\n"
-            "Send 'new appointment' for another booking."
+            "Time: {appointment_time}"
         ),
         "reply_with_numbers": "Reply with {numbers}.",
         "not_confirmed": "No problem. Restarting booking flow. Please share the patient full name.",
-        "completed_hint": "This appointment flow is complete. Send 'new appointment' to start another.",
+        "completed_hint": "This appointment flow is complete. Send 'book appointment' to start another.",
         "db_save_ok": "Appointment booked successfully.\n*Booking Number:* {appointment_id}",
         "db_save_failed": "Booking confirmation received, but database save is pending manual follow-up.",
         "ended": "Understood. I have ended the process. Send 'book appointment' whenever you want to start again.",
@@ -222,6 +223,7 @@
             "à¤¬à¥à¤•à¤¿à¤‚à¤— à¤œà¤¾à¤°à¥€ à¤°à¤–à¤¨à¥‡ à¤•à¥‡ à¤²à¤¿à¤ 'book appointment' à¤­à¥‡à¤œà¥‡à¤‚à¥¤"
         ),
         "empty_input": "à¤•à¥ƒà¤ªà¤¯à¤¾ à¤¸à¤‚à¤¦à¥‡à¤¶ à¤­à¥‡à¤œà¥‡à¤‚ à¤¤à¤¾à¤•à¤¿ à¤®à¥ˆà¤‚ à¤†à¤ªà¤•à¥€ à¤®à¤¦à¤¦ à¤•à¤° à¤¸à¤•à¥‚à¤à¥¤",
+        "abusive_language": "à¤®à¥ˆà¤‚ à¤•à¥‡à¤µà¤² à¤…à¤ªà¥‰à¤‡à¤‚à¤Ÿà¤®à¥‡à¤‚à¤Ÿ à¤¸à¤‚à¤¬à¤‚à¤§à¤¿à¤¤ à¤®à¤¦à¤¦ à¤•à¤° à¤¸à¤•à¤¤à¤¾ à¤¹à¥‚à¤à¥¤ à¤•à¥ƒà¤ªà¤¯à¤¾ à¤¸à¤®à¥à¤®à¤¾à¤¨à¤œà¤¨à¤• à¤­à¤¾à¤·à¤¾ à¤•à¤¾ à¤ªà¥à¤°à¤¯à¥‹à¤— à¤•à¤°à¥‡à¤‚à¥¤",
         "no_intent": (
             "à¤¶à¥à¤°à¥‚ à¤•à¤°à¤¨à¥‡ à¤•à¥‡ à¤²à¤¿à¤ à¤•à¥ƒà¤ªà¤¯à¤¾ à¤²à¤¿à¤–à¥‡à¤‚: 'I need to book an appointment'."
         ),
@@ -238,7 +240,7 @@
         "ask_name": "à¤•à¥ƒà¤ªà¤¯à¤¾ à¤®à¤°à¥€à¤œ à¤•à¤¾ à¤ªà¥‚à¤°à¤¾ à¤¨à¤¾à¤® à¤¬à¤¤à¤¾à¤à¤‚à¥¤",
         "existing_booking_found": (
             "à¤†à¤ªà¤•à¥€ à¤à¤• à¤…à¤ªà¥‰à¤‡à¤‚à¤Ÿà¤®à¥‡à¤‚à¤Ÿ à¤ªà¤¹à¤²à¥‡ à¤¸à¥‡ à¤¬à¥à¤• à¤¹à¥ˆ:\n"
-            "à¤°à¥‡à¤«à¤°à¥‡à¤‚à¤¸ à¤†à¤ˆà¤¡à¥€: {appointment_id}\n"
+            "Booking Number: {appointment_id}\n"
             "à¤•à¥à¤²à¤¿à¤¨à¤¿à¤•: {clinic_name}\n"
             "à¤¤à¤¾à¤°à¥€à¤–: {appointment_date}\n"
             "à¤¸à¤®à¤¯: {appointment_time}\n"
@@ -298,6 +300,7 @@
         "ask_clinic_header": "à¤•à¥ƒà¤ªà¤¯à¤¾ à¤•à¥à¤²à¤¿à¤¨à¤¿à¤• à¤šà¥à¤¨à¥‡à¤‚:",
         "invalid_clinic": "à¤•à¥ƒà¤ªà¤¯à¤¾ à¤•à¥à¤²à¤¿à¤¨à¤¿à¤• 1, 2 à¤¯à¤¾ 3 à¤šà¥à¤¨à¥‡à¤‚à¥¤",
         "no_clinic_available": "à¤«à¤¿à¤²à¤¹à¤¾à¤² à¤¬à¥à¤•à¤¿à¤‚à¤— à¤•à¥‡ à¤²à¤¿à¤ à¤•à¥‹à¤ˆ à¤•à¥à¤²à¤¿à¤¨à¤¿à¤• à¤‰à¤ªà¤²à¤¬à¥à¤§ à¤¨à¤¹à¥€à¤‚ à¤¹à¥ˆà¥¤ à¤•à¥ƒà¤ªà¤¯à¤¾ à¤¬à¤¾à¤¦ à¤®à¥‡à¤‚ à¤«à¤¿à¤° à¤•à¥‹à¤¶à¤¿à¤¶ à¤•à¤°à¥‡à¤‚à¥¤",
+        "no_clinic_available_restart": "Abhi koi clinic available nahi hai. Kripya baad mein try karein. Restart ke liye 'book appointment' bhejein.",
         "clinic_ack": "à¤•à¥à¤²à¤¿à¤¨à¤¿à¤• à¤¨à¥‹à¤Ÿ à¤•à¤¿à¤¯à¤¾ à¤—à¤¯à¤¾: {clinic_name}, {clinic_address}à¥¤",
         "ask_reason": (
             "à¤•à¤¾à¤°à¤£ à¤šà¥à¤¨à¥‡à¤‚ (à¤à¤• à¤¸à¥‡ à¤…à¤§à¤¿à¤• à¤šà¥à¤¨ à¤¸à¤•à¤¤à¥‡ à¤¹à¥ˆà¤‚, à¤œà¥ˆà¤¸à¥‡ 1,3):\n"
@@ -380,11 +383,10 @@
             "à¤•à¥à¤²à¤¿à¤¨à¤¿à¤• à¤ªà¤¤à¤¾: {clinic_address}\n"
             "à¤•à¤¾à¤°à¤£: {reason}\n"
             "à¤¤à¤¾à¤°à¥€à¤–: {appointment_date}\n"
-            "à¤¸à¤®à¤¯: {appointment_time}\n"
-            "à¤¨à¤ˆ à¤¬à¥à¤•à¤¿à¤‚à¤— à¤•à¥‡ à¤²à¤¿à¤ 'new appointment' à¤­à¥‡à¤œà¥‡à¤‚à¥¤"
+            "à¤¸à¤®à¤¯: {appointment_time}"
         ),
         "not_confirmed": "à¤•à¥‹à¤ˆ à¤¬à¤¾à¤¤ à¤¨à¤¹à¥€à¤‚à¥¤ à¤ªà¥à¤°à¤•à¥à¤°à¤¿à¤¯à¤¾ à¤¦à¥‹à¤¬à¤¾à¤°à¤¾ à¤¶à¥à¤°à¥‚ à¤•à¤° à¤°à¤¹à¤¾ à¤¹à¥‚à¤à¥¤ à¤•à¥ƒà¤ªà¤¯à¤¾ à¤®à¤°à¥€à¤œ à¤•à¤¾ à¤ªà¥‚à¤°à¤¾ à¤¨à¤¾à¤® à¤¬à¤¤à¤¾à¤à¤‚à¥¤",
-        "completed_hint": "à¤¯à¤¹ à¤¬à¥à¤•à¤¿à¤‚à¤— à¤ªà¥‚à¤°à¥€ à¤¹à¥‹ à¤šà¥à¤•à¥€ à¤¹à¥ˆà¥¤ à¤¨à¤ˆ à¤¬à¥à¤•à¤¿à¤‚à¤— à¤•à¥‡ à¤²à¤¿à¤ 'new appointment' à¤­à¥‡à¤œà¥‡à¤‚à¥¤",
+        "completed_hint": "à¤¯à¤¹ à¤¬à¥à¤•à¤¿à¤‚à¤— à¤ªà¥‚à¤°à¥€ à¤¹à¥‹ à¤šà¥à¤•à¥€ à¤¹à¥ˆà¥¤ à¤¨à¤ˆ à¤¬à¥à¤•à¤¿à¤‚à¤— à¤•à¥‡ à¤²à¤¿à¤ 'book appointment' à¤­à¥‡à¤œà¥‡à¤‚à¥¤",
         "db_save_ok": "à¤…à¤ªà¥‰à¤‡à¤‚à¤Ÿà¤®à¥‡à¤‚à¤Ÿ à¤¸à¤«à¤²à¤¤à¤¾à¤ªà¥‚à¤°à¥à¤µà¤• à¤¬à¥à¤• à¤¹à¥‹ à¤—à¤ˆà¥¤\n*à¤¬à¥à¤•à¤¿à¤‚à¤— à¤¨à¤‚à¤¬à¤°:* {appointment_id}",
         "db_save_failed": "à¤¬à¥à¤•à¤¿à¤‚à¤— à¤•à¤¨à¥à¤«à¤°à¥à¤® à¤¹à¥à¤ˆ, à¤²à¥‡à¤•à¤¿à¤¨ à¤¡à¥‡à¤Ÿà¤¾à¤¬à¥‡à¤¸ à¤¸à¥‡à¤µ à¤²à¤‚à¤¬à¤¿à¤¤ à¤¹à¥ˆà¥¤ à¤®à¥ˆà¤¨à¥à¤…à¤² à¤«à¥‰à¤²à¥‹-à¤…à¤ª à¤†à¤µà¤¶à¥à¤¯à¤• à¤¹à¥ˆà¥¤",
         "ended": "à¤ à¥€à¤• à¤¹à¥ˆ, à¤ªà¥à¤°à¤•à¥à¤°à¤¿à¤¯à¤¾ à¤¸à¤®à¤¾à¤ªà¥à¤¤ à¤•à¤° à¤¦à¥€ à¤—à¤ˆ à¤¹à¥ˆà¥¤ à¤¦à¥‹à¤¬à¤¾à¤°à¤¾ à¤¶à¥à¤°à¥‚ à¤•à¤°à¤¨à¥‡ à¤•à¥‡ à¤²à¤¿à¤ 'book appointment' à¤­à¥‡à¤œà¥‡à¤‚à¥¤",
@@ -416,6 +418,7 @@
             "Booking continue karne ke liye 'book appointment' bhejiye."
         ),
         "empty_input": "Please message bhejiye taaki main help kar sakoon.",
+        "abusive_language": "Main sirf appointment related help kar sakta hoon. Please respectful language use kariye.",
         "no_intent": "Start karne ke liye please likhiye: 'I need to book an appointment'.",
         "clarify_intent": (
             "Please ek option choose kariye:\n"
@@ -430,7 +433,7 @@
         "ask_name": "Please patient ka full name share kariye.",
         "existing_booking_found": (
             "Aapka ek booked appointment already hai:\n"
-            "Reference ID: {appointment_id}\n"
+            "Booking Number: {appointment_id}\n"
             "Clinic: {clinic_name}\n"
             "Date: {appointment_date}\n"
             "Time: {appointment_time}\n"
@@ -502,6 +505,7 @@
         "ask_clinic_header": "Please clinic choose kariye:",
         "invalid_clinic": "Please clinic 1, 2, ya 3 choose kariye.",
         "no_clinic_available": "Abhi booking ke liye koi clinic available nahi hai. Please thodi der baad try kariye.",
+        "no_clinic_available_restart": "Abhi koi clinic available nahi hai. Please baad mein try kariye. Restart ke liye 'book appointment' bhejiye.",
         "clinic_ack": "Clinic noted: {clinic_name}, {clinic_address}.",
         "ask_reason": (
             "Reason select kariye (multiple possible, e.g. 1,3):\n"
@@ -569,11 +573,10 @@
             "Clinic: {clinic_name}\n"
             "Clinic address: {clinic_address}\n"
             "Date: {appointment_date}\n"
-            "Time: {appointment_time}\n"
-            "Nayi booking ke liye 'new appointment' bhejiye."
+            "Time: {appointment_time}"
         ),
         "not_confirmed": "No problem. Booking flow restart kar raha hoon. Please patient ka full name share kariye.",
-        "completed_hint": "Yeh appointment flow complete ho chuka hai. Nayi booking ke liye 'new appointment' bhejiye.",
+        "completed_hint": "Yeh appointment flow complete ho chuka hai. Nayi booking ke liye 'book appointment' bhejiye.",
         "db_save_ok": "Appointment successfully book ho gaya.\n*Booking Number:* {appointment_id}",
         "db_save_failed": "Booking confirm ho gayi, lekin database save pending hai. Manual follow-up zaroori hai.",
         "ended": "Theek hai, process end kar diya gaya hai. Dobara start karne ke liye 'book appointment' bhejiye.",

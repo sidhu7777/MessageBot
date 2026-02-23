@@ -121,6 +121,9 @@ class AutomationScheduler:
             "reminder_errors": 0,
             "reminder_sent": 0,
             "reminder_skipped": 0,
+            "event_runs": 0,
+            "event_sent": 0,
+            "event_failed": 0,
         }
         self._reminder_keys = _PersistentKeyStore(
             path=os.path.join("data", "doctor_reminder_keys.jsonl"),
@@ -283,18 +286,19 @@ class AutomationScheduler:
         sent = 0
         skipped = 0
         now = datetime.now()
-        grouped: dict[tuple[str, str, int, str, str], list] = {}
+        grouped: dict[tuple[str, int, str, str], list] = {}
+        group_destinations: dict[tuple[str, int, str, str], set[str]] = {}
         for row in due_rows:
             wa_number = self._normalize_whatsapp_number(row.doctor_whatsapp)
             tg_chat_id = self._normalize_telegram_chat_id(row.doctor_telegram_chat_id)
+            destinations: list[str] = []
             if wa_number:
-                to_number = wa_number
-            elif tg_chat_id:
-                to_number = f"telegram:{tg_chat_id}"
-            else:
-                skipped += 1
-                continue
-            if self._source_whatsapp_number and to_number.startswith("whatsapp:") and to_number == self._source_whatsapp_number:
+                destinations.append(wa_number)
+            if tg_chat_id:
+                destinations.append(f"telegram:{tg_chat_id}")
+            if self._source_whatsapp_number and wa_number and wa_number == self._source_whatsapp_number:
+                destinations = [d for d in destinations if d != wa_number]
+            if not destinations:
                 skipped += 1
                 continue
             try:
@@ -310,17 +314,21 @@ class AutomationScheduler:
             if not (center_seconds - self._doctor_reminder_window_seconds <= delta_seconds <= center_seconds + self._doctor_reminder_window_seconds):
                 continue
             key = (
-                to_number,
                 row.slot_date,
                 row.schedule_id,
                 row.schedule_start_time,
                 row.schedule_end_time,
             )
             grouped.setdefault(key, []).append(row)
+            group_destinations.setdefault(key, set()).update(destinations)
 
-        for (to_number, slot_date, schedule_id, start_time, end_time), rows in grouped.items():
-            dedup_key = f"doctor-schedule-reminder:{to_number}:{slot_date}:{schedule_id}"
+        for (slot_date, schedule_id, start_time, end_time), rows in grouped.items():
+            dedup_key = f"doctor-schedule-reminder:{slot_date}:{schedule_id}:{start_time}:{end_time}"
             if self._reminder_keys.has(dedup_key):
+                skipped += 1
+                continue
+            destinations = sorted(group_destinations.get((slot_date, schedule_id, start_time, end_time), set()))
+            if not destinations:
                 skipped += 1
                 continue
             rows_sorted = sorted(rows, key=lambda r: (r.slot_time, r.appointment_id))
@@ -330,33 +338,37 @@ class AutomationScheduler:
                 f"Total patients: {len(rows_sorted)}",
             ]
             summary_text = "\n".join(summary_lines)
-            try:
-                report_path = self._build_doctor_report_xlsx(
-                    rows=rows_sorted,
-                    to_number=to_number,
-                    slot_date=slot_date,
-                    schedule_id=schedule_id,
-                    start_time=start_time,
-                    end_time=end_time,
-                )
-                if self._send_document_fn:
-                    self._send_document_fn(to_number, report_path, summary_text)
-                else:
-                    self._send_message_fn(
-                        to_number,
-                        summary_text + "\nReport generated: " + os.path.basename(report_path),
+            any_sent = False
+            for to_number in destinations:
+                try:
+                    report_path = self._build_doctor_report_xlsx(
+                        rows=rows_sorted,
+                        to_number=to_number,
+                        slot_date=slot_date,
+                        schedule_id=schedule_id,
+                        start_time=start_time,
+                        end_time=end_time,
                     )
+                    if self._send_document_fn:
+                        self._send_document_fn(to_number, report_path, summary_text)
+                    else:
+                        self._send_message_fn(
+                            to_number,
+                            summary_text + "\nReport generated: " + os.path.basename(report_path),
+                        )
+                    any_sent = True
+                except Exception as exc:
+                    LOGGER.warning(
+                        "Doctor schedule reminder send failed to=%s date=%s schedule_id=%s error=%s",
+                        to_number,
+                        slot_date,
+                        schedule_id,
+                        exc,
+                    )
+                    self._inc_metric("reminder_errors", 1)
+            if any_sent:
                 self._reminder_keys.add(dedup_key)
                 sent += 1
-            except Exception as exc:
-                LOGGER.warning(
-                    "Doctor schedule reminder send failed to=%s date=%s schedule_id=%s error=%s",
-                    to_number,
-                    slot_date,
-                    schedule_id,
-                    exc,
-                )
-                self._inc_metric("reminder_errors", 1)
         self._inc_metric("reminder_runs", 1)
         self._inc_metric("reminder_sent", sent)
         self._inc_metric("reminder_skipped", skipped)
@@ -367,6 +379,116 @@ class AutomationScheduler:
             skipped,
             self._doctor_reminder_lead_minutes,
         )
+        self._run_event_notifications_once()
+
+    def _run_event_notifications_once(self) -> None:
+        if not self._booking_repository:
+            return
+        events = self._booking_repository.list_pending_notification_events(limit=200)
+        sent = 0
+        failed = 0
+        for event in events:
+            try:
+                to_number = self._notification_destination(event)
+                if not to_number:
+                    self._booking_repository.mark_notification_event_status(
+                        notification_id=event.notification_id,
+                        status="FAILED",
+                        error_text="No patient destination (phone/chat id) available.",
+                    )
+                    failed += 1
+                    continue
+
+                text = self._event_message_text(event)
+                self._send_message_fn(to_number, text)
+                self._booking_repository.mark_notification_event_status(
+                    notification_id=event.notification_id,
+                    status="SENT",
+                )
+                sent += 1
+            except Exception as exc:
+                self._booking_repository.mark_notification_event_status(
+                    notification_id=event.notification_id,
+                    status="FAILED",
+                    error_text=str(exc),
+                )
+                failed += 1
+        self._inc_metric("event_runs", 1)
+        self._inc_metric("event_sent", sent)
+        self._inc_metric("event_failed", failed)
+        if events:
+            LOGGER.info(
+                "Event notifications processed queued=%d sent=%d failed=%d",
+                len(events),
+                sent,
+                failed,
+            )
+
+    def _notification_destination(self, event) -> str:
+        destination = (event.destination or "").strip()
+        channel = (event.channel or "").strip().lower()
+        if destination:
+            if destination.startswith("telegram:") or destination.startswith("whatsapp:"):
+                return destination
+            if channel == "telegram":
+                return f"telegram:{destination}"
+            if channel == "whatsapp":
+                return self._normalize_whatsapp_number(destination)
+
+        chat_id = self._normalize_telegram_chat_id(event.patient_telegram_chat_id or "")
+        phone = self._normalize_whatsapp_number(event.patient_phone or "")
+        # Channel-aware fallback:
+        # - Telegram events should route to Telegram chat IDs.
+        # - WhatsApp events should route to phone numbers.
+        # - Auto/unknown channel prefers Telegram when chat ID exists.
+        if channel == "telegram":
+            if chat_id:
+                return f"telegram:{chat_id}"
+            if phone:
+                return phone
+            return ""
+        if channel == "whatsapp":
+            if phone:
+                return phone
+            if chat_id:
+                return f"telegram:{chat_id}"
+            return ""
+        if chat_id:
+            return f"telegram:{chat_id}"
+        if phone:
+            return phone
+        return ""
+
+    def _event_message_text(self, event) -> str:
+        when = f"{event.slot_date} {self._format_display_time(event.slot_time)}".strip()
+        clinic = event.clinic_name or "the clinic"
+        event_type = (event.event_type or "").strip().upper()
+        if event_type == "CANCELLED":
+            return (
+                f"Update: Your appointment at {clinic} on {when} was cancelled by the doctor. "
+                "Please book another slot."
+            )
+        if event_type == "RESCHEDULED":
+            return (
+                f"Update: Your appointment at {clinic} has been rescheduled. "
+                f"Current slot: {when}."
+            )
+        if event_type == "DOCTOR_DELAYED":
+            delay_text = ""
+            meta = (event.meta_json or "").strip()
+            if meta:
+                try:
+                    payload = json.loads(meta)
+                    mins = payload.get("delay_minutes")
+                    if mins is not None:
+                        delay_text = f" Doctor delay: {mins} minutes."
+                except Exception:
+                    delay_text = ""
+            return (
+                f"Update: Doctor is running late for your appointment at {clinic} on {when}."
+                f"{delay_text}"
+            )
+        return f"Appointment update for {clinic} on {when}."
 
     def _build_doctor_report_xlsx(
         self,

@@ -30,6 +30,24 @@ class DoctorReminder:
     schedule_end_time: str
 
 
+@dataclass
+class NotificationEvent:
+    notification_id: int
+    appointment_id: int
+    event_type: str
+    channel: str
+    destination: str
+    status: str
+    patient_name: str
+    clinic_name: str
+    slot_date: str
+    slot_time: str
+    patient_phone: str
+    patient_telegram_chat_id: str
+    meta_json: str
+    admin_id: Optional[int]
+
+
 class BookingRepository:
     def __init__(self, config: MySQLConfig) -> None:
         self._config = config
@@ -61,6 +79,266 @@ class BookingRepository:
 
     def _use_appointment_mode(self) -> bool:
         return self._table_exists("appointment") and not self._table_exists("slots")
+
+    def ensure_notification_schema(self) -> None:
+        conn = self._connect()
+        cur = conn.cursor()
+        try:
+            appointment_table = self._appointment_table()
+            cur.execute(
+                """
+                SELECT COLUMN_NAME
+                FROM INFORMATION_SCHEMA.COLUMNS
+                WHERE TABLE_SCHEMA = DATABASE()
+                  AND TABLE_NAME = %s
+                """,
+                (appointment_table,),
+            )
+            cols = {str(row[0]).lower() for row in cur.fetchall()}
+
+            if "cancelled_by" not in cols:
+                cur.execute(f"ALTER TABLE {appointment_table} ADD COLUMN cancelled_by VARCHAR(20) NULL")
+            if "rescheduled_by" not in cols:
+                cur.execute(f"ALTER TABLE {appointment_table} ADD COLUMN rescheduled_by VARCHAR(20) NULL")
+
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS appointment_notification_log (
+                    notification_id BIGINT NOT NULL AUTO_INCREMENT,
+                    appointment_id INT NOT NULL,
+                    event_type VARCHAR(40) NOT NULL,
+                    channel VARCHAR(30) NOT NULL,
+                    destination VARCHAR(120) NULL,
+                    status VARCHAR(20) NOT NULL,
+                    error_text TEXT NULL,
+                    meta_json TEXT NULL,
+                    admin_id INT NULL,
+                    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    sent_at DATETIME NULL,
+                    PRIMARY KEY (notification_id),
+                    KEY idx_notification_appointment (appointment_id),
+                    KEY idx_notification_event (event_type, created_at),
+                    KEY idx_notification_status (status, created_at)
+                ) ENGINE=InnoDB
+                """
+            )
+            conn.commit()
+        finally:
+            cur.close()
+            conn.close()
+
+    def log_notification_event(
+        self,
+        *,
+        appointment_id: int,
+        event_type: str,
+        channel: str,
+        destination: str = "",
+        status: str = "PENDING",
+        error_text: str = "",
+        admin_id: Optional[int] = None,
+        meta_json: str = "",
+    ) -> None:
+        if not appointment_id:
+            return
+        conn = self._connect()
+        cur = conn.cursor()
+        try:
+            cur.execute(
+                """
+                INSERT INTO appointment_notification_log
+                (appointment_id, event_type, channel, destination, status, error_text, meta_json, admin_id, sent_at)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, CASE WHEN %s = 'SENT' THEN DATE_ADD(UTC_TIMESTAMP(), INTERVAL 330 MINUTE) ELSE NULL END)
+                """,
+                (
+                    appointment_id,
+                    (event_type or "").strip().upper(),
+                    (channel or "").strip().lower() or "system",
+                    (destination or "").strip(),
+                    (status or "").strip().upper() or "PENDING",
+                    (error_text or "").strip() or None,
+                    (meta_json or "").strip() or None,
+                    admin_id,
+                    (status or "").strip().upper() or "PENDING",
+                ),
+            )
+            conn.commit()
+        finally:
+            cur.close()
+            conn.close()
+
+    def log_doctor_delayed_notification(
+        self,
+        *,
+        appointment_id: int,
+        channel: str,
+        destination: str = "",
+        status: str = "PENDING",
+        error_text: str = "",
+        admin_id: Optional[int] = None,
+        meta_json: str = "",
+    ) -> None:
+        self.log_notification_event(
+            appointment_id=appointment_id,
+            event_type="DOCTOR_DELAYED",
+            channel=channel,
+            destination=destination,
+            status=status,
+            error_text=error_text,
+            admin_id=admin_id,
+            meta_json=meta_json,
+        )
+
+    def list_pending_notification_events(
+        self,
+        *,
+        limit: int = 200,
+        admin_id: Optional[int] = None,
+    ) -> list[NotificationEvent]:
+        conn = self._connect()
+        cur = conn.cursor(dictionary=True)
+        try:
+            safe_limit = max(1, min(1000, int(limit)))
+            appointment_table = self._appointment_table()
+
+            cur.execute(
+                """
+                SELECT COLUMN_NAME
+                FROM INFORMATION_SCHEMA.COLUMNS
+                WHERE TABLE_SCHEMA = DATABASE()
+                  AND TABLE_NAME = 'patients'
+                """
+            )
+            patient_cols = {str(r["COLUMN_NAME"]).lower() for r in cur.fetchall()}
+            chat_col = next((c for c in ("telegram_chat_id", "telegram_user_id", "user_id") if c in patient_cols), None)
+            chat_select = f"COALESCE(p.{chat_col}, '')" if chat_col else "''"
+
+            params: list[object] = []
+            admin_sql = ""
+            if admin_id is not None:
+                admin_sql = "AND l.admin_id = %s"
+                params.append(admin_id)
+
+            if self._use_appointment_mode():
+                cur.execute(
+                    f"""
+                    SELECT
+                        l.notification_id,
+                        l.appointment_id,
+                        l.event_type,
+                        COALESCE(l.channel, '') AS channel,
+                        COALESCE(l.destination, '') AS destination,
+                        COALESCE(l.status, 'PENDING') AS status,
+                        COALESCE(l.meta_json, '') AS meta_json,
+                        l.admin_id,
+                        COALESCE(p.full_name, '') AS patient_name,
+                        COALESCE(c.clinic_name, '') AS clinic_name,
+                        DATE_FORMAT(a.appointment_date, '%Y-%m-%d') AS slot_date,
+                        TIME_FORMAT(a.start_time, '%H:%i') AS slot_time,
+                        COALESCE(p.phone, '') AS patient_phone,
+                        {chat_select} AS patient_telegram_chat_id
+                    FROM appointment_notification_log l
+                    JOIN {appointment_table} a ON a.appointment_id = l.appointment_id
+                    LEFT JOIN patients p ON p.patient_id = a.patient_id
+                    LEFT JOIN clinics c ON c.clinic_id = a.clinic_id
+                    WHERE l.status = 'PENDING'
+                      AND l.event_type IN ('CANCELLED', 'RESCHEDULED', 'DOCTOR_DELAYED')
+                      {admin_sql}
+                    ORDER BY l.notification_id
+                    LIMIT {safe_limit}
+                    """,
+                    tuple(params),
+                )
+            else:
+                cur.execute(
+                    f"""
+                    SELECT
+                        l.notification_id,
+                        l.appointment_id,
+                        l.event_type,
+                        COALESCE(l.channel, '') AS channel,
+                        COALESCE(l.destination, '') AS destination,
+                        COALESCE(l.status, 'PENDING') AS status,
+                        COALESCE(l.meta_json, '') AS meta_json,
+                        l.admin_id,
+                        COALESCE(p.full_name, '') AS patient_name,
+                        COALESCE(c.clinic_name, '') AS clinic_name,
+                        DATE_FORMAT(s.slot_date, '%Y-%m-%d') AS slot_date,
+                        TIME_FORMAT(s.slot_time, '%H:%i') AS slot_time,
+                        COALESCE(p.phone, '') AS patient_phone,
+                        {chat_select} AS patient_telegram_chat_id
+                    FROM appointment_notification_log l
+                    JOIN {appointment_table} a ON a.appointment_id = l.appointment_id
+                    LEFT JOIN slots s ON s.slot_id = a.slot_id
+                    LEFT JOIN patients p ON p.patient_id = a.patient_id
+                    LEFT JOIN clinics c ON c.clinic_id = a.clinic_id
+                    WHERE l.status = 'PENDING'
+                      AND l.event_type IN ('CANCELLED', 'RESCHEDULED', 'DOCTOR_DELAYED')
+                      {admin_sql}
+                    ORDER BY l.notification_id
+                    LIMIT {safe_limit}
+                    """,
+                    tuple(params),
+                )
+
+            rows = cur.fetchall()
+            events: list[NotificationEvent] = []
+            for row in rows:
+                events.append(
+                    NotificationEvent(
+                        notification_id=int(row["notification_id"]),
+                        appointment_id=int(row["appointment_id"]),
+                        event_type=str(row.get("event_type") or "").strip().upper(),
+                        channel=str(row.get("channel") or "").strip().lower(),
+                        destination=str(row.get("destination") or "").strip(),
+                        status=str(row.get("status") or "PENDING").strip().upper(),
+                        patient_name=str(row.get("patient_name") or ""),
+                        clinic_name=str(row.get("clinic_name") or ""),
+                        slot_date=str(row.get("slot_date") or ""),
+                        slot_time=str(row.get("slot_time") or ""),
+                        patient_phone=str(row.get("patient_phone") or ""),
+                        patient_telegram_chat_id=str(row.get("patient_telegram_chat_id") or ""),
+                        meta_json=str(row.get("meta_json") or ""),
+                        admin_id=int(row["admin_id"]) if row.get("admin_id") is not None else None,
+                    )
+                )
+            return events
+        finally:
+            cur.close()
+            conn.close()
+
+    def mark_notification_event_status(
+        self,
+        *,
+        notification_id: int,
+        status: str,
+        error_text: str = "",
+    ) -> None:
+        if not notification_id:
+            return
+        normalized = (status or "").strip().upper() or "FAILED"
+        conn = self._connect()
+        cur = conn.cursor()
+        try:
+            cur.execute(
+                """
+                UPDATE appointment_notification_log
+                SET status = %s,
+                    error_text = %s,
+                    sent_at = CASE WHEN %s = 'SENT' THEN DATE_ADD(UTC_TIMESTAMP(), INTERVAL 330 MINUTE) ELSE sent_at END
+                WHERE notification_id = %s
+                """,
+                (
+                    normalized,
+                    (error_text or "").strip() or None,
+                    normalized,
+                    notification_id,
+                ),
+            )
+            conn.commit()
+        finally:
+            cur.close()
+            conn.close()
 
     @staticmethod
     def _normalize_chat_user_id(value: str) -> str:
@@ -359,6 +637,7 @@ class BookingRepository:
                         a.appointment_id,
                         a.clinic_id,
                         a.doctor_id,
+                        p.booking_id AS booking_number,
                         c.clinic_name,
                         DATE_FORMAT(a.appointment_date, '%Y-%m-%d') AS slot_date,
                         TIME_FORMAT(a.start_time, '%H:%i') AS slot_time,
@@ -480,6 +759,7 @@ class BookingRepository:
                         a.appointment_id,
                         a.clinic_id,
                         a.doctor_id,
+                        p.booking_id AS booking_number,
                         c.clinic_name,
                         s.slot_date,
                         TIME_FORMAT(s.slot_time, '%H:%i') AS slot_time,
@@ -558,6 +838,7 @@ class BookingRepository:
                         a.appointment_id,
                         a.clinic_id,
                         a.doctor_id,
+                        p.booking_id AS booking_number,
                         c.clinic_name,
                         DATE_FORMAT(a.appointment_date, '%Y-%m-%d') AS slot_date,
                         TIME_FORMAT(a.start_time, '%H:%i') AS slot_time,
@@ -579,6 +860,7 @@ class BookingRepository:
                         a.appointment_id,
                         a.clinic_id,
                         a.doctor_id,
+                        p.booking_id AS booking_number,
                         c.clinic_name,
                         s.slot_date,
                         TIME_FORMAT(s.slot_time, '%H:%i') AS slot_time,
@@ -607,7 +889,12 @@ class BookingRepository:
             cur.close()
             conn.close()
 
-    def cancel_appointment(self, appointment_id: int, admin_id: Optional[int] = None) -> bool:
+    def cancel_appointment(
+        self,
+        appointment_id: int,
+        admin_id: Optional[int] = None,
+        cancelled_by: str = "PATIENT",
+    ) -> bool:
         if not appointment_id:
             return False
         conn = self._connect()
@@ -619,20 +906,56 @@ class BookingRepository:
                 conn.rollback()
                 return False
             appointment_table = self._appointment_table()
+            cur.execute(
+                """
+                SELECT COLUMN_NAME
+                FROM INFORMATION_SCHEMA.COLUMNS
+                WHERE TABLE_SCHEMA = DATABASE()
+                  AND TABLE_NAME = %s
+                  AND COLUMN_NAME = 'cancelled_by'
+                """,
+                (appointment_table,),
+            )
+            has_cancelled_by = cur.fetchone() is not None
             if self._use_appointment_mode():
-                cur.execute(
-                    f"""
-                    UPDATE {appointment_table}
-                    SET status = 'CANCELLED'
-                    WHERE appointment_id = %s
-                      AND admin_id = %s
-                      AND status IN ('BOOKED', 'PENDING', 'CONFIRMED')
-                    """,
-                    (appointment_id, actual_admin_id),
-                )
+                if has_cancelled_by:
+                    cur.execute(
+                        f"""
+                        UPDATE {appointment_table}
+                        SET status = 'CANCELLED',
+                            cancelled_by = %s
+                        WHERE appointment_id = %s
+                          AND admin_id = %s
+                          AND status IN ('BOOKED', 'PENDING', 'CONFIRMED')
+                        """,
+                        ((cancelled_by or "PATIENT").strip().upper(), appointment_id, actual_admin_id),
+                    )
+                else:
+                    cur.execute(
+                        f"""
+                        UPDATE {appointment_table}
+                        SET status = 'CANCELLED'
+                        WHERE appointment_id = %s
+                          AND admin_id = %s
+                          AND status IN ('BOOKED', 'PENDING', 'CONFIRMED')
+                        """,
+                        (appointment_id, actual_admin_id),
+                    )
                 ok = cur.rowcount > 0
                 if ok:
                     conn.commit()
+                    if (cancelled_by or "").strip().upper() == "DOCTOR":
+                        try:
+                            self.log_notification_event(
+                                appointment_id=appointment_id,
+                                event_type="CANCELLED",
+                                channel="auto",
+                                destination="",
+                                status="PENDING",
+                                admin_id=actual_admin_id,
+                            )
+                        except Exception:
+                            pass
                 else:
                     conn.rollback()
                 return ok
@@ -654,16 +977,29 @@ class BookingRepository:
                 return False
 
             slot_id = int(row["slot_id"]) if row.get("slot_id") is not None else None
-            cur.execute(
-                f"""
-                UPDATE {appointment_table}
-                SET status = 'CANCELLED'
-                WHERE appointment_id = %s
-                  AND admin_id = %s
-                  AND status IN ('BOOKED', 'PENDING', 'CONFIRMED')
-                """,
-                (appointment_id, actual_admin_id),
-            )
+            if has_cancelled_by:
+                cur.execute(
+                    f"""
+                    UPDATE {appointment_table}
+                    SET status = 'CANCELLED',
+                        cancelled_by = %s
+                    WHERE appointment_id = %s
+                      AND admin_id = %s
+                      AND status IN ('BOOKED', 'PENDING', 'CONFIRMED')
+                    """,
+                    ((cancelled_by or "PATIENT").strip().upper(), appointment_id, actual_admin_id),
+                )
+            else:
+                cur.execute(
+                    f"""
+                    UPDATE {appointment_table}
+                    SET status = 'CANCELLED'
+                    WHERE appointment_id = %s
+                      AND admin_id = %s
+                      AND status IN ('BOOKED', 'PENDING', 'CONFIRMED')
+                    """,
+                    (appointment_id, actual_admin_id),
+                )
             if cur.rowcount <= 0:
                 conn.rollback()
                 return False
@@ -679,6 +1015,18 @@ class BookingRepository:
                 )
 
             conn.commit()
+            if (cancelled_by or "").strip().upper() == "DOCTOR":
+                try:
+                    self.log_notification_event(
+                        appointment_id=appointment_id,
+                        event_type="CANCELLED",
+                        channel="auto",
+                        destination="",
+                        status="PENDING",
+                        admin_id=actual_admin_id,
+                    )
+                except Exception:
+                    pass
             return True
         except Exception:
             conn.rollback()
@@ -694,6 +1042,7 @@ class BookingRepository:
         new_time: str,
         new_clinic_id: Optional[int] = None,
         admin_id: Optional[int] = None,
+        rescheduled_by: str = "PATIENT",
     ) -> BookingResult:
         if not appointment_id or not new_date or not new_time:
             return BookingResult(False, "Missing required reschedule fields.")
@@ -706,6 +1055,17 @@ class BookingRepository:
                 conn.rollback()
                 return BookingResult(False, "No admin configured.")
             appointment_table = self._appointment_table()
+            cur.execute(
+                """
+                SELECT COLUMN_NAME
+                FROM INFORMATION_SCHEMA.COLUMNS
+                WHERE TABLE_SCHEMA = DATABASE()
+                  AND TABLE_NAME = %s
+                  AND COLUMN_NAME = 'rescheduled_by'
+                """,
+                (appointment_table,),
+            )
+            has_rescheduled_by = cur.fetchone() is not None
 
             if self._use_appointment_mode():
                 cur.execute(
@@ -757,7 +1117,7 @@ class BookingRepository:
                       AND clinic_id = %s
                       AND effective_from <= %s
                       AND effective_to >= %s
-                      AND day_of_week = WEEKDAY(%s)
+                      AND day_of_week = MOD(WEEKDAY(%s) + 1, 7)
                     ORDER BY schedule_id
                     """,
                     (target_doctor_id, target_clinic_id, new_date, new_date, new_date),
@@ -799,19 +1159,44 @@ class BookingRepository:
                     conn.rollback()
                     return BookingResult(False, "Requested new slot is not available.")
 
-                cur.execute(
-                    f"""
-                    UPDATE {appointment_table}
-                    SET appointment_date = %s,
-                        start_time = %s,
-                        end_time = %s,
-                        clinic_id = %s,
-                        doctor_id = %s
-                    WHERE appointment_id = %s
-                      AND admin_id = %s
-                    """,
-                    (new_date, start_time, end_time, target_clinic_id, target_doctor_id, appointment_id, actual_admin_id),
-                )
+                if has_rescheduled_by:
+                    cur.execute(
+                        f"""
+                        UPDATE {appointment_table}
+                        SET appointment_date = %s,
+                            start_time = %s,
+                            end_time = %s,
+                            clinic_id = %s,
+                            doctor_id = %s,
+                            rescheduled_by = %s
+                        WHERE appointment_id = %s
+                          AND admin_id = %s
+                        """,
+                        (
+                            new_date,
+                            start_time,
+                            end_time,
+                            target_clinic_id,
+                            target_doctor_id,
+                            (rescheduled_by or "PATIENT").strip().upper(),
+                            appointment_id,
+                            actual_admin_id,
+                        ),
+                    )
+                else:
+                    cur.execute(
+                        f"""
+                        UPDATE {appointment_table}
+                        SET appointment_date = %s,
+                            start_time = %s,
+                            end_time = %s,
+                            clinic_id = %s,
+                            doctor_id = %s
+                        WHERE appointment_id = %s
+                          AND admin_id = %s
+                        """,
+                        (new_date, start_time, end_time, target_clinic_id, target_doctor_id, appointment_id, actual_admin_id),
+                    )
                 cur.execute(
                     """
                     SELECT COLUMN_NAME
@@ -831,6 +1216,18 @@ class BookingRepository:
                         (requested_slot_number, patient_id),
                     )
                 conn.commit()
+                if (rescheduled_by or "").strip().upper() == "DOCTOR":
+                    try:
+                        self.log_notification_event(
+                            appointment_id=appointment_id,
+                            event_type="RESCHEDULED",
+                            channel="auto",
+                            destination="",
+                            status="PENDING",
+                            admin_id=actual_admin_id,
+                        )
+                    except Exception:
+                        pass
                 return BookingResult(
                     True,
                     "Appointment rescheduled.",
@@ -892,18 +1289,51 @@ class BookingRepository:
 
             cur.execute("UPDATE slots SET slot_status = 'AVAILABLE' WHERE slot_id = %s", (current_slot_id,))
             cur.execute("UPDATE slots SET slot_status = 'BOOKED' WHERE slot_id = %s", (new_slot_id,))
-            cur.execute(
-                f"""
-                UPDATE {appointment_table}
-                SET slot_id = %s,
-                    doctor_id = %s,
-                    clinic_id = %s
-                WHERE appointment_id = %s
-                  AND admin_id = %s
-                """,
-                (new_slot_id, new_doctor_id, new_clinic_id, appointment_id, actual_admin_id),
-            )
+            if has_rescheduled_by:
+                cur.execute(
+                    f"""
+                    UPDATE {appointment_table}
+                    SET slot_id = %s,
+                        doctor_id = %s,
+                        clinic_id = %s,
+                        rescheduled_by = %s
+                    WHERE appointment_id = %s
+                      AND admin_id = %s
+                    """,
+                    (
+                        new_slot_id,
+                        new_doctor_id,
+                        new_clinic_id,
+                        (rescheduled_by or "PATIENT").strip().upper(),
+                        appointment_id,
+                        actual_admin_id,
+                    ),
+                )
+            else:
+                cur.execute(
+                    f"""
+                    UPDATE {appointment_table}
+                    SET slot_id = %s,
+                        doctor_id = %s,
+                        clinic_id = %s
+                    WHERE appointment_id = %s
+                      AND admin_id = %s
+                    """,
+                    (new_slot_id, new_doctor_id, new_clinic_id, appointment_id, actual_admin_id),
+                )
             conn.commit()
+            if (rescheduled_by or "").strip().upper() == "DOCTOR":
+                try:
+                    self.log_notification_event(
+                        appointment_id=appointment_id,
+                        event_type="RESCHEDULED",
+                        channel="auto",
+                        destination="",
+                        status="PENDING",
+                        admin_id=actual_admin_id,
+                    )
+                except Exception:
+                    pass
             return BookingResult(
                 True,
                 "Appointment rescheduled.",
@@ -1053,7 +1483,7 @@ class BookingRepository:
                         WHERE dcs.clinic_id = %s
                           AND dcs.effective_from <= %s
                           AND dcs.effective_to >= %s
-                          AND dcs.day_of_week = WEEKDAY(%s)
+                          AND dcs.day_of_week = MOD(WEEKDAY(%s) + 1, 7)
                         ORDER BY dcs.schedule_id
                         LIMIT 1
                         """,
@@ -1069,6 +1499,15 @@ class BookingRepository:
                 if resolved_doctor_id is None:
                     conn.rollback()
                     return BookingResult(False, "Doctor mapping not found for clinic.")
+                if "doctor_id" in patient_columns and resolved_doctor_id is not None:
+                    cur.execute(
+                        """
+                        UPDATE patients
+                        SET doctor_id = %s
+                        WHERE patient_id = %s
+                        """,
+                        (resolved_doctor_id, patient_id),
+                    )
 
                 requested_start = datetime.strptime(str(context.appointment_time), "%H:%M").time()
                 cur.execute(
@@ -1079,7 +1518,7 @@ class BookingRepository:
                       AND clinic_id = %s
                       AND effective_from <= %s
                       AND effective_to >= %s
-                      AND day_of_week = WEEKDAY(%s)
+                      AND day_of_week = MOD(WEEKDAY(%s) + 1, 7)
                     ORDER BY schedule_id
                     """,
                     (
@@ -1279,7 +1718,7 @@ class BookingRepository:
             params.extend([context.appointment_date, context.appointment_time])
             cur.execute(
                 f"""
-                SELECT a.appointment_id
+                SELECT a.appointment_id, a.doctor_id
                 FROM {appointment_table} a
                 JOIN slots s ON s.slot_id = a.slot_id
                 WHERE a.patient_id = %s
@@ -1296,6 +1735,16 @@ class BookingRepository:
             )
             existing = cur.fetchone()
             if existing:
+                existing_doctor_id = existing.get("doctor_id")
+                if "doctor_id" in patient_columns and existing_doctor_id is not None:
+                    cur.execute(
+                        """
+                        UPDATE patients
+                        SET doctor_id = %s
+                        WHERE patient_id = %s
+                        """,
+                        (int(existing_doctor_id), patient_id),
+                    )
                 conn.commit()
                 appt_id = int(existing["appointment_id"])
                 return BookingResult(
@@ -1339,6 +1788,15 @@ class BookingRepository:
             slot_id = int(slot_row["slot_id"])
             doctor_id = int(slot_row["doctor_id"])
             clinic_id = int(slot_row["clinic_id"])
+            if "doctor_id" in patient_columns:
+                cur.execute(
+                    """
+                    UPDATE patients
+                    SET doctor_id = %s
+                    WHERE patient_id = %s
+                    """,
+                    (doctor_id, patient_id),
+                )
 
             cur.execute(
                 """
@@ -1438,7 +1896,7 @@ class BookingRepository:
             doctor_columns = {str(row.get("COLUMN_NAME") or "").lower() for row in cur.fetchall()}
             whatsapp_col = "whatsapp_number" if "whatsapp_number" in doctor_columns else None
             telegram_col = None
-            for candidate in ("telegram_chat_id", "telegram_user_id", "telegram_id", "user_id"):
+            for candidate in ("telegram_chat_id", "telegram_user_id", "telegram_id", "chat_id", "user_id"):
                 if candidate in doctor_columns:
                     telegram_col = candidate
                     break
@@ -1465,11 +1923,11 @@ class BookingRepository:
                         p.booking_id AS booking_number,
                         dcs.schedule_id AS schedule_id,
                         TIME_FORMAT(
-                          COALESCE(TIME(dcs.start_time), TIME(STR_TO_DATE(dcs.start_time, '%h:%i %p')), TIME(STR_TO_DATE(dcs.start_time, '%H:%i'))),
+                          COALESCE(TIME(STR_TO_DATE(dcs.start_time, '%h:%i %p')), TIME(STR_TO_DATE(dcs.start_time, '%H:%i')), TIME(dcs.start_time)),
                           '%H:%i'
                         ) AS schedule_start_time,
                         TIME_FORMAT(
-                          COALESCE(TIME(dcs.end_time), TIME(STR_TO_DATE(dcs.end_time, '%h:%i %p')), TIME(STR_TO_DATE(dcs.end_time, '%H:%i'))),
+                          COALESCE(TIME(STR_TO_DATE(dcs.end_time, '%h:%i %p')), TIME(STR_TO_DATE(dcs.end_time, '%H:%i')), TIME(dcs.end_time)),
                           '%H:%i'
                         ) AS schedule_end_time
                     FROM {appointment_table} a
@@ -1479,12 +1937,12 @@ class BookingRepository:
                     LEFT JOIN doctor_clinic_schedule dcs
                       ON dcs.doctor_id = a.doctor_id
                      AND dcs.clinic_id = a.clinic_id
-                     AND dcs.day_of_week = WEEKDAY(a.appointment_date)
+                     AND dcs.day_of_week = MOD(WEEKDAY(a.appointment_date) + 1, 7)
                      AND dcs.effective_from <= a.appointment_date
                      AND dcs.effective_to >= a.appointment_date
                     WHERE a.status IN ('BOOKED', 'PENDING', 'CONFIRMED')
-                      AND TIMESTAMP(a.appointment_date, a.start_time) >= NOW()
-                      AND TIMESTAMP(a.appointment_date, a.start_time) <= DATE_ADD(NOW(), INTERVAL %s MINUTE)
+                      AND TIMESTAMP(a.appointment_date, a.start_time) >= DATE_ADD(UTC_TIMESTAMP(), INTERVAL 330 MINUTE)
+                      AND TIMESTAMP(a.appointment_date, a.start_time) <= DATE_ADD(DATE_ADD(UTC_TIMESTAMP(), INTERVAL 330 MINUTE), INTERVAL %s MINUTE)
                       {admin_sql}
                     ORDER BY doctor_whatsapp, a.appointment_date, a.start_time, a.appointment_id
                     """,
@@ -1549,8 +2007,8 @@ class BookingRepository:
                 WHERE a.status IN ('BOOKED', 'PENDING', 'CONFIRMED')
                   AND s.slot_status = 'BOOKED'
                   AND s.schedule_id IS NOT NULL
-                  AND TIMESTAMP(s.slot_date, s.slot_time) >= NOW()
-                  AND TIMESTAMP(s.slot_date, s.slot_time) <= DATE_ADD(NOW(), INTERVAL %s MINUTE)
+                  AND TIMESTAMP(s.slot_date, s.slot_time) >= DATE_ADD(UTC_TIMESTAMP(), INTERVAL 330 MINUTE)
+                  AND TIMESTAMP(s.slot_date, s.slot_time) <= DATE_ADD(DATE_ADD(UTC_TIMESTAMP(), INTERVAL 330 MINUTE), INTERVAL %s MINUTE)
                   {admin_sql}
                 ORDER BY doctor_whatsapp, s.slot_date, s.schedule_id, s.slot_time, a.appointment_id
                 """,
