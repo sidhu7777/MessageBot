@@ -15,6 +15,7 @@
         ),
         "empty_input": "Please send a message so I can assist you.",
         "abusive_language": "I can help only with appointment tasks. Please use respectful language.",
+        "abusive_language_final": "Please contact the clinic directly for further assistance.",
         "no_intent": (
             "To begin, please say 'I need to book an appointment'."
         ),
@@ -224,6 +225,7 @@
         ),
         "empty_input": "à¤•à¥ƒà¤ªà¤¯à¤¾ à¤¸à¤‚à¤¦à¥‡à¤¶ à¤­à¥‡à¤œà¥‡à¤‚ à¤¤à¤¾à¤•à¤¿ à¤®à¥ˆà¤‚ à¤†à¤ªà¤•à¥€ à¤®à¤¦à¤¦ à¤•à¤° à¤¸à¤•à¥‚à¤à¥¤",
         "abusive_language": "à¤®à¥ˆà¤‚ à¤•à¥‡à¤µà¤² à¤…à¤ªà¥‰à¤‡à¤‚à¤Ÿà¤®à¥‡à¤‚à¤Ÿ à¤¸à¤‚à¤¬à¤‚à¤§à¤¿à¤¤ à¤®à¤¦à¤¦ à¤•à¤° à¤¸à¤•à¤¤à¤¾ à¤¹à¥‚à¤à¥¤ à¤•à¥ƒà¤ªà¤¯à¤¾ à¤¸à¤®à¥à¤®à¤¾à¤¨à¤œà¤¨à¤• à¤­à¤¾à¤·à¤¾ à¤•à¤¾ à¤ªà¥à¤°à¤¯à¥‹à¤— à¤•à¤°à¥‡à¤‚à¥¤",
+        "abusive_language_final": "à¤•à¥ƒà¤ªà¤¯à¤¾ à¤†à¤—à¥‡ à¤•à¥€ à¤®à¤¦à¤¦ à¤•à¥‡ à¤²à¤¿à¤ à¤¸à¥€à¤§à¥‡ à¤•à¥à¤²à¤¿à¤¨à¤¿à¤• à¤¸à¥‡ à¤¸à¤‚à¤ªà¤°à¥à¤• à¤•à¤°à¥‡à¤‚à¥¤",
         "no_intent": (
             "à¤¶à¥à¤°à¥‚ à¤•à¤°à¤¨à¥‡ à¤•à¥‡ à¤²à¤¿à¤ à¤•à¥ƒà¤ªà¤¯à¤¾ à¤²à¤¿à¤–à¥‡à¤‚: 'I need to book an appointment'."
         ),
@@ -419,6 +421,7 @@
         ),
         "empty_input": "Please message bhejiye taaki main help kar sakoon.",
         "abusive_language": "Main sirf appointment related help kar sakta hoon. Please respectful language use kariye.",
+        "abusive_language_final": "Aage ki help ke liye please clinic ko directly contact kariye.",
         "no_intent": "Start karne ke liye please likhiye: 'I need to book an appointment'.",
         "clarify_intent": (
             "Please ek option choose kariye:\n"

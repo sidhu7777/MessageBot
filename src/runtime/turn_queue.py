@@ -27,11 +27,17 @@ class TurnQueueProcessor:
         process_fn: Callable[[str, str], Tuple[str, str]],
         send_fn: Callable[[str, str, str, str], None],
         retry_attempts: int = 1,
+        timeout_fn: Optional[Callable[[TurnTask, Exception], None]] = None,
+        on_success: Optional[Callable[[TurnTask], None]] = None,
+        on_failure: Optional[Callable[[TurnTask, Exception, bool, float], None]] = None,
     ) -> None:
         self.worker_count = worker_count
         self.retry_attempts = max(0, retry_attempts)
         self._process_fn = process_fn
         self._send_fn = send_fn
+        self._timeout_fn = timeout_fn
+        self._on_success = on_success
+        self._on_failure = on_failure
         self._queue: queue.Queue[Optional[TurnTask]] = queue.Queue(maxsize=max_queue_size)
         self._stop = threading.Event()
         self._threads: list[threading.Thread] = []
@@ -113,9 +119,19 @@ class TurnQueueProcessor:
                 post_state,
                 len(reply),
             )
+            if self._on_success:
+                self._on_success(task)
         except Exception as exc:
+            if isinstance(exc, TimeoutError) and self._timeout_fn:
+                try:
+                    self._timeout_fn(task, exc)
+                except Exception:
+                    LOGGER.exception("Failed to send timeout-safe message sid=%s", task.inbound_sid or "-")
+
             if task.attempt < self.retry_attempts and not self._stop.is_set():
                 backoff_seconds = min(4.0, 0.8 * (2 ** task.attempt))
+                if self._on_failure:
+                    self._on_failure(task, exc, True, backoff_seconds)
                 LOGGER.warning(
                     "Queued turn failed; retrying sid=%s from=%s attempt=%d/%d after %.1fs error=%s",
                     task.inbound_sid or "-",
@@ -132,6 +148,8 @@ class TurnQueueProcessor:
                 if not self.submit(task):
                     LOGGER.error("Queue full while retrying sid=%s from=%s", task.inbound_sid or "-", task.from_number)
             else:
+                if self._on_failure:
+                    self._on_failure(task, exc, False, 0.0)
                 with self._metrics_lock:
                     self._failed += 1
                 LOGGER.exception(

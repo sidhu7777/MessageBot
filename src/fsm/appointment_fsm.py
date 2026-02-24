@@ -11,6 +11,7 @@ from src.llm.tasks import (
     llm_detect_abuse,
     llm_detect_confirm_intent,
     llm_extract,
+    llm_extract_booking_prefill,
 )
 from src.messages.templates import get_message
 from src.nlu.extractors import (
@@ -81,6 +82,8 @@ class AppointmentContext:
     clinic_address: Optional[str] = None
     availability_doctor: Optional[str] = None
     availability_date: Optional[str] = None
+    abusive_warning_count: int = 0
+    abuse_blocked: bool = False
 
 
 @dataclass
@@ -125,11 +128,19 @@ class AppointmentFSM:
         text = (user_text or "").strip()
         lower = text.lower()
 
+        if self.context.abuse_blocked:
+            return ""
+
         if not text:
             return self._respond(self._msg("empty_input"))
 
         if self._is_abusive_message(text, lower):
+            self.context.abusive_warning_count = int(self.context.abusive_warning_count or 0) + 1
+            if self.context.abusive_warning_count >= 2:
+                self.context.abuse_blocked = True
+                return self._respond(self._msg("abusive_language_final"), allow_polish=False)
             return self._respond(self._msg("abusive_language"), allow_polish=False)
+        self.context.abusive_warning_count = 0
 
         if is_end_intent(lower):
             self._reset_all(cancelled=True)
@@ -183,6 +194,9 @@ class AppointmentFSM:
                 existing_reply = self._existing_booking_entry_response()
                 if existing_reply:
                     return self._respond(existing_reply, allow_polish=False)
+                prefill_reply = self._handle_init_booking_prefill(text=text, lower=lower)
+                if prefill_reply:
+                    return self._respond(self._msg("intent_ack") + "\n" + prefill_reply, allow_polish=False)
                 self.state = "ASK_BOOKING_FOR"
                 return self._respond(
                     self._msg("intent_ack") + "\n" + self._with_back(self._msg("ask_booking_for"), option_count=2),
@@ -1618,6 +1632,197 @@ class AppointmentFSM:
                     self.doctor_id = self.scheduling_repository.default_doctor_id(admin_id=self.admin_id)
             except Exception:
                 self.doctor_id = None
+
+    def _handle_init_booking_prefill(self, *, text: str, lower: str) -> Optional[str]:
+        """
+        First-message-only prefill:
+        - LLM-first extraction for richer free-text inputs
+        - Rule-based fallback to keep deterministic behavior
+        - Route user directly to the next missing state
+        """
+        self._ensure_actor_defaults()
+        self._hydrate_known_patient_name()
+        self._detect_booking_actor_from_text(lower)
+        self._apply_init_booking_prefill_from_llm(text)
+        self._apply_init_booking_prefill_from_rules(text, lower)
+        self._apply_clinic_prefill_from_text(text, lower)
+        return self._route_after_init_prefill()
+
+    def _hydrate_known_patient_name(self) -> None:
+        if self.known_patient_name:
+            return
+        if not self.booking_repository:
+            return
+        if self._is_telegram_channel():
+            return
+        chat_phone = self._normalize_phone(self.chat_phone_number or "")
+        if not chat_phone:
+            return
+        try:
+            patient_name = self.booking_repository.find_patient_name_by_phone_number(
+                phone_number=chat_phone,
+                admin_id=self.admin_id,
+                doctor_id=self.doctor_id,
+            )
+            if patient_name:
+                self.known_patient_name = patient_name
+        except Exception:
+            return
+
+    def _detect_booking_actor_from_text(self, lower: str) -> None:
+        normalized = (lower or "").strip().lower()
+        other_markers = (
+            "for my mother",
+            "for my father",
+            "for my wife",
+            "for my husband",
+            "for my son",
+            "for my daughter",
+            "for another",
+            "another person",
+            "someone else",
+        )
+        self_markers = (
+            "for me",
+            "myself",
+            "self",
+            "for my appointment",
+        )
+        if any(marker in normalized for marker in other_markers):
+            self.booking_for_self = False
+            return
+        if any(marker in normalized for marker in self_markers):
+            self.booking_for_self = True
+
+    def _apply_init_booking_prefill_from_llm(self, text: str) -> None:
+        prefill = llm_extract_booking_prefill(
+            llm_client=self.llm_client,
+            enable_llm_polish=self.enable_llm_polish,
+            text=text,
+        )
+        if not prefill:
+            return
+        patient_name = prefill.get("patient_name")
+        appointment_date = prefill.get("appointment_date")
+        appointment_time = prefill.get("appointment_time")
+        clinic_name = prefill.get("clinic_name")
+        booking_for = prefill.get("booking_for")
+
+        if patient_name and not self.context.patient_name:
+            self.context.patient_name = patient_name
+        if appointment_date and not self.context.appointment_date:
+            self.context.appointment_date = appointment_date
+        if appointment_time and not self.context.appointment_time:
+            self.context.appointment_time = appointment_time
+        if clinic_name and not self.context.clinic_name:
+            self.context.clinic_name = clinic_name
+        if booking_for == "self":
+            self.booking_for_self = True
+        elif booking_for == "other":
+            self.booking_for_self = False
+
+    def _apply_init_booking_prefill_from_rules(self, text: str, lower: str) -> None:
+        if not self.context.patient_name:
+            name = extract_name(text)
+            if name:
+                self.context.patient_name = name
+
+        if not self.context.appointment_date:
+            parsed_date = extract_date(text)
+            if not parsed_date:
+                parsed_date = llm_extract(
+                    llm_client=self.llm_client,
+                    enable_llm_polish=self.enable_llm_polish,
+                    field_name="date",
+                    text=text,
+                )
+            if parsed_date:
+                self.context.appointment_date = parsed_date
+
+        if not self.context.appointment_time:
+            parsed_time = extract_time(text)
+            if not parsed_time:
+                parsed_time = llm_extract(
+                    llm_client=self.llm_client,
+                    enable_llm_polish=self.enable_llm_polish,
+                    field_name="time",
+                    text=text,
+                )
+            if parsed_time:
+                self.context.appointment_time = parsed_time
+
+        if self.booking_for_self is True:
+            if self.known_patient_name and not self.context.patient_name:
+                self.context.patient_name = self.known_patient_name
+            if not self.context.phone_number and not self._is_telegram_channel():
+                chat_phone = self._normalize_phone(self.chat_phone_number or "")
+                if chat_phone:
+                    self.context.phone_number = chat_phone
+
+    def _apply_clinic_prefill_from_text(self, text: str, lower: str) -> None:
+        if self.context.clinic_id:
+            return
+        clinic = self._select_clinic(text, lower)
+        if not clinic and self.context.clinic_name:
+            clinic_lower = self.context.clinic_name.lower()
+            if not self.clinic_options_cache:
+                self.clinic_options_cache = self._db_clinic_options() if self.scheduling_repository and self.doctor_id else []
+            for option in self.clinic_options_cache:
+                name = str(option.get("name") or "").lower()
+                if clinic_lower and clinic_lower in name:
+                    clinic = option
+                    break
+        if clinic:
+            self.context.clinic_id = clinic["id"]
+            self.context.clinic_name = clinic["name"]
+            self.context.clinic_address = clinic["address"]
+            self.date_options_cache = []
+            self.time_options_cache = []
+            self.time_hour_options_cache = []
+            self.time_slot_options_cache = []
+            self.time_window_labels_cache = []
+            self.selected_time_hour = None
+            self.selected_time_period = None
+
+    def _route_after_init_prefill(self) -> Optional[str]:
+        # If actor is unknown, keep current behavior and ask booking-for.
+        if self.booking_for_self is None:
+            return None
+
+        if not self.context.patient_name:
+            self.state = "ASK_NAME"
+            return self._with_back(self._msg("ask_name"))
+
+        if not self.context.phone_number:
+            self.state = "ASK_PHONE"
+            return self._with_back(self._ask_phone_prompt())
+
+        if not self.context.clinic_id:
+            self.state = "ASK_CLINIC"
+            return self._clinic_prompt()
+
+        if not self.context.appointment_date:
+            date_options = self._date_options()
+            if not date_options:
+                self.state = "ASK_CLINIC"
+                return self._msg("no_date_available") + "\n" + self._clinic_prompt()
+            self.state = "ASK_DATE"
+            return self._date_options_prompt(date_options)
+
+        if not self._load_time_options(limit=60):
+            self.state = "ASK_DATE"
+            return self._msg("no_time_available")
+
+        if self.context.appointment_time:
+            parsed_time = extract_time(self.context.appointment_time)
+            if parsed_time and self._is_available_time(parsed_time):
+                self.context.appointment_time = parsed_time
+                self.state = "CONFIRM"
+                return self._msg("confirm_summary", **self._display_context())
+            self.context.appointment_time = None
+
+        self.state = "ASK_TIME"
+        return self._initial_time_prompt()
 
     def _db_clinic_options(self) -> list[dict]:
         if not self.scheduling_repository or not self.doctor_id:

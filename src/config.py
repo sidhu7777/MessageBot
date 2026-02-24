@@ -23,7 +23,7 @@ class Settings:
     log_level: str = "INFO"
 
     llm_provider: str = "ollama"
-    llm_model: str = "qwen3:0.6b"
+    llm_model: str = "qwen3:1.7b"
     ollama_base_url: str = "http://127.0.0.1:11434"
     llm_timeout_seconds: float = 30.0
     ollama_auto_start: bool = True
@@ -66,9 +66,6 @@ class Settings:
     session_ttl_minutes: int = 120
     max_message_chars: int = 1500
     automation_enabled: bool = True
-    slot_automation_enabled: bool = True
-    slot_generation_interval_seconds: int = 300
-    slot_generation_days_ahead: int = 2
     doctor_reminder_enabled: bool = True
     doctor_reminder_interval_seconds: int = 60
     doctor_reminder_lead_minutes: int = 10
@@ -82,7 +79,7 @@ def load_settings() -> Settings:
         app_name=os.getenv("APP_NAME", "whatsapp-appointment-bot"),
         log_level=os.getenv("LOG_LEVEL", "INFO"),
         llm_provider=os.getenv("LLM_PROVIDER", "ollama"),
-        llm_model=os.getenv("LLM_MODEL", "qwen3:0.6b"),
+        llm_model=os.getenv("LLM_MODEL", "qwen3:1.7b"),
         ollama_base_url=os.getenv("OLLAMA_BASE_URL", "http://127.0.0.1:11434"),
         llm_timeout_seconds=float(os.getenv("LLM_TIMEOUT_SECONDS", "33")),
         ollama_auto_start=_as_bool(os.getenv("OLLAMA_AUTO_START", "true")),
@@ -125,9 +122,6 @@ def load_settings() -> Settings:
         session_ttl_minutes=int(os.getenv("SESSION_TTL_MINUTES", "120")),
         max_message_chars=int(os.getenv("MAX_MESSAGE_CHARS", "1500")),
         automation_enabled=_as_bool(os.getenv("AUTOMATION_ENABLED", "true")),
-        slot_automation_enabled=_as_bool(os.getenv("SLOT_AUTOMATION_ENABLED", "true")),
-        slot_generation_interval_seconds=int(os.getenv("SLOT_GENERATION_INTERVAL_SECONDS", "300")),
-        slot_generation_days_ahead=int(os.getenv("SLOT_GENERATION_DAYS_AHEAD", "2")),
         doctor_reminder_enabled=_as_bool(os.getenv("DOCTOR_REMINDER_ENABLED", "true")),
         doctor_reminder_interval_seconds=int(os.getenv("DOCTOR_REMINDER_INTERVAL_SECONDS", "60")),
         doctor_reminder_lead_minutes=int(os.getenv("DOCTOR_REMINDER_LEAD_MINUTES", "10")),

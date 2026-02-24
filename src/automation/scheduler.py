@@ -3,6 +3,7 @@ import logging
 import os
 import threading
 import time
+import uuid
 from datetime import datetime
 from typing import Callable, Optional
 
@@ -10,7 +11,6 @@ from openpyxl import Workbook
 from openpyxl.styles import Font
 
 from src.repositories.booking_repository import BookingRepository
-from src.repositories.scheduling_repository import SchedulingRepository
 
 
 LOGGER = logging.getLogger(__name__)
@@ -81,42 +81,29 @@ class AutomationScheduler:
         self,
         *,
         booking_repository: Optional[BookingRepository],
-        scheduling_repository: Optional[SchedulingRepository],
-        send_message_fn: Callable[[str, str], None],
+        send_message_fn: Callable[[str, str], object],
         send_document_fn: Optional[Callable[[str, str, str], None]] = None,
         source_whatsapp_number: str = "",
         enabled: bool = True,
-        slot_automation_enabled: bool = True,
-        slot_generation_interval_seconds: int = 300,
-        slot_generation_days_ahead: int = 30,
         doctor_reminder_enabled: bool = True,
         doctor_reminder_interval_seconds: int = 60,
         doctor_reminder_lead_minutes: int = 10,
         doctor_reminder_window_seconds: int = 30,
     ) -> None:
         self._booking_repository = booking_repository
-        self._scheduling_repository = scheduling_repository
         self._send_message_fn = send_message_fn
         self._send_document_fn = send_document_fn
         self._source_whatsapp_number = self._normalize_whatsapp_number(source_whatsapp_number)
         self._enabled = enabled
-        self._slot_automation_enabled = slot_automation_enabled
-        self._slot_generation_interval_seconds = max(30, int(slot_generation_interval_seconds))
-        self._slot_generation_days_ahead = max(1, int(slot_generation_days_ahead))
         self._doctor_reminder_enabled = doctor_reminder_enabled
         self._doctor_reminder_interval_seconds = max(30, int(doctor_reminder_interval_seconds))
         self._doctor_reminder_lead_minutes = max(1, int(doctor_reminder_lead_minutes))
         self._doctor_reminder_window_seconds = max(5, int(doctor_reminder_window_seconds))
         self._stop = threading.Event()
         self._threads: list[threading.Thread] = []
+        self._worker_id = f"scheduler-{os.getpid()}-{uuid.uuid4().hex[:8]}"
         self._metrics_lock = threading.Lock()
         self._metrics = {
-            "slot_runs": 0,
-            "slot_errors": 0,
-            "slot_generated_for_schedules": 0,
-            "slot_rebuild_runs": 0,
-            "slot_rebuild_processed": 0,
-            "slot_rebuild_deleted": 0,
             "reminder_runs": 0,
             "reminder_errors": 0,
             "reminder_sent": 0,
@@ -133,14 +120,6 @@ class AutomationScheduler:
     def start(self) -> None:
         if not self._enabled or self._threads:
             return
-        if (
-            self._slot_automation_enabled
-            and self._scheduling_repository
-            and not self._scheduling_repository._use_appointment_mode()
-        ):
-            thread = threading.Thread(target=self._slot_loop, name="slot-automation", daemon=True)
-            thread.start()
-            self._threads.append(thread)
         if self._doctor_reminder_enabled and self._booking_repository:
             thread = threading.Thread(target=self._reminder_loop, name="doctor-reminder", daemon=True)
             thread.start()
@@ -158,112 +137,6 @@ class AutomationScheduler:
                 **self._metrics,
                 "alive_workers": sum(1 for t in self._threads if t.is_alive()),
             }
-
-    def _slot_loop(self) -> None:
-        while not self._stop.is_set():
-            started = time.time()
-            try:
-                self._run_slot_generation_once()
-            except Exception as exc:
-                LOGGER.exception("Slot automation run failed: %s", exc)
-                self._inc_metric("slot_errors", 1)
-            elapsed = max(0.0, time.time() - started)
-            sleep_for = max(1.0, self._slot_generation_interval_seconds - elapsed)
-            self._stop.wait(sleep_for)
-
-    def _run_slot_generation_once(self) -> None:
-        if not self._scheduling_repository:
-            return
-        if self._scheduling_repository._use_appointment_mode():
-            return
-        self._scheduling_repository.ensure_rebuild_queue_schema()
-        # Best-effort DB guard; no-op when already present or temporarily blocked.
-        self._scheduling_repository.ensure_slot_dedup_index()
-        # One global cleanup first to stop growth from legacy duplicate rows.
-        global_deduped = self._scheduling_repository.deduplicate_all_future_available_slots(
-            days_ahead=self._slot_generation_days_ahead
-        )
-        self._run_schedule_rebuild_queue_once()
-        schedule_ids = self._scheduling_repository.list_active_schedule_ids(
-            days_ahead=self._slot_generation_days_ahead
-        )
-        generated = 0
-        deduplicated = 0
-        for schedule_id in schedule_ids:
-            if self._stop.is_set():
-                break
-            try:
-                deduplicated += self._scheduling_repository.deduplicate_future_available_slots(
-                    schedule_id=schedule_id,
-                    days_ahead=self._slot_generation_days_ahead,
-                )
-                self._scheduling_repository.generate_slots_for_schedule(
-                    schedule_id=schedule_id,
-                    days_ahead=self._slot_generation_days_ahead,
-                )
-                deduplicated += self._scheduling_repository.deduplicate_future_available_slots(
-                    schedule_id=schedule_id,
-                    days_ahead=self._slot_generation_days_ahead,
-                )
-                generated += 1
-            except Exception as exc:
-                LOGGER.warning(
-                    "Slot generation failed for schedule_id=%s days_ahead=%s error=%s",
-                    schedule_id,
-                    self._slot_generation_days_ahead,
-                    exc,
-                )
-                self._inc_metric("slot_errors", 1)
-        self._inc_metric("slot_runs", 1)
-        self._inc_metric("slot_generated_for_schedules", generated)
-        LOGGER.info(
-            "Slot automation run completed schedules=%d generated=%d deduplicated=%d global_deduplicated=%d days_ahead=%d",
-            len(schedule_ids),
-            generated,
-            deduplicated,
-            global_deduped,
-            self._slot_generation_days_ahead,
-        )
-
-    def _run_schedule_rebuild_queue_once(self) -> None:
-        if not self._scheduling_repository:
-            return
-        requests = self._scheduling_repository.list_pending_schedule_rebuilds(limit=100)
-        processed = 0
-        deleted = 0
-        for request in requests:
-            if self._stop.is_set():
-                break
-            try:
-                dropped = self._scheduling_repository.cleanup_future_available_slots(request.schedule_id)
-                self._scheduling_repository.generate_slots_for_schedule(
-                    schedule_id=request.schedule_id,
-                    days_ahead=self._slot_generation_days_ahead,
-                )
-                dropped += self._scheduling_repository.deduplicate_future_available_slots(
-                    schedule_id=request.schedule_id,
-                    days_ahead=self._slot_generation_days_ahead,
-                )
-                self._scheduling_repository.clear_schedule_rebuild_request(request.schedule_id)
-                processed += 1
-                deleted += dropped
-            except Exception as exc:
-                LOGGER.warning(
-                    "Schedule rebuild failed schedule_id=%s error=%s",
-                    request.schedule_id,
-                    exc,
-                )
-                self._inc_metric("slot_errors", 1)
-        self._inc_metric("slot_rebuild_runs", 1)
-        self._inc_metric("slot_rebuild_processed", processed)
-        self._inc_metric("slot_rebuild_deleted", deleted)
-        if requests:
-            LOGGER.info(
-                "Schedule rebuild queue processed queued=%d rebuilt=%d deleted_available=%d",
-                len(requests),
-                processed,
-                deleted,
-            )
 
     def _reminder_loop(self) -> None:
         while not self._stop.is_set():
@@ -384,33 +257,41 @@ class AutomationScheduler:
     def _run_event_notifications_once(self) -> None:
         if not self._booking_repository:
             return
-        events = self._booking_repository.list_pending_notification_events(limit=200)
+        events = self._booking_repository.claim_pending_notification_events(
+            limit=200,
+            worker_id=self._worker_id,
+        )
         sent = 0
         failed = 0
+        max_attempts = 5
         for event in events:
             try:
                 to_number = self._notification_destination(event)
                 if not to_number:
-                    self._booking_repository.mark_notification_event_status(
+                    self._booking_repository.mark_notification_event_retry(
                         notification_id=event.notification_id,
-                        status="FAILED",
                         error_text="No patient destination (phone/chat id) available.",
+                        backoff_seconds=120,
+                        max_attempts=max_attempts,
                     )
                     failed += 1
                     continue
 
                 text = self._event_message_text(event)
-                self._send_message_fn(to_number, text)
+                provider_sid = self._send_message_fn(to_number, text)
                 self._booking_repository.mark_notification_event_status(
                     notification_id=event.notification_id,
                     status="SENT",
+                    provider_message_sid=str(provider_sid or ""),
                 )
                 sent += 1
             except Exception as exc:
-                self._booking_repository.mark_notification_event_status(
+                backoff = min(1800, 60 * (2 ** max(0, int(event.attempt_count))))
+                self._booking_repository.mark_notification_event_retry(
                     notification_id=event.notification_id,
-                    status="FAILED",
                     error_text=str(exc),
+                    backoff_seconds=backoff,
+                    max_attempts=max_attempts,
                 )
                 failed += 1
         self._inc_metric("event_runs", 1)

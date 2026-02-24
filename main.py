@@ -4,6 +4,7 @@ import os
 import time
 import threading
 import uuid
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
 from urllib import error as urlerror
 from urllib import request as urlrequest
 from threading import Lock
@@ -67,11 +68,17 @@ _user_locks_guard = Lock()
 
 SID_STORE_PATH = os.path.join("data", "seen_message_sids.jsonl")
 sid_store = PersistentMessageSidStore(path=SID_STORE_PATH, max_entries=50000)
+_overflow_poll_stop = threading.Event()
+_overflow_poll_thread: threading.Thread | None = None
+_overflow_worker_id = f"overflow-{uuid.uuid4().hex[:10]}"
+_overflow_turn_map: dict[str, int] = {}
+_overflow_turn_map_lock = Lock()
+_process_executor = ThreadPoolExecutor(max_workers=max(4, settings.queue_worker_count * 2))
 
 turn_processor = TurnQueueProcessor(
     worker_count=max(1, settings.queue_worker_count),
     max_queue_size=max(1, settings.queue_max_size),
-    process_fn=lambda from_number, body: _process_turn(from_number, body),
+    process_fn=lambda from_number, body: _process_turn_with_timeout(from_number, body),
     send_fn=lambda to_number, reply, post_state, inbound_sid: _send_channel_response(
         to_number=to_number,
         reply_text=reply,
@@ -80,10 +87,12 @@ turn_processor = TurnQueueProcessor(
         inbound_sid=inbound_sid,
     ),
     retry_attempts=max(0, settings.queue_retry_attempts),
+    timeout_fn=lambda task, exc: _handle_turn_timeout(task, exc),
+    on_success=lambda task: _on_turn_success(task),
+    on_failure=lambda task, exc, will_retry, backoff: _on_turn_failure(task, exc, will_retry, backoff),
 )
 automation_scheduler = AutomationScheduler(
     booking_repository=booking_repository if settings.enable_db_booking else None,
-    scheduling_repository=scheduling_repository if settings.enable_db_booking else None,
     send_message_fn=lambda to_number, body: _send_plain_channel_message(to_number=to_number, body=body),
     send_document_fn=lambda to_number, file_path, caption: _send_plain_channel_document(
         to_number=to_number,
@@ -92,9 +101,6 @@ automation_scheduler = AutomationScheduler(
     ),
     source_whatsapp_number=settings.twilio_whatsapp_from,
     enabled=settings.automation_enabled,
-    slot_automation_enabled=False,
-    slot_generation_interval_seconds=settings.slot_generation_interval_seconds,
-    slot_generation_days_ahead=settings.slot_generation_days_ahead,
     doctor_reminder_enabled=settings.doctor_reminder_enabled,
     doctor_reminder_interval_seconds=settings.doctor_reminder_interval_seconds,
     doctor_reminder_lead_minutes=settings.doctor_reminder_lead_minutes,
@@ -116,13 +122,26 @@ app.include_router(
 
 @app.on_event("startup")
 async def startup_validation() -> None:
-    global _telegram_bot_username_runtime
+    global _telegram_bot_username_runtime, _overflow_poll_thread
     if settings.enable_db_booking and booking_repository:
         try:
             booking_repository.ensure_notification_schema()
         except Exception as exc:
             LOGGER.warning("Notification schema ensure failed: %s", exc)
+    if conversation_repository:
+        try:
+            conversation_repository.ensure_schema()
+        except Exception as exc:
+            LOGGER.warning("Conversation schema ensure failed: %s", exc)
     turn_processor.start()
+    if conversation_repository and (_overflow_poll_thread is None or not _overflow_poll_thread.is_alive()):
+        _overflow_poll_stop.clear()
+        _overflow_poll_thread = threading.Thread(
+            target=_overflow_turn_poll_loop,
+            name="overflow-turn-poller",
+            daemon=True,
+        )
+        _overflow_poll_thread.start()
     automation_scheduler.start()
     resolved_username = _resolve_telegram_bot_username()
     if resolved_username:
@@ -152,8 +171,12 @@ async def startup_validation() -> None:
 
 @app.on_event("shutdown")
 async def shutdown_workers() -> None:
+    _overflow_poll_stop.set()
+    if _overflow_poll_thread and _overflow_poll_thread.is_alive():
+        _overflow_poll_thread.join(timeout=2.0)
     automation_scheduler.stop()
     turn_processor.stop()
+    _process_executor.shutdown(wait=False, cancel_futures=True)
 
 
 @app.get("/health")
@@ -165,14 +188,24 @@ async def health() -> dict:
 async def health_queue() -> dict:
     queue_metrics = turn_processor.snapshot()
     dedup_db_size = 0
+    overflow_stats = {"queued": 0, "processing": 0, "dead": 0}
+    notification_stats = {"queued": 0, "dead": 0}
     if conversation_repository:
         try:
             dedup_db_size = conversation_repository.dedup_size()
+            overflow_stats = conversation_repository.overflow_queue_stats()
         except Exception:
             dedup_db_size = 0
+    if booking_repository:
+        try:
+            notification_stats = booking_repository.notification_queue_stats()
+        except Exception:
+            notification_stats = {"queued": 0, "dead": 0}
     return {
         "status": "ok",
         "queue": queue_metrics,
+        "overflow_queue": overflow_stats,
+        "notification_queue": notification_stats,
         "dedup": {
             "file_size": sid_store.size(),
             "db_size": dedup_db_size,
@@ -259,7 +292,7 @@ async def webhook(request: Request):
             if not enqueued:
                 busy_msg = _busy_message(fsm.response_language, pre_state)
                 _send_plain_channel_message(to_number=from_number, body=busy_msg, inbound_sid=inbound_sid)
-                _schedule_overflow_requeue(task)
+                _enqueue_overflow_turn(task)
                 LOGGER.warning(
                     "Queue full. Busy message sent sid=%s from=%s backlog=%d",
                     inbound_sid or "-",
@@ -298,6 +331,9 @@ async def webhook(request: Request):
         post_state,
         len(reply),
     )
+    if not (reply or "").strip():
+        LOGGER.info("Direct webhook reply suppressed sid=%s from=%s (empty/silent response).", inbound_sid or "-", from_number)
+        return PlainTextResponse("", status_code=200)
     twiml = MessagingResponse()
     twiml.message(reply)
     return PlainTextResponse(str(twiml), media_type="application/xml")
@@ -354,7 +390,7 @@ async def telegram_webhook(request: Request):
         if not enqueued:
             busy_msg = _busy_message(fsm.response_language, pre_state)
             _send_plain_channel_message(to_number=from_number, body=busy_msg, inbound_sid=inbound_sid)
-            _schedule_overflow_requeue(task)
+            _enqueue_overflow_turn(task)
             LOGGER.warning(
                 "Queue full. Busy message sent sid=%s from=%s backlog=%d",
                 inbound_sid or "-",
@@ -381,7 +417,10 @@ async def telegram_webhook(request: Request):
         LOGGER.warning("Falling back to direct Telegram response after queue failure.")
         reply, post_state = _process_turn(from_number, text)
         reply = reply[: settings.max_message_chars]
-        _send_plain_channel_message(to_number=from_number, body=reply, inbound_sid=inbound_sid)
+        if (reply or "").strip():
+            _send_plain_channel_message(to_number=from_number, body=reply, inbound_sid=inbound_sid)
+        else:
+            LOGGER.info("Telegram fallback reply suppressed sid=%s from=%s (empty/silent response).", inbound_sid or "-", from_number)
         elapsed_ms = int((time.perf_counter() - started) * 1000)
         LOGGER.info(
             "Telegram fallback reply generated in %dms sid=%s from=%s state=%s->%s chars=%d",
@@ -413,6 +452,21 @@ async def twilio_status_callback(request: Request):
         err_code,
         err_msg,
     )
+    if booking_repository:
+        try:
+            booking_repository.upsert_delivery_status(
+                provider="twilio",
+                provider_message_sid=str(msg_sid),
+                channel="whatsapp",
+                message_status=str(msg_status),
+                to_number=str(to_number),
+                from_number=str(from_number),
+                error_code=str(err_code),
+                error_message=str(err_msg),
+                payload_json=json.dumps(dict(form), ensure_ascii=False),
+            )
+        except Exception as exc:
+            LOGGER.warning("Failed to persist Twilio callback sid=%s error=%s", msg_sid, exc)
     return PlainTextResponse("", status_code=200)
 
 
@@ -424,6 +478,137 @@ def _process_turn(from_number: str, body: str) -> Tuple[str, str]:
         reply = reply[: settings.max_message_chars]
         session_manager.save(from_number)
         return reply, fsm.state
+
+
+def _process_turn_with_timeout(from_number: str, body: str) -> Tuple[str, str]:
+    timeout_seconds = max(0.5, float(settings.processing_timeout_seconds))
+    future = _process_executor.submit(_process_turn, from_number, body)
+    try:
+        return future.result(timeout=timeout_seconds)
+    except FutureTimeoutError as exc:
+        future.cancel()
+        raise TimeoutError(f"Turn processing timeout after {timeout_seconds:.1f}s") from exc
+
+
+def _timeout_message(language: str, state: str) -> str:
+    if language == "hi":
+        return "Abhi processing mein delay ho raha hai. Kripaya thoda intezar karein, hum jaldi reply karenge."
+    if language == "hinglish":
+        return "Processing mein delay ho raha hai. Please wait, hum jaldi response denge."
+    return "We are facing a delay while processing your request. Please wait, we will respond shortly."
+
+
+def _handle_turn_timeout(task: TurnTask, exc: Exception) -> None:
+    try:
+        fsm = session_manager.get_or_create(task.from_number)
+        timeout_msg = _timeout_message(fsm.response_language, task.pre_state)
+        _send_plain_channel_message(
+            to_number=task.from_number,
+            body=timeout_msg,
+            inbound_sid=task.inbound_sid,
+        )
+    except Exception:
+        LOGGER.exception("Failed timeout-safe message sid=%s error=%s", task.inbound_sid or "-", exc)
+
+
+def _track_overflow_task(task: TurnTask, queue_id: int) -> None:
+    sid = (task.inbound_sid or "").strip()
+    if not sid:
+        return
+    with _overflow_turn_map_lock:
+        _overflow_turn_map[sid] = int(queue_id)
+
+
+def _pop_overflow_queue_id(task: TurnTask) -> int:
+    sid = (task.inbound_sid or "").strip()
+    if not sid:
+        return 0
+    with _overflow_turn_map_lock:
+        return int(_overflow_turn_map.pop(sid, 0) or 0)
+
+
+def _get_overflow_queue_id(task: TurnTask) -> int:
+    sid = (task.inbound_sid or "").strip()
+    if not sid:
+        return 0
+    with _overflow_turn_map_lock:
+        return int(_overflow_turn_map.get(sid, 0) or 0)
+
+
+def _on_turn_success(task: TurnTask) -> None:
+    queue_id = _pop_overflow_queue_id(task)
+    if queue_id and conversation_repository:
+        try:
+            conversation_repository.mark_overflow_turn_done(queue_id=queue_id)
+        except Exception:
+            LOGGER.exception("Failed to mark overflow turn done sid=%s queue_id=%s", task.inbound_sid or "-", queue_id)
+
+
+def _on_turn_failure(task: TurnTask, exc: Exception, will_retry: bool, backoff_seconds: float) -> None:
+    queue_id = _get_overflow_queue_id(task)
+    if not queue_id or not conversation_repository:
+        return
+    try:
+        if will_retry:
+            # Keep row as PROCESSING while in-memory retry is in progress.
+            return
+        # Final failure: persist dead and clear in-memory map.
+        _pop_overflow_queue_id(task)
+        conversation_repository.mark_overflow_turn_retry(
+            queue_id=queue_id,
+            error_text=str(exc),
+            backoff_seconds=1,
+            max_attempts=1,
+        )
+    except Exception:
+        LOGGER.exception("Failed to update overflow retry state sid=%s queue_id=%s", task.inbound_sid or "-", queue_id)
+
+
+def _enqueue_overflow_turn(task: TurnTask) -> None:
+    if not conversation_repository:
+        _schedule_overflow_requeue(task)
+        return
+    try:
+        conversation_repository.enqueue_overflow_turn(
+            inbound_sid=task.inbound_sid,
+            from_number=task.from_number,
+            body=task.body,
+            pre_state=task.pre_state,
+        )
+    except Exception as exc:
+        LOGGER.warning("Overflow DB enqueue failed sid=%s error=%s; falling back to in-memory requeue.", task.inbound_sid or "-", exc)
+        _schedule_overflow_requeue(task)
+
+
+def _overflow_turn_poll_loop() -> None:
+    if not conversation_repository:
+        return
+    claim_size = max(1, settings.queue_worker_count)
+    while not _overflow_poll_stop.is_set():
+        try:
+            rows = conversation_repository.claim_overflow_turns(limit=claim_size, worker_id=_overflow_worker_id)
+            if not rows:
+                _overflow_poll_stop.wait(0.8)
+                continue
+            for row in rows:
+                task = TurnTask(
+                    from_number=row.from_number,
+                    body=row.body,
+                    inbound_sid=row.inbound_sid,
+                    pre_state=row.pre_state,
+                    attempt=max(0, int(row.attempt_count)),
+                )
+                if turn_processor.submit(task):
+                    _track_overflow_task(task, row.queue_id)
+                    continue
+                conversation_repository.release_overflow_turn(
+                    queue_id=row.queue_id,
+                    reason="Runtime queue still full",
+                    backoff_seconds=max(1, int(settings.queue_overflow_requeue_backoff_seconds)),
+                )
+        except Exception as exc:
+            LOGGER.warning("Overflow queue poll failed error=%s", exc)
+            _overflow_poll_stop.wait(1.0)
 
 
 def _get_user_lock(user_id: str) -> Lock:
@@ -464,6 +649,9 @@ def _busy_message(language: str, state: str) -> str:
 
 
 def _send_channel_response(to_number: str, reply_text: str, fsm_state: str, fsm, inbound_sid: str = "") -> None:
+    if not (reply_text or "").strip():
+        LOGGER.info("Reply suppressed for sid=%s to=%s (empty/silent response).", inbound_sid or "-", to_number)
+        return
     if (to_number or "").strip().lower().startswith("telegram:"):
         _send_plain_channel_message(to_number=to_number, body=reply_text, inbound_sid=inbound_sid)
         return
@@ -514,10 +702,10 @@ def _send_whatsapp_response(to_number: str, reply_text: str, fsm_state: str, fsm
         raise
 
 
-def _send_plain_channel_message(to_number: str, body: str, inbound_sid: str = "") -> None:
+def _send_plain_channel_message(to_number: str, body: str, inbound_sid: str = "") -> str:
     if (to_number or "").strip().lower().startswith("telegram:"):
         _send_telegram_message(to_number=to_number, body=body, inbound_sid=inbound_sid)
-        return
+        return "telegram"
     sid = _send_with_retries(
         {
             "from_": settings.twilio_whatsapp_from,
@@ -526,6 +714,7 @@ def _send_plain_channel_message(to_number: str, body: str, inbound_sid: str = ""
         }
     )
     LOGGER.info("Sent safe processing message sid=%s inbound_sid=%s to=%s", sid, inbound_sid or "-", to_number)
+    return sid
 
 def _send_plain_channel_document(to_number: str, file_path: str, caption: str = "", inbound_sid: str = "") -> None:
     if (to_number or "").strip().lower().startswith("telegram:"):

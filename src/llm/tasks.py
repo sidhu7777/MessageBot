@@ -6,6 +6,49 @@ from typing import Any, Dict, Optional
 from src.llm.client import LLMClient
 
 
+def llm_extract_booking_prefill(
+    llm_client: LLMClient,
+    enable_llm_polish: bool,
+    text: str,
+) -> Dict[str, str]:
+    if not enable_llm_polish:
+        return {}
+    try:
+        today_str = date.today().isoformat()
+        system = (
+            "Extract booking prefill fields from first user message for a medical assistant. "
+            "Return strict JSON only with keys: "
+            "{\"patient_name\":\"\",\"appointment_date\":\"\",\"appointment_time\":\"\",\"clinic_name\":\"\",\"booking_for\":\"self|other|unknown\"}. "
+            f"Today's date is {today_str}. "
+            "If a field is missing, keep it as empty string."
+        )
+        raw = llm_client.generate(system, f"Text: {text}").strip()
+        parsed = parse_first_json_object(raw)
+        if not parsed:
+            return {}
+
+        patient_name = str(parsed.get("patient_name", "") or "").strip()
+        appointment_date = str(parsed.get("appointment_date", "") or "").strip()
+        appointment_time = str(parsed.get("appointment_time", "") or "").strip()
+        clinic_name = str(parsed.get("clinic_name", "") or "").strip()
+        booking_for = str(parsed.get("booking_for", "") or "").strip().lower()
+
+        out: Dict[str, str] = {}
+        if patient_name:
+            out["patient_name"] = patient_name
+        if re.fullmatch(r"\d{4}-\d{2}-\d{2}", appointment_date):
+            out["appointment_date"] = appointment_date
+        if re.fullmatch(r"\d{2}:\d{2}", appointment_time):
+            out["appointment_time"] = appointment_time
+        if clinic_name:
+            out["clinic_name"] = clinic_name
+        if booking_for in {"self", "other", "unknown"}:
+            out["booking_for"] = booking_for
+        return out
+    except Exception:
+        return {}
+
+
 def llm_extract(
     llm_client: LLMClient,
     enable_llm_polish: bool,
