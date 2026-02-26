@@ -84,7 +84,7 @@ class ConversationRepository:
                     pre_state VARCHAR(64) NOT NULL,
                     status VARCHAR(20) NOT NULL DEFAULT 'PENDING',
                     attempt_count INT NOT NULL DEFAULT 0,
-                    next_retry_at DATETIME NOT NULL DEFAULT UTC_TIMESTAMP(),
+                    next_retry_at DATETIME NULL DEFAULT NULL,
                     locked_at DATETIME NULL,
                     lock_owner VARCHAR(80) NULL,
                     last_error TEXT NULL,
@@ -471,3 +471,4 @@ class ConversationRepository:
         finally:
             cur.close()
             conn.close()
+

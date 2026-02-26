@@ -23,7 +23,7 @@ class Settings:
     log_level: str = "INFO"
 
     llm_provider: str = "ollama"
-    llm_model: str = "qwen3:1.7b"
+    llm_model: str = "qwen3:0.6b"
     ollama_base_url: str = "http://127.0.0.1:11434"
     llm_timeout_seconds: float = 30.0
     ollama_auto_start: bool = True
@@ -79,7 +79,7 @@ def load_settings() -> Settings:
         app_name=os.getenv("APP_NAME", "whatsapp-appointment-bot"),
         log_level=os.getenv("LOG_LEVEL", "INFO"),
         llm_provider=os.getenv("LLM_PROVIDER", "ollama"),
-        llm_model=os.getenv("LLM_MODEL", "qwen3:1.7b"),
+        llm_model=os.getenv("LLM_MODEL", "qwen3:0.6b"),
         ollama_base_url=os.getenv("OLLAMA_BASE_URL", "http://127.0.0.1:11434"),
         llm_timeout_seconds=float(os.getenv("LLM_TIMEOUT_SECONDS", "33")),
         ollama_auto_start=_as_bool(os.getenv("OLLAMA_AUTO_START", "true")),

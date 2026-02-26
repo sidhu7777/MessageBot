@@ -139,7 +139,7 @@ class BookingRepository:
                 )
             if "next_retry_at" not in log_cols:
                 cur.execute(
-                    "ALTER TABLE appointment_notification_log ADD COLUMN next_retry_at DATETIME NOT NULL DEFAULT UTC_TIMESTAMP()"
+                    "ALTER TABLE appointment_notification_log ADD COLUMN next_retry_at DATETIME NULL"
                 )
             if "locked_at" not in log_cols:
                 cur.execute(
@@ -190,6 +190,23 @@ class BookingRepository:
                 ) ENGINE=InnoDB
                 """
             )
+            # ── doctor_remainder_queue: add lead_minutes if missing ──────────
+            cur.execute(
+                "SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES "
+                "WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='doctor_remainder_queue'"
+            )
+            if cur.fetchone()[0]:
+                cur.execute(
+                    "SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS "
+                    "WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='doctor_remainder_queue'"
+                )
+                drq_cols = {str(r[0]).lower() for r in cur.fetchall()}
+                if "lead_minutes" not in drq_cols:
+                    cur.execute(
+                        "ALTER TABLE doctor_remainder_queue "
+                        "ADD COLUMN lead_minutes INT NOT NULL DEFAULT 10"
+                    )
+
             conn.commit()
         finally:
             cur.close()
@@ -763,6 +780,62 @@ class BookingRepository:
             cur.close()
             conn.close()
 
+    def _compute_slot_position(
+        self,
+        cur,
+        doctor_id: int,
+        clinic_id: Optional[int],
+        slot_date,
+        slot_time,
+    ) -> Optional[int]:
+        """Return the 1-based position of slot_time in the doctor's schedule for that date,
+        based purely on schedule start_time + slot_duration (independent of other bookings)."""
+        slot_time_parsed = self._parse_time_value(slot_time)
+        if slot_time_parsed is None:
+            return None
+        params: list = [doctor_id, slot_date, slot_date, slot_date]
+        clinic_sql = ""
+        if clinic_id is not None:
+            clinic_sql = "AND clinic_id = %s"
+            params.insert(1, clinic_id)
+        cur.execute(
+            f"""
+            SELECT start_time, end_time, slot_duration
+            FROM doctor_clinic_schedule
+            WHERE doctor_id = %s
+              {clinic_sql}
+              AND effective_from <= %s
+              AND effective_to >= %s
+              AND day_of_week = MOD(WEEKDAY(%s) + 1, 7)
+            ORDER BY start_time
+            """,
+            tuple(params),
+        )
+        schedules = cur.fetchall()
+        if not schedules:
+            return None
+        req_dt = datetime.combine(date.today(), slot_time_parsed)
+        cumulative = 0
+        for sch in schedules:
+            s = self._parse_time_value(sch.get("start_time"))
+            e = self._parse_time_value(sch.get("end_time"))
+            d = int(sch.get("slot_duration") or 0)
+            if not s or not e or d <= 0:
+                continue
+            start_dt = datetime.combine(date.today(), s)
+            end_dt = datetime.combine(date.today(), e)
+            total_minutes = int((end_dt - start_dt).total_seconds() // 60)
+            slots_in_schedule = total_minutes // d
+            if req_dt < start_dt or req_dt >= end_dt:
+                cumulative += slots_in_schedule
+                continue
+            diff_minutes = int((req_dt - start_dt).total_seconds() // 60)
+            if diff_minutes % d != 0:
+                # Not on a valid slot boundary — fall back to None
+                return None
+            return cumulative + (diff_minutes // d) + 1
+        return None
+
     def get_daily_queue_number(self, appointment_id: int) -> Optional[int]:
         if not appointment_id:
             return None
@@ -773,7 +846,7 @@ class BookingRepository:
             if self._use_appointment_mode():
                 cur.execute(
                     f"""
-                    SELECT doctor_id, appointment_date, start_time
+                    SELECT doctor_id, clinic_id, appointment_date, start_time
                     FROM {appointment_table}
                     WHERE appointment_id = %s
                     LIMIT 1
@@ -784,27 +857,16 @@ class BookingRepository:
                 if not row:
                     return None
                 doctor_id = int(row["doctor_id"]) if row.get("doctor_id") is not None else None
+                clinic_id = int(row["clinic_id"]) if row.get("clinic_id") is not None else None
                 slot_date = row.get("appointment_date")
                 slot_time = row.get("start_time")
                 if doctor_id is None or slot_date is None or slot_time is None:
                     return None
-                cur.execute(
-                    f"""
-                    SELECT COUNT(*) AS queue_number
-                    FROM {appointment_table}
-                    WHERE doctor_id = %s
-                      AND appointment_date = %s
-                      AND status IN ('BOOKED', 'PENDING', 'CONFIRMED')
-                      AND start_time <= %s
-                    """,
-                    (doctor_id, slot_date, slot_time),
-                )
-                q = cur.fetchone()
-                return int(q["queue_number"]) if q and q.get("queue_number") is not None else None
+                return self._compute_slot_position(cur, doctor_id, clinic_id, slot_date, slot_time)
 
             cur.execute(
                 f"""
-                SELECT a.doctor_id, s.slot_date, s.slot_time
+                SELECT a.doctor_id, a.clinic_id, s.slot_date, s.slot_time
                 FROM {appointment_table} a
                 JOIN slots s ON s.slot_id = a.slot_id
                 WHERE a.appointment_id = %s
@@ -816,24 +878,12 @@ class BookingRepository:
             if not row:
                 return None
             doctor_id = int(row["doctor_id"]) if row.get("doctor_id") is not None else None
+            clinic_id = int(row["clinic_id"]) if row.get("clinic_id") is not None else None
             slot_date = row.get("slot_date")
             slot_time = row.get("slot_time")
             if doctor_id is None or slot_date is None or slot_time is None:
                 return None
-            cur.execute(
-                f"""
-                SELECT COUNT(*) AS queue_number
-                FROM {appointment_table} a
-                JOIN slots s ON s.slot_id = a.slot_id
-                WHERE a.doctor_id = %s
-                  AND s.slot_date = %s
-                  AND a.status IN ('BOOKED', 'PENDING', 'CONFIRMED')
-                  AND s.slot_time <= %s
-                """,
-                (doctor_id, slot_date, slot_time),
-            )
-            q = cur.fetchone()
-            return int(q["queue_number"]) if q and q.get("queue_number") is not None else None
+            return self._compute_slot_position(cur, doctor_id, clinic_id, slot_date, slot_time)
         finally:
             cur.close()
             conn.close()
@@ -910,6 +960,61 @@ class BookingRepository:
                     return str(row.get("full_name") or "").strip() or None
                 if len(target) >= 10 and len(patient_phone) >= 10 and patient_phone[-10:] == target[-10:]:
                     return str(row.get("full_name") or "").strip() or None
+            return None
+        finally:
+            cur.close()
+            conn.close()
+
+    def find_patient_name_by_chat_user_id(
+        self,
+        chat_user_id: str,
+        admin_id: Optional[int] = None,
+        doctor_id: Optional[int] = None,
+    ) -> Optional[str]:
+        """Look up patient full_name using telegram_chat_id stored in the patients table."""
+        target = self._normalize_chat_user_id(chat_user_id)
+        if not target:
+            return None
+        conn = self._connect()
+        cur = conn.cursor(dictionary=True)
+        try:
+            actual_admin_id = admin_id or self.default_admin_id()
+            if not actual_admin_id:
+                return None
+            # Detect which column holds Telegram chat id in the patients table.
+            cur.execute(
+                """
+                SELECT COLUMN_NAME
+                FROM INFORMATION_SCHEMA.COLUMNS
+                WHERE TABLE_SCHEMA = DATABASE()
+                  AND TABLE_NAME = 'patients'
+                """
+            )
+            cols = {str(r["COLUMN_NAME"]).lower() for r in cur.fetchall()}
+            candidate_cols = ["telegram_chat_id", "telegram_user_id", "user_id"]
+            chat_col = next((c for c in candidate_cols if c in cols), None)
+            if not chat_col:
+                return None
+            params: list[object] = [actual_admin_id, target]
+            doctor_sql = ""
+            if doctor_id is not None:
+                doctor_sql = "AND p.doctor_id = %s"
+                params.append(doctor_id)
+            cur.execute(
+                f"""
+                SELECT p.full_name
+                FROM patients p
+                WHERE p.admin_id = %s
+                  AND TRIM(COALESCE(p.{chat_col}, '')) = %s
+                  {doctor_sql}
+                ORDER BY p.patient_id DESC
+                LIMIT 1
+                """,
+                tuple(params),
+            )
+            row = cur.fetchone()
+            if row:
+                return str(row.get("full_name") or "").strip() or None
             return None
         finally:
             cur.close()
@@ -1326,18 +1431,6 @@ class BookingRepository:
                 ok = cur.rowcount > 0
                 if ok:
                     conn.commit()
-                    if (cancelled_by or "").strip().upper() == "DOCTOR":
-                        try:
-                            self.log_notification_event(
-                                appointment_id=appointment_id,
-                                event_type="CANCELLED",
-                                channel="auto",
-                                destination="",
-                                status="PENDING",
-                                admin_id=actual_admin_id,
-                            )
-                        except Exception:
-                            pass
                 else:
                     conn.rollback()
                 return ok
@@ -1397,18 +1490,6 @@ class BookingRepository:
                 )
 
             conn.commit()
-            if (cancelled_by or "").strip().upper() == "DOCTOR":
-                try:
-                    self.log_notification_event(
-                        appointment_id=appointment_id,
-                        event_type="CANCELLED",
-                        channel="auto",
-                        destination="",
-                        status="PENDING",
-                        admin_id=actual_admin_id,
-                    )
-                except Exception:
-                    pass
             return True
         except Exception:
             conn.rollback()
@@ -1598,18 +1679,6 @@ class BookingRepository:
                         (requested_slot_number, patient_id),
                     )
                 conn.commit()
-                if (rescheduled_by or "").strip().upper() == "DOCTOR":
-                    try:
-                        self.log_notification_event(
-                            appointment_id=appointment_id,
-                            event_type="RESCHEDULED",
-                            channel="auto",
-                            destination="",
-                            status="PENDING",
-                            admin_id=actual_admin_id,
-                        )
-                    except Exception:
-                        pass
                 return BookingResult(
                     True,
                     "Appointment rescheduled.",
@@ -1704,18 +1773,6 @@ class BookingRepository:
                     (new_slot_id, new_doctor_id, new_clinic_id, appointment_id, actual_admin_id),
                 )
             conn.commit()
-            if (rescheduled_by or "").strip().upper() == "DOCTOR":
-                try:
-                    self.log_notification_event(
-                        appointment_id=appointment_id,
-                        event_type="RESCHEDULED",
-                        channel="auto",
-                        destination="",
-                        status="PENDING",
-                        admin_id=actual_admin_id,
-                    )
-                except Exception:
-                    pass
             return BookingResult(
                 True,
                 "Appointment rescheduled.",
@@ -1774,6 +1831,7 @@ class BookingRepository:
             reason_value = getattr(context, "reason", None) or "General"
 
             patient_values: dict[str, object] = {}
+            booking_for_self = getattr(context, "booking_for_self", None)
             if "full_name" in patient_columns:
                 patient_values["full_name"] = context.patient_name
             if "admin_id" in patient_columns:
@@ -1788,7 +1846,7 @@ class BookingRepository:
                 if candidate in patient_columns:
                     chat_column = candidate
                     break
-            if chat_column and chat_user_id_value:
+            if chat_column and chat_user_id_value and booking_for_self is True:
                 patient_values[chat_column] = chat_user_id_value
             if "age" in patient_columns:
                 patient_values["age"] = context.age
@@ -1801,17 +1859,19 @@ class BookingRepository:
             if mode_column:
                 patient_values[mode_column] = mode_value
 
-            # Upsert-like patient lookup by name/admin.
-            cur.execute(
-                """
-                SELECT patient_id
-                FROM patients
-                WHERE full_name = %s AND admin_id = %s
-                ORDER BY patient_id
-                LIMIT 1
-                """,
-                (context.patient_name, actual_admin_id),
+            # Upsert-like patient lookup by name/admin, and phone when present.
+            lookup_sql = (
+                "SELECT patient_id "
+                "FROM patients "
+                "WHERE full_name = %s AND admin_id = %s"
             )
+            lookup_params: list[object] = [context.patient_name, actual_admin_id]
+            normalized_phone = self._normalize_phone(str(context.phone_number or ""))
+            if normalized_phone:
+                lookup_sql += " AND REPLACE(REPLACE(REPLACE(COALESCE(phone,''), ' ', ''), '-', ''), '+', '') LIKE %s"
+                lookup_params.append(f"%{normalized_phone[-10:]}")
+            lookup_sql += " ORDER BY patient_id LIMIT 1"
+            cur.execute(lookup_sql, tuple(lookup_params))
             patient_row = cur.fetchone()
             if patient_row:
                 patient_id = int(patient_row["patient_id"])
@@ -2016,24 +2076,46 @@ class BookingRepository:
                     slot_status = str(slot_owner.get("status") or "").upper()
                     slot_appointment_id = int(slot_owner["appointment_id"])
                     if slot_status in {"CANCELLED", "COMPLETED"}:
-                        cur.execute(
-                            f"""
-                            UPDATE {appointment_table}
-                            SET patient_id = %s,
-                                clinic_id = %s,
-                                admin_id = %s,
-                                end_time = %s,
-                                status = 'BOOKED'
-                            WHERE appointment_id = %s
-                            """,
-                            (
-                                patient_id,
-                                int(context.clinic_id),
-                                actual_admin_id,
-                                requested_end,
-                                slot_appointment_id,
-                            ),
-                        )
+                        if has_notify_chat_col:
+                            cur.execute(
+                                f"""
+                                UPDATE {appointment_table}
+                                SET patient_id = %s,
+                                    clinic_id = %s,
+                                    admin_id = %s,
+                                    end_time = %s,
+                                    notify_telegram_chat_id = %s,
+                                    status = 'BOOKED'
+                                WHERE appointment_id = %s
+                                """,
+                                (
+                                    patient_id,
+                                    int(context.clinic_id),
+                                    actual_admin_id,
+                                    requested_end,
+                                    chat_user_id_value or None,
+                                    slot_appointment_id,
+                                ),
+                            )
+                        else:
+                            cur.execute(
+                                f"""
+                                UPDATE {appointment_table}
+                                SET patient_id = %s,
+                                    clinic_id = %s,
+                                    admin_id = %s,
+                                    end_time = %s,
+                                    status = 'BOOKED'
+                                WHERE appointment_id = %s
+                                """,
+                                (
+                                    patient_id,
+                                    int(context.clinic_id),
+                                    actual_admin_id,
+                                    requested_end,
+                                    slot_appointment_id,
+                                ),
+                            )
                         if "booking_id" in patient_columns and requested_slot_number is not None:
                             cur.execute(
                                 """
@@ -2053,22 +2135,41 @@ class BookingRepository:
                     conn.rollback()
                     return BookingResult(False, "Selected slot is not available.")
 
-                cur.execute(
-                    f"""
-                    INSERT INTO {appointment_table}
-                    (patient_id, doctor_id, clinic_id, admin_id, status, appointment_date, start_time, end_time)
-                    VALUES (%s, %s, %s, %s, 'BOOKED', %s, %s, %s)
-                    """,
-                    (
-                        patient_id,
-                        resolved_doctor_id,
-                        int(context.clinic_id),
-                        actual_admin_id,
-                        context.appointment_date,
-                        requested_start,
-                        requested_end,
-                    ),
-                )
+                if has_notify_chat_col:
+                    cur.execute(
+                        f"""
+                        INSERT INTO {appointment_table}
+                        (patient_id, doctor_id, clinic_id, admin_id, status, appointment_date, start_time, end_time, notify_telegram_chat_id)
+                        VALUES (%s, %s, %s, %s, 'BOOKED', %s, %s, %s, %s)
+                        """,
+                        (
+                            patient_id,
+                            resolved_doctor_id,
+                            int(context.clinic_id),
+                            actual_admin_id,
+                            context.appointment_date,
+                            requested_start,
+                            requested_end,
+                            chat_user_id_value or None,
+                        ),
+                    )
+                else:
+                    cur.execute(
+                        f"""
+                        INSERT INTO {appointment_table}
+                        (patient_id, doctor_id, clinic_id, admin_id, status, appointment_date, start_time, end_time)
+                        VALUES (%s, %s, %s, %s, 'BOOKED', %s, %s, %s)
+                        """,
+                        (
+                            patient_id,
+                            resolved_doctor_id,
+                            int(context.clinic_id),
+                            actual_admin_id,
+                            context.appointment_date,
+                            requested_start,
+                            requested_end,
+                        ),
+                    )
                 appointment_id = int(cur.lastrowid)
                 if "booking_id" in patient_columns and requested_slot_number is not None:
                     cur.execute(
@@ -2126,6 +2227,15 @@ class BookingRepository:
                         WHERE patient_id = %s
                         """,
                         (int(existing_doctor_id), patient_id),
+                    )
+                if has_notify_chat_col and chat_user_id_value:
+                    cur.execute(
+                        f"""
+                        UPDATE {appointment_table}
+                        SET notify_telegram_chat_id = COALESCE(NULLIF(TRIM(notify_telegram_chat_id), ''), %s)
+                        WHERE appointment_id = %s
+                        """,
+                        (chat_user_id_value, int(existing["appointment_id"])),
                     )
                 conn.commit()
                 appt_id = int(existing["appointment_id"])
@@ -2189,14 +2299,24 @@ class BookingRepository:
                 (slot_id,),
             )
 
-            cur.execute(
-                f"""
-                INSERT INTO {appointment_table}
-                (patient_id, slot_id, doctor_id, clinic_id, admin_id, status)
-                VALUES (%s, %s, %s, %s, %s, 'BOOKED')
-                """,
-                (patient_id, slot_id, doctor_id, clinic_id, actual_admin_id),
-            )
+            if has_notify_chat_col:
+                cur.execute(
+                    f"""
+                    INSERT INTO {appointment_table}
+                    (patient_id, slot_id, doctor_id, clinic_id, admin_id, status, notify_telegram_chat_id)
+                    VALUES (%s, %s, %s, %s, %s, 'BOOKED', %s)
+                    """,
+                    (patient_id, slot_id, doctor_id, clinic_id, actual_admin_id, chat_user_id_value or None),
+                )
+            else:
+                cur.execute(
+                    f"""
+                    INSERT INTO {appointment_table}
+                    (patient_id, slot_id, doctor_id, clinic_id, admin_id, status)
+                    VALUES (%s, %s, %s, %s, %s, 'BOOKED')
+                    """,
+                    (patient_id, slot_id, doctor_id, clinic_id, actual_admin_id),
+                )
             appointment_id = int(cur.lastrowid)
             conn.commit()
             return BookingResult(
@@ -2424,6 +2544,102 @@ class BookingRepository:
                     )
                 )
             return results
+        finally:
+            cur.close()
+            conn.close()
+
+    # ── doctor_remainder_queue helpers ────────────────────────────────────────
+
+    def is_reminder_sent(self, *, dedup_key: str) -> bool:
+        """Return True if a SENT row already exists for this dedup_key."""
+        conn = self._connect()
+        cur = conn.cursor()
+        try:
+            cur.execute(
+                "SELECT status FROM doctor_remainder_queue WHERE dedup_key=%s LIMIT 1",
+                (dedup_key,),
+            )
+            row = cur.fetchone()
+            return row is not None and str(row[0]).upper() == "SENT"
+        finally:
+            cur.close()
+            conn.close()
+
+    def insert_or_get_reminder_queue(
+        self,
+        *,
+        doctor_id: int,
+        schedule_id: int,
+        slot_date: str,
+        schedule_start_time: str,
+        schedule_end_time: str,
+        channel: str,
+        destination: str,
+        lead_minutes: int,
+        dedup_key: str,
+    ) -> int:
+        """Insert a PENDING row into doctor_remainder_queue and return queue_id.
+        If the dedup_key already exists, return the existing queue_id."""
+        conn = self._connect()
+        cur = conn.cursor()
+        try:
+            cur.execute(
+                "SELECT queue_id FROM doctor_remainder_queue WHERE dedup_key=%s LIMIT 1",
+                (dedup_key,),
+            )
+            row = cur.fetchone()
+            if row:
+                return int(row[0])
+            cur.execute(
+                """
+                INSERT INTO doctor_remainder_queue
+                    (doctor_id, schedule_id, slot_date, schedule_start_time,
+                     schedule_end_time, channel, destination, lead_minutes,
+                     status, dedup_key, updated_at)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, 'PENDING', %s, NOW())
+                """,
+                (
+                    doctor_id, schedule_id, slot_date,
+                    schedule_start_time, schedule_end_time,
+                    channel, destination, lead_minutes, dedup_key,
+                ),
+            )
+            queue_id = cur.lastrowid
+            conn.commit()
+            return int(queue_id)
+        finally:
+            cur.close()
+            conn.close()
+
+    def mark_reminder_sent(self, *, queue_id: int) -> None:
+        """Mark a doctor_remainder_queue row as SENT."""
+        conn = self._connect()
+        cur = conn.cursor()
+        try:
+            cur.execute(
+                "UPDATE doctor_remainder_queue "
+                "SET status='SENT', sent_at=NOW(), updated_at=NOW() "
+                "WHERE queue_id=%s",
+                (queue_id,),
+            )
+            conn.commit()
+        finally:
+            cur.close()
+            conn.close()
+
+    def mark_reminder_failed(self, *, queue_id: int, error: str) -> None:
+        """Mark a doctor_remainder_queue row as FAILED and increment attempt_count."""
+        conn = self._connect()
+        cur = conn.cursor()
+        try:
+            cur.execute(
+                "UPDATE doctor_remainder_queue "
+                "SET status='FAILED', last_error=%s, "
+                "attempt_count=attempt_count+1, updated_at=NOW() "
+                "WHERE queue_id=%s",
+                (str(error)[:250], queue_id),
+            )
+            conn.commit()
         finally:
             cur.close()
             conn.close()

@@ -134,7 +134,7 @@ class AppointmentFSM:
         if not text:
             return self._respond(self._msg("empty_input"))
 
-        if self._is_abusive_message(text, lower):
+        if self._is_abusive_message(text, lower, allow_llm=(self.state == "INIT")):
             self.context.abusive_warning_count = int(self.context.abusive_warning_count or 0) + 1
             if self.context.abusive_warning_count >= 2:
                 self.context.abuse_blocked = True
@@ -194,9 +194,6 @@ class AppointmentFSM:
                 existing_reply = self._existing_booking_entry_response()
                 if existing_reply:
                     return self._respond(existing_reply, allow_polish=False)
-                prefill_reply = self._handle_init_booking_prefill(text=text, lower=lower)
-                if prefill_reply:
-                    return self._respond(self._msg("intent_ack") + "\n" + prefill_reply, allow_polish=False)
                 self.state = "ASK_BOOKING_FOR"
                 return self._respond(
                     self._msg("intent_ack") + "\n" + self._with_back(self._msg("ask_booking_for"), option_count=2),
@@ -293,7 +290,7 @@ class AppointmentFSM:
                 self.booking_for_self = False
                 self.state = "ASK_NAME"
                 return self._respond(self._msg("booking_for_other_ack") + "\n" + self._with_back(self._msg("ask_name")))
-            if choice in {"3", "c"}:
+            if choice in {"0", "back", "go back"}:
                 self.state = "INIT"
                 return self._respond(self._msg("no_intent"))
             return self._respond(self._with_back(self._msg("invalid_booking_for"), option_count=2))
@@ -403,10 +400,11 @@ class AppointmentFSM:
             if normalized in {"4", "another", "another person", "book another"}:
                 choices = self._active_booking_rows_for_chat_phone()
                 if len(choices) >= 2:
-                    self.state = "COMPLETED"
-                    return self._respond(self._msg("max_active_bookings_reached"))
+                    self.state = "ASK_MAX_ACTIVE_BOOKINGS_ACTION"
+                    return self._respond(self._msg("max_active_bookings_reached") + "\n" + self._msg("max_active_bookings_actions"))
                 self.existing_appointment_id = None
                 self._reset_existing_booking_flags()
+                self.booking_for_self = False
                 self.context.patient_name = None
                 self.context.phone_number = None
                 self.context.clinic_id = None
@@ -418,19 +416,42 @@ class AppointmentFSM:
                 return self._respond(self._msg("ask_name"))
             return self._respond(self._msg("existing_booking_choice_invalid"))
 
+        if self.state == "ASK_MAX_ACTIVE_BOOKINGS_ACTION":
+            normalized = lower.strip()
+            choices = self._active_booking_rows_for_chat_phone()
+            if normalized in {"1", "cancel"}:
+                if not choices:
+                    self.state = "ASK_EXISTING_BOOKING_ACTION"
+                    return self._respond(self._msg("existing_booking_choice_again"))
+                self.active_booking_options_cache = choices
+                self.pending_existing_action = "cancel"
+                self.state = "ASK_EXISTING_BOOKING_PICK"
+                return self._respond(self._existing_booking_pick_prompt())
+            if normalized in {"2", "reschedule", "rebook"}:
+                if not choices:
+                    self.state = "ASK_EXISTING_BOOKING_ACTION"
+                    return self._respond(self._msg("existing_booking_choice_again"))
+                self.active_booking_options_cache = choices
+                self.pending_existing_action = "reschedule"
+                self.state = "ASK_EXISTING_BOOKING_PICK"
+                return self._respond(self._existing_booking_pick_prompt())
+            if normalized in {"0", "back", "go back"}:
+                self.state = "ASK_EXISTING_BOOKING_ACTION"
+                return self._respond(self._msg("existing_booking_choice_again"))
+            return self._respond(self._msg("max_active_bookings_invalid"))
+
         if self.state == "ASK_EXISTING_BOOKING_PICK":
             normalized = lower.strip()
             if not self.active_booking_options_cache:
                 self.state = "ASK_EXISTING_BOOKING_ACTION"
                 return self._respond(self._msg("existing_booking_choice_again"))
+            if normalized in {"0", "back", "go back"}:
+                self.state = "ASK_EXISTING_BOOKING_ACTION"
+                self.active_booking_options_cache = []
+                self.pending_existing_action = None
+                return self._respond(self._msg("existing_booking_choice_again"))
             if normalized.isdigit():
                 idx = int(normalized) - 1
-                back_index = len(self.active_booking_options_cache)
-                if idx == back_index:
-                    self.state = "ASK_EXISTING_BOOKING_ACTION"
-                    self.active_booking_options_cache = []
-                    self.pending_existing_action = None
-                    return self._respond(self._msg("existing_booking_choice_again"))
                 if 0 <= idx < len(self.active_booking_options_cache):
                     row = self.active_booking_options_cache[idx]
                     action = self.pending_existing_action
@@ -637,13 +658,6 @@ class AppointmentFSM:
                 if not self.clinic_options_cache:
                     self.state = "INIT"
                     return self._respond(self._msg("no_clinic_available_restart"))
-                if normalized.isdigit():
-                    idx = int(normalized)
-                    if idx == len(self.clinic_options_cache) + 1:
-                        back_text = self._handle_go_back()
-                        if back_text:
-                            return self._respond(back_text)
-                        return self._respond(self._msg("invalid_clinic"))
             selected = self._select_clinic(text, lower)
             if not selected:
                 return self._respond(self._msg("invalid_clinic"))
@@ -676,11 +690,6 @@ class AppointmentFSM:
                 return self._respond(self._msg("no_date_available") + "\n" + self._clinic_prompt())
             if normalized.isdigit():
                 index = int(normalized)
-                if index == len(date_options) + 1:
-                    back_text = self._handle_go_back()
-                    if back_text:
-                        return self._respond(back_text)
-                    return self._respond(self._msg("invalid_date"))
                 if 1 <= index <= len(date_options):
                     parsed_date = date_options[index - 1]
                 else:
@@ -706,11 +715,6 @@ class AppointmentFSM:
                         + "\n"
                         + self._date_options_prompt(date_options)
                     )
-            elif normalized == "3" and len(date_options) == 2:
-                back_text = self._handle_go_back()
-                if back_text:
-                    return self._respond(back_text)
-                return self._respond(self._msg("invalid_date"))
             else:
                 return self._respond(
                     self._msg("invalid_date")
@@ -806,11 +810,6 @@ class AppointmentFSM:
                 selected_time: Optional[str] = None
                 if normalized.isdigit():
                     idx = int(normalized) - 1
-                    if idx == len(self.time_slot_options_cache):
-                        back_text = self._handle_go_back()
-                        if back_text:
-                            return self._respond(back_text)
-                        return self._respond(self._msg("invalid_time"))
                     if 0 <= idx < len(self.time_slot_options_cache):
                         selected_time = self.time_slot_options_cache[idx]
                 parsed_time = selected_time
@@ -849,7 +848,8 @@ class AppointmentFSM:
             return self._respond(self._msg("time_ack", appointment_time=self._format_time_for_display(parsed_time)) + "\n" + self._msg("confirm_summary", **self._display_context()))
 
         if self.state == "CONFIRM_RESCHEDULE":
-            if is_yes(lower):
+            normalized = lower.strip()
+            if normalized == "1" or is_yes(lower):
                 if not self.booking_repository or not self.existing_appointment_id:
                     self.in_reschedule_flow = False
                     self.state = "COMPLETED"
@@ -875,7 +875,10 @@ class AppointmentFSM:
                         )
                     )
                 return self._respond(self._msg("reschedule_failed"))
-            if is_no(lower):
+            if normalized == "2":
+                self.state = "ASK_TIME"
+                return self._respond(self._time_prompt_for_edit_flow())
+            if normalized == "0" or is_no(lower):
                 self.in_reschedule_flow = False
                 self.state = "ASK_EXISTING_BOOKING_ACTION"
                 return self._respond(self._msg("existing_booking_choice_again"))
@@ -911,6 +914,10 @@ class AppointmentFSM:
                 if persist_note:
                     confirmed = confirmed + "\n" + persist_note
                 return self._respond(confirmed)
+            if confirm_intent == "back":
+                back_text = self._handle_go_back()
+                if back_text:
+                    return self._respond(back_text)
             if confirm_intent in {"no", "change"}:
                 reroute_state = resolve_change_target(lower)
                 if not reroute_state and confirm_intent == "change":
@@ -931,7 +938,7 @@ class AppointmentFSM:
             return self._respond(self._msg("confirm_prompt"))
 
         if self.state == "ASK_CHANGE_FIELD":
-            if lower.strip() == "6":
+            if lower.strip() == "0":
                 back_text = self._handle_go_back()
                 if back_text:
                     return self._respond(back_text)
@@ -986,6 +993,7 @@ class AppointmentFSM:
             setattr(self.context, "chat_user_id", self.chat_phone_number or "")
         else:
             setattr(self.context, "chat_user_id", None)
+        setattr(self.context, "booking_for_self", self.booking_for_self)
         try:
             try:
                 result = self.booking_repository.save_confirmed_appointment(
@@ -1008,9 +1016,13 @@ class AppointmentFSM:
         return self._msg("db_save_failed")
 
     def _detect_confirm_intent(self, text: str) -> str:
-        lower = text.lower()
-        if is_yes(lower):
+        lower = text.lower().strip()
+        if lower == "1" or is_yes(lower):
             return "yes"
+        if lower == "0":
+            return "back"
+        if lower == "2":
+            return "no"
         if is_no(lower):
             if any(token in lower for token in ["change", "edit", "modify"]):
                 return "change"
@@ -1060,7 +1072,7 @@ class AppointmentFSM:
 
     def _with_back(self, text: str, option_count: Optional[int] = None) -> str:
         if option_count is not None and option_count >= 1:
-            return text + "\n" + f"{option_count + 1}. Go back"
+            return text + "\n" + self._msg("go_back_hint")
         return text + "\n" + self._msg("go_back_hint")
 
     @staticmethod
@@ -1079,8 +1091,14 @@ class AppointmentFSM:
             self.state = "ASK_NAME"
             return self._with_back(self._msg("ask_name"))
         if self.state == "ASK_CLINIC":
-            self.state = "ASK_PHONE" if not self.booking_for_self else "ASK_NAME"
-            return self._with_back(self._msg("ask_phone") if not self.booking_for_self else self._msg("ask_name"))
+            if self.booking_for_self and self.known_patient_name:
+                # Known patient self-booking: name+phone were auto-filled and skipped,
+                # so go back to ASK_BOOKING_FOR (the last state the patient actually saw).
+                self.state = "ASK_BOOKING_FOR"
+                return self._with_back(self._msg("ask_booking_for"), option_count=2)
+            # Normal path: phone step was actually visited, go back to it.
+            self.state = "ASK_PHONE"
+            return self._with_back(self._ask_phone_prompt())
         if self.state == "ASK_DATE":
             self.state = "ASK_CLINIC"
             return self._clinic_prompt()
@@ -1122,13 +1140,22 @@ class AppointmentFSM:
             except Exception:
                 pass
             try:
-                chat_phone = self._normalize_phone(self.chat_phone_number or "")
-                if chat_phone and not self._is_telegram_channel():
-                    patient_name = self.booking_repository.find_patient_name_by_phone_number(
-                        phone_number=chat_phone,
-                        admin_id=self.admin_id,
-                        doctor_id=self.doctor_id,
-                    )
+                if self._is_telegram_channel():
+                    raw_chat = (self.chat_phone_number or "").strip()
+                    if raw_chat:
+                        patient_name = self.booking_repository.find_patient_name_by_chat_user_id(
+                            chat_user_id=raw_chat,
+                            admin_id=self.admin_id,
+                            doctor_id=self.doctor_id,
+                        )
+                else:
+                    chat_phone = self._normalize_phone(self.chat_phone_number or "")
+                    if chat_phone:
+                        patient_name = self.booking_repository.find_patient_name_by_phone_number(
+                            phone_number=chat_phone,
+                            admin_id=self.admin_id,
+                            doctor_id=self.doctor_id,
+                        )
             except Exception:
                 patient_name = None
         if patient_name:
@@ -1140,7 +1167,7 @@ class AppointmentFSM:
             )
         return self._msg("welcome_new_patient", doctor_name=doctor_name)
 
-    def _is_abusive_message(self, text: str, lower: str) -> bool:
+    def _is_abusive_message(self, text: str, lower: str, allow_llm: bool = False) -> bool:
         normalized_latin = re.sub(r"[^a-z0-9]+", " ", lower).strip()
         padded = f" {normalized_latin} "
         for term in ABUSE_TERMS_EN:
@@ -1152,6 +1179,8 @@ class AppointmentFSM:
         for term in ABUSE_TERMS_HI:
             if term in text:
                 return True
+        if not allow_llm:
+            return False
         return llm_detect_abuse(
             llm_client=self.llm_client,
             enable_llm_polish=self.enable_llm_polish,
@@ -1233,8 +1262,9 @@ class AppointmentFSM:
                 f"{idx}. {row.get('clinic_name') or '-'} | {row.get('slot_date') or '-'} | "
                 f"{self._format_time_for_display(str(row.get('slot_time') or '-'))} | Booking Number: {display_number}"
             )
-        lines.append(f"{len(self.active_booking_options_cache) + 1}. Go back")
-        lines.append(self._reply_with_prompt(len(self.active_booking_options_cache) + 1))
+        lines.append(self._msg("go_back_hint"))
+        choice_numbers = ", ".join(str(i) for i in range(1, len(self.active_booking_options_cache) + 1))
+        lines.append(self._msg("reply_with_numbers", numbers=f"{choice_numbers}, 0"))
         return "\n".join(lines)
 
     def _update_response_language(self, lower: str) -> None:
@@ -1330,18 +1360,18 @@ class AppointmentFSM:
         lines = ["Please choose preferred time period:"]
         for idx, period in enumerate(periods, start=1):
             lines.append(f"{idx}. {labels.get(period, period.title())}")
-        lines.append(f"{len(periods) + 1}. Go back")
-        lines.append(self._reply_with_prompt(len(periods) + 1))
+        lines.append(self._msg("go_back_hint"))
+        lines.append(self._reply_with_prompt(len(periods)))
         return "\n".join(lines)
 
     def _resolve_time_period_choice(self, text: str, normalized: str) -> Optional[str]:
         periods = self._available_periods()
         if not periods:
             return None
+        if normalized in {"0", "back", "go back"}:
+            return "__BACK__"
         if normalized.isdigit():
             idx = int(normalized) - 1
-            if idx == len(periods):
-                return "__BACK__"
             if 0 <= idx < len(periods):
                 return periods[idx]
         lower = (text or "").strip().lower()
@@ -1465,8 +1495,8 @@ class AppointmentFSM:
         else:
             for idx, hhmm in enumerate(self.time_slot_options_cache, start=1):
                 lines.append(f"{idx}. {self._format_time_for_display(hhmm)}")
-        lines.append(f"{len(self.time_slot_options_cache) + 1}. Go back")
-        lines.append(self._reply_with_prompt(len(self.time_slot_options_cache) + 1))
+        lines.append(self._msg("go_back_hint"))
+        lines.append(self._reply_with_prompt(len(self.time_slot_options_cache)))
         return "\n".join(lines)
 
     def _time_prompt_for_edit_flow(self) -> str:
@@ -1653,17 +1683,25 @@ class AppointmentFSM:
             return
         if not self.booking_repository:
             return
-        if self._is_telegram_channel():
-            return
-        chat_phone = self._normalize_phone(self.chat_phone_number or "")
-        if not chat_phone:
-            return
         try:
-            patient_name = self.booking_repository.find_patient_name_by_phone_number(
-                phone_number=chat_phone,
-                admin_id=self.admin_id,
-                doctor_id=self.doctor_id,
-            )
+            if self._is_telegram_channel():
+                raw_chat = (self.chat_phone_number or "").strip()
+                if not raw_chat:
+                    return
+                patient_name = self.booking_repository.find_patient_name_by_chat_user_id(
+                    chat_user_id=raw_chat,
+                    admin_id=self.admin_id,
+                    doctor_id=self.doctor_id,
+                )
+            else:
+                chat_phone = self._normalize_phone(self.chat_phone_number or "")
+                if not chat_phone:
+                    return
+                patient_name = self.booking_repository.find_patient_name_by_phone_number(
+                    phone_number=chat_phone,
+                    admin_id=self.admin_id,
+                    doctor_id=self.doctor_id,
+                )
             if patient_name:
                 self.known_patient_name = patient_name
         except Exception:
@@ -1853,8 +1891,8 @@ class AppointmentFSM:
                 lines = [self._msg("ask_clinic_header")]
                 for clinic in self.clinic_options_cache[:10]:
                     lines.append(f"{clinic['ordinal']}. {clinic['name']} | {clinic['address']}")
-                option_count = len(self.clinic_options_cache[:10]) + 1
-                lines.append(f"{option_count}. Go back")
+                option_count = len(self.clinic_options_cache[:10])
+                lines.append(self._msg("go_back_hint"))
                 lines.append(self._reply_with_prompt(option_count))
                 return "\n".join(lines)
             self.state = "INIT"
@@ -1891,9 +1929,9 @@ class AppointmentFSM:
 
     def _reply_with_prompt(self, option_count: int) -> str:
         if option_count <= 0:
-            return self._msg("reply_with_numbers", numbers="1")
+            return self._msg("reply_with_numbers", numbers="0")
         numbers = ", ".join(str(i) for i in range(1, option_count + 1))
-        return self._msg("reply_with_numbers", numbers=numbers)
+        return self._msg("reply_with_numbers", numbers=f"{numbers}, 0")
 
     def _date_options_prompt(self, date_options: list[str]) -> str:
         if not date_options:
@@ -1909,9 +1947,9 @@ class AppointmentFSM:
         lines = ["Please choose appointment date:"]
         for idx, d in enumerate(date_options, start=1):
             lines.append(f"{idx}. {label(d)}")
-        lines.append(f"{len(date_options) + 1}. Go back")
-        numbers = ", ".join(str(i) for i in range(1, len(date_options) + 2))
-        lines.append(self._msg("reply_with_numbers", numbers=numbers))
+        lines.append(self._msg("go_back_hint"))
+        numbers = ", ".join(str(i) for i in range(1, len(date_options) + 1))
+        lines.append(self._msg("reply_with_numbers", numbers=f"{numbers}, 0"))
         return "\n".join(lines)
 
     def _clinic_availability_line(self, clinic: dict) -> str:

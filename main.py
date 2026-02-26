@@ -74,6 +74,7 @@ _overflow_worker_id = f"overflow-{uuid.uuid4().hex[:10]}"
 _overflow_turn_map: dict[str, int] = {}
 _overflow_turn_map_lock = Lock()
 _process_executor = ThreadPoolExecutor(max_workers=max(4, settings.queue_worker_count * 2))
+_ollama_semaphore = threading.Semaphore(1)  # Ollama handles 1 inference at a time
 
 turn_processor = TurnQueueProcessor(
     worker_count=max(1, settings.queue_worker_count),
@@ -474,7 +475,8 @@ def _process_turn(from_number: str, body: str) -> Tuple[str, str]:
     user_lock = _get_user_lock(from_number)
     with user_lock:
         fsm = session_manager.get_or_create(from_number)
-        reply = fsm.handle(body)
+        with _ollama_semaphore:  # serialize Ollama calls — only 1 inference at a time
+            reply = fsm.handle(body)
         reply = reply[: settings.max_message_chars]
         session_manager.save(from_number)
         return reply, fsm.state

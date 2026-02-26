@@ -22,7 +22,8 @@
         "clarify_intent": (
             "Please choose one option:\n"
             "1. Book appointment\n"
-            "2. Check doctor availability"
+            "2. Check doctor availability\n"
+            "Reply with 1 or 2."
         ),
         "final_booking_check": "Do you want to book a medical appointment now? Reply YES or NO.",
         "non_scope_final": (
@@ -35,10 +36,10 @@
             "1. Self\n"
             "2. Another person"
         ),
-        "invalid_booking_for": "Please reply with 1 or 2.",
+        "invalid_booking_for": "Please reply with 1, 2, or 0.",
         "booking_for_self_ack": "Noted. Booking for self.",
         "booking_for_other_ack": "Noted. Booking for another person.",
-        "go_back_hint": "0. Go back",
+        "go_back_hint": "Press \"0\" to go back.",
         "existing_booking_found": (
             "You already have a booked appointment:\n"
             "Booking Number: {appointment_id}\n"
@@ -56,6 +57,13 @@
         "existing_booking_pick_header": "Please choose which booking you want to modify:",
         "existing_booking_pick_invalid": "Please choose a valid booking option number.",
         "max_active_bookings_reached": "For this number, maximum 2 active bookings are allowed. Please cancel/reschedule an existing booking first.",
+        "max_active_bookings_actions": (
+            "Choose one option:\n"
+            "1. Cancel an existing appointment\n"
+            "2. Reschedule an existing appointment\n"
+            "Press \"0\" to go back."
+        ),
+        "max_active_bookings_invalid": "Please reply with 1, 2, or 0.",
         "existing_booking_keep": "Okay. Your existing appointment is kept as is.",
         "existing_booking_cancel_only_done": "Done. Your appointment has been cancelled.",
         "existing_booking_reschedule_start": "Okay. Let's reschedule this appointment. Previous clinic: {clinic_name}. You can choose same or another clinic.",
@@ -64,9 +72,12 @@
             "Clinic: {clinic_name}\n"
             "Old slot: {old_date} {old_time}\n"
             "New slot: {new_date} {new_time}\n"
-            "Reply YES to confirm or NO to go back."
+            "1. Confirm\n"
+            "2. Change details\n"
+            "0. Go back\n"
+            "Reply with 1, 2, or 0."
         ),
-        "confirm_reschedule_prompt": "Please reply YES to confirm reschedule or NO to go back.",
+        "confirm_reschedule_prompt": "1. Confirm\n2. Change details\n0. Go back\nReply with 1, 2, or 0.",
         "reschedule_confirmed": (
             "Appointment rescheduled successfully.\n"
             "*Booking Number:* {appointment_id}\n"
@@ -82,17 +93,17 @@
             "Please choose appointment type:\n"
             "1. Online appointment\n"
             "2. Walk-in appointment\n"
-            "Reply with 1 or 2."
+            "Reply with 1, 2, or 0."
         ),
-        "invalid_appointment_mode": "Please reply with 1 or 2.",
+        "invalid_appointment_mode": "Please reply with 1, 2, or 0.",
         "appointment_mode_ack": "Noted. Appointment type: {appointment_mode}.",
         "ask_patient_type": (
             "Is the patient old or new?\n"
             "1. New\n"
             "2. Old\n"
-            "Reply with 1 or 2."
+            "Reply with 1, 2, or 0."
         ),
-        "invalid_patient_type": "Please reply with 1 or 2.",
+        "invalid_patient_type": "Please reply with 1, 2, or 0.",
         "patient_type_ack": "Noted. Patient type: {patient_type}.",
         "ask_age": "Please share patient age.",
         "invalid_age": "Please share a valid age between 1 and 120.",
@@ -102,9 +113,9 @@
             "1. Male\n"
             "2. Female\n"
             "3. Other\n"
-            "Reply with 1, 2, or 3."
+            "Reply with 1, 2, 3, or 0."
         ),
-        "invalid_gender": "Please reply with 1, 2, or 3.",
+        "invalid_gender": "Please reply with 1, 2, 3, or 0.",
         "gender_ack": "Gender noted: {gender}.",
         "ask_phone": (
             "Is the contact number same as this WhatsApp number?\n"
@@ -133,7 +144,7 @@
             "3. Stomach pain\n"
             "4. Cold\n"
             "5. Other (type reason)\n"
-            "Reply with 1, 2, 3, 4, or 5."
+            "Reply with 1, 2, 3, 4, 5, or 0."
         ),
         "ask_reason_other": "Please type your reason.",
         "invalid_reason_option": "Please choose valid reason option(s), or type reason text.",
@@ -148,7 +159,7 @@
             "1. {date_1}\n"
             "2. {date_2}"
         ),
-        "ask_date_manual": "Please choose only 1, 2, or 3.",
+        "ask_date_manual": "Please choose a valid option number, or press \"0\" to go back.",
         "invalid_date": "Invalid date. Please send a future date in YYYY-MM-DD format.",
         "no_date_available": "No available dates for this clinic right now. Please choose another clinic or try later.",
         "date_ack": "Date noted: {appointment_date}.",
@@ -161,7 +172,7 @@
             "1. {slot_1}\n"
             "2. {slot_2}\n"
             "3. {slot_3}\n"
-            "Reply with 1, 2, or 3.\n"
+            "Reply with 1, 2, 3, or 0.\n"
             "Or type another preferred time."
         ),
         "time_not_available": "Requested time {requested_time} is not available.",
@@ -176,9 +187,12 @@
             "Clinic address: {clinic_address}\n"
             "Date: {appointment_date}\n"
             "Time: {appointment_time}\n"
-            "Reply YES to confirm or NO to change details."
+            "1. Confirm\n"
+            "2. Change details\n"
+            "0. Go back\n"
+            "Reply with 1, 2, or 0."
         ),
-        "confirm_prompt": "Please reply YES to confirm or NO to change details.",
+        "confirm_prompt": "1. Confirm\n2. Change details\n0. Go back\nReply with 1, 2, or 0.",
         "ask_change_field": (
             "No problem. Which detail do you want to change?\n"
             "1. Name\n"
@@ -186,9 +200,10 @@
             "3. Clinic\n"
             "4. Date\n"
             "5. Time\n"
-            "Reply with 1, 2, 3, 4, 5, or 6."
+            "0. Go back\n"
+            "Reply with 1, 2, 3, 4, 5, or 0."
         ),
-        "invalid_change_field": "Please choose a valid detail number (1-6).",
+        "invalid_change_field": "Please choose a valid detail number (1-5 or 0).",
         "change_ack": (
             "No problem. Let's update that detail."
         ),
@@ -204,7 +219,7 @@
         "reply_with_numbers": "Reply with {numbers}.",
         "not_confirmed": "No problem. Restarting booking flow. Please share the patient full name.",
         "completed_hint": "This appointment flow is complete. Send 'book appointment' to start another.",
-        "db_save_ok": "Appointment booked successfully.\n*Booking Number:* {appointment_id}",
+        "db_save_ok": "Appointment booked successfully.\n*Patient ID:* {appointment_id}",
         "db_save_failed": "Booking confirmation received, but database save is pending manual follow-up.",
         "ended": "Understood. I have ended the process. Send 'book appointment' whenever you want to start again.",
         "cancelled_hint": "Process is ended. Send 'book appointment' to start a new booking.",
@@ -212,190 +227,204 @@
     }
 
     hi = {
-        "greeting": "à¤¨à¤®à¤¸à¥à¤¤à¥‡, à¤®à¥ˆà¤‚ à¤†à¤ªà¤•à¤¾ à¤®à¥‡à¤¡à¤¿à¤•à¤² à¤…à¤ªà¥‰à¤‡à¤‚à¤Ÿà¤®à¥‡à¤‚à¤Ÿ à¤…à¤¸à¤¿à¤¸à¥à¤Ÿà¥‡à¤‚à¤Ÿ à¤¹à¥‚à¤à¥¤ à¤®à¥ˆà¤‚ à¤¬à¥à¤•à¤¿à¤‚à¤— à¤”à¤° à¤¡à¥‰à¤•à¥à¤Ÿà¤° à¤‰à¤ªà¤²à¤¬à¥à¤§à¤¤à¤¾ à¤®à¥‡à¤‚ à¤®à¤¦à¤¦ à¤•à¤° à¤¸à¤•à¤¤à¤¾ à¤¹à¥‚à¤à¥¤",
-        "general_help": "à¤®à¥ˆà¤‚ à¤…à¤ªà¥‰à¤‡à¤‚à¤Ÿà¤®à¥‡à¤‚à¤Ÿ à¤¬à¥à¤•à¤¿à¤‚à¤— à¤¯à¤¾ à¤¡à¥‰à¤•à¥à¤Ÿà¤° à¤‰à¤ªà¤²à¤¬à¥à¤§à¤¤à¤¾ à¤®à¥‡à¤‚ à¤®à¤¦à¤¦ à¤•à¤° à¤¸à¤•à¤¤à¤¾ à¤¹à¥‚à¤à¥¤ à¤•à¥ƒà¤ªà¤¯à¤¾ à¤…à¤ªà¤¨à¥€ à¤†à¤µà¤¶à¥à¤¯à¤•à¤¤à¤¾ à¤¬à¤¤à¤¾à¤à¤‚à¥¤",
-        "intent_ack": "à¤ à¥€à¤• à¤¹à¥ˆ, à¤®à¥ˆà¤‚ à¤†à¤ªà¤•à¥€ à¤…à¤ªà¥‰à¤‡à¤‚à¤Ÿà¤®à¥‡à¤‚à¤Ÿ à¤¬à¥à¤• à¤•à¤°à¤¨à¥‡ à¤®à¥‡à¤‚ à¤®à¤¦à¤¦ à¤•à¤° à¤¸à¤•à¤¤à¤¾ à¤¹à¥‚à¤à¥¤",
-        "availability_intro": "à¤ à¥€à¤• à¤¹à¥ˆ, à¤®à¥ˆà¤‚ à¤¡à¥‰à¤•à¥à¤Ÿà¤° à¤•à¥€ à¤‰à¤ªà¤²à¤¬à¥à¤§à¤¤à¤¾ à¤¦à¥‡à¤–à¤¨à¥‡ à¤®à¥‡à¤‚ à¤®à¤¦à¤¦ à¤•à¤° à¤¸à¤•à¤¤à¤¾ à¤¹à¥‚à¤à¥¤ à¤•à¥ƒà¤ªà¤¯à¤¾ à¤¡à¥‰à¤•à¥à¤Ÿà¤° à¤•à¤¾ à¤¨à¤¾à¤® à¤”à¤° à¤ªà¤¸à¤‚à¤¦à¥€à¤¦à¤¾ à¤¤à¤¾à¤°à¥€à¤– à¤¬à¤¤à¤¾à¤à¤‚à¥¤",
-        "availability_ask": "à¤‰à¤ªà¤²à¤¬à¥à¤§à¤¤à¤¾ à¤¦à¥‡à¤–à¤¨à¥‡ à¤•à¥‡ à¤²à¤¿à¤ à¤•à¥ƒà¤ªà¤¯à¤¾ à¤¡à¥‰à¤•à¥à¤Ÿà¤° à¤•à¤¾ à¤¨à¤¾à¤® à¤”à¤° à¤¤à¤¾à¤°à¥€à¤– à¤­à¥‡à¤œà¥‡à¤‚ (YYYY-MM-DD à¤¯à¤¾ 'tomorrow').",
-        "availability_ask_doctor": "à¤•à¥ƒà¤ªà¤¯à¤¾ à¤‰à¤ªà¤²à¤¬à¥à¤§à¤¤à¤¾ à¤¦à¥‡à¤–à¤¨à¥‡ à¤•à¥‡ à¤²à¤¿à¤ à¤¡à¥‰à¤•à¥à¤Ÿà¤° à¤•à¤¾ à¤¨à¤¾à¤® à¤¬à¤¤à¤¾à¤à¤‚à¥¤",
-        "availability_ask_date": "à¤•à¥ƒà¤ªà¤¯à¤¾ à¤‰à¤ªà¤²à¤¬à¥à¤§à¤¤à¤¾ à¤¦à¥‡à¤–à¤¨à¥‡ à¤•à¥‡ à¤²à¤¿à¤ à¤¤à¤¾à¤°à¥€à¤– à¤¬à¤¤à¤¾à¤à¤‚ (YYYY-MM-DD à¤¯à¤¾ 'tomorrow').",
+        "greeting": "नमस्ते, मैं आपका मेडिकल अपॉइंटमेंट असिस्टेंट हूँ। मैं बुकिंग और डॉक्टर उपलब्धता में मदद कर सकता हूँ।",
+        "general_help": "मैं अपॉइंटमेंट बुकिंग या डॉक्टर उपलब्धता में मदद कर सकता हूँ। कृपया अपनी आवश्यकता बताएं।",
+        "intent_ack": "ठीक है, मैं आपकी अपॉइंटमेंट बुक करने में मदद कर सकता हूँ।",
+        "availability_intro": "ठीक है, मैं डॉक्टर की उपलब्धता देखने में मदद कर सकता हूँ। कृपया डॉक्टर का नाम और पसंदीदा तारीख बताएं।",
+        "availability_ask": "उपलब्धता देखने के लिए कृपया डॉक्टर का नाम और तारीख भेजें (YYYY-MM-DD या 'tomorrow').",
+        "availability_ask_doctor": "कृपया उपलब्धता देखने के लिए डॉक्टर का नाम बताएं।",
+        "availability_ask_date": "कृपया उपलब्धता देखने के लिए तारीख बताएं (YYYY-MM-DD या 'tomorrow').",
         "availability_noted": (
-            "à¤¨à¥‹à¤Ÿ à¤•à¤¿à¤¯à¤¾ à¤—à¤¯à¤¾à¥¤ à¤†à¤ª Dr. {availability_doctor} à¤•à¥‡ à¤²à¤¿à¤ {availability_date} à¤•à¥€ à¤‰à¤ªà¤²à¤¬à¥à¤§à¤¤à¤¾ à¤ªà¥‚à¤› à¤°à¤¹à¥‡ à¤¹à¥ˆà¤‚à¥¤\n"
-            "à¤¬à¥à¤•à¤¿à¤‚à¤— à¤œà¤¾à¤°à¥€ à¤°à¤–à¤¨à¥‡ à¤•à¥‡ à¤²à¤¿à¤ 'book appointment' à¤­à¥‡à¤œà¥‡à¤‚à¥¤"
+            "नोट किया गया। आप Dr. {availability_doctor} के लिए {availability_date} की उपलब्धता पूछ रहे हैं।\n"
+            "बुकिंग जारी रखने के लिए 'book appointment' भेजें।"
         ),
-        "empty_input": "à¤•à¥ƒà¤ªà¤¯à¤¾ à¤¸à¤‚à¤¦à¥‡à¤¶ à¤­à¥‡à¤œà¥‡à¤‚ à¤¤à¤¾à¤•à¤¿ à¤®à¥ˆà¤‚ à¤†à¤ªà¤•à¥€ à¤®à¤¦à¤¦ à¤•à¤° à¤¸à¤•à¥‚à¤à¥¤",
-        "abusive_language": "à¤®à¥ˆà¤‚ à¤•à¥‡à¤µà¤² à¤…à¤ªà¥‰à¤‡à¤‚à¤Ÿà¤®à¥‡à¤‚à¤Ÿ à¤¸à¤‚à¤¬à¤‚à¤§à¤¿à¤¤ à¤®à¤¦à¤¦ à¤•à¤° à¤¸à¤•à¤¤à¤¾ à¤¹à¥‚à¤à¥¤ à¤•à¥ƒà¤ªà¤¯à¤¾ à¤¸à¤®à¥à¤®à¤¾à¤¨à¤œà¤¨à¤• à¤­à¤¾à¤·à¤¾ à¤•à¤¾ à¤ªà¥à¤°à¤¯à¥‹à¤— à¤•à¤°à¥‡à¤‚à¥¤",
-        "abusive_language_final": "à¤•à¥ƒà¤ªà¤¯à¤¾ à¤†à¤—à¥‡ à¤•à¥€ à¤®à¤¦à¤¦ à¤•à¥‡ à¤²à¤¿à¤ à¤¸à¥€à¤§à¥‡ à¤•à¥à¤²à¤¿à¤¨à¤¿à¤• à¤¸à¥‡ à¤¸à¤‚à¤ªà¤°à¥à¤• à¤•à¤°à¥‡à¤‚à¥¤",
-        "no_intent": (
-            "à¤¶à¥à¤°à¥‚ à¤•à¤°à¤¨à¥‡ à¤•à¥‡ à¤²à¤¿à¤ à¤•à¥ƒà¤ªà¤¯à¤¾ à¤²à¤¿à¤–à¥‡à¤‚: 'I need to book an appointment'."
-        ),
+        "empty_input": "कृपया संदेश भेजें ताकि मैं आपकी मदद कर सकूँ।",
+        "abusive_language": "मैं केवल अपॉइंटमेंट संबंधित मदद कर सकता हूँ। कृपया सम्मानजनक भाषा का प्रयोग करें।",
+        "abusive_language_final": "कृपया आगे की मदद के लिए सीधे क्लिनिक से संपर्क करें।",
+        "no_intent": "शुरू करने के लिए कृपया लिखें: 'I need to book an appointment'.",
         "clarify_intent": (
-            "à¤•à¥ƒà¤ªà¤¯à¤¾ à¤à¤• à¤µà¤¿à¤•à¤²à¥à¤ª à¤šà¥à¤¨à¥‡à¤‚:\n"
-            "1. à¤…à¤ªà¥‰à¤‡à¤‚à¤Ÿà¤®à¥‡à¤‚à¤Ÿ à¤¬à¥à¤• à¤•à¤°à¥‡à¤‚\n"
-            "2. à¤¡à¥‰à¤•à¥à¤Ÿà¤° à¤‰à¤ªà¤²à¤¬à¥à¤§à¤¤à¤¾ à¤¦à¥‡à¤–à¥‡à¤‚"
+            "कृपया एक विकल्प चुनें:\n"
+            "1. अपॉइंटमेंट बुक करें\n"
+            "2. डॉक्टर उपलब्धता देखें\n"
+            "1 या 2 reply करें।"
         ),
-        "final_booking_check": "à¤•à¥à¤¯à¤¾ à¤†à¤ª à¤…à¤­à¥€ à¤®à¥‡à¤¡à¤¿à¤•à¤² à¤…à¤ªà¥‰à¤‡à¤‚à¤Ÿà¤®à¥‡à¤‚à¤Ÿ à¤¬à¥à¤• à¤•à¤°à¤¨à¤¾ à¤šà¤¾à¤¹à¤¤à¥‡ à¤¹à¥ˆà¤‚? à¤•à¥ƒà¤ªà¤¯à¤¾ YES à¤¯à¤¾ NO à¤®à¥‡à¤‚ à¤œà¤µà¤¾à¤¬ à¤¦à¥‡à¤‚à¥¤",
+        "final_booking_check": "क्या आप अभी मेडिकल अपॉइंटमेंट बुक करना चाहते हैं? कृपया YES या NO में जवाब दें।",
         "non_scope_final": (
-            "à¤®à¤¾à¤«à¤¼ à¤•à¥€à¤œà¤¿à¤, à¤®à¥ˆà¤‚ à¤®à¥‡à¤¡à¤¿à¤•à¤² à¤…à¤ªà¥‰à¤‡à¤‚à¤Ÿà¤®à¥‡à¤‚à¤Ÿ à¤…à¤¸à¤¿à¤¸à¥à¤Ÿà¥‡à¤‚à¤Ÿ à¤¹à¥‚à¤ à¤”à¤° à¤•à¥‡à¤µà¤² à¤¬à¥à¤•à¤¿à¤‚à¤— à¤¯à¤¾ à¤¡à¥‰à¤•à¥à¤Ÿà¤° à¤‰à¤ªà¤²à¤¬à¥à¤§à¤¤à¤¾ à¤®à¥‡à¤‚ à¤®à¤¦à¤¦ à¤•à¤° à¤¸à¤•à¤¤à¤¾ à¤¹à¥‚à¤à¥¤\n"
-            "à¤¶à¥à¤°à¥‚ à¤•à¤°à¤¨à¥‡ à¤•à¥‡ à¤²à¤¿à¤ à¤•à¤­à¥€ à¤­à¥€ 'book appointment' à¤­à¥‡à¤œà¥‡à¤‚à¥¤"
+            "माफ़ कीजिए, मैं मेडिकल अपॉइंटमेंट असिस्टेंट हूँ और केवल बुकिंग या डॉक्टर उपलब्धता में मदद कर सकता हूँ।\n"
+            "शुरू करने के लिए कभी भी 'book appointment' भेजें।"
         ),
-        "ask_name": "à¤•à¥ƒà¤ªà¤¯à¤¾ à¤®à¤°à¥€à¤œ à¤•à¤¾ à¤ªà¥‚à¤°à¤¾ à¤¨à¤¾à¤® à¤¬à¤¤à¤¾à¤à¤‚à¥¤",
+        "ask_name": "कृपया मरीज़ का पूरा नाम बताएं।",
         "existing_booking_found": (
-            "à¤†à¤ªà¤•à¥€ à¤à¤• à¤…à¤ªà¥‰à¤‡à¤‚à¤Ÿà¤®à¥‡à¤‚à¤Ÿ à¤ªà¤¹à¤²à¥‡ à¤¸à¥‡ à¤¬à¥à¤• à¤¹à¥ˆ:\n"
+            "आपकी एक अपॉइंटमेंट पहले से बुक है:\n"
             "Booking Number: {appointment_id}\n"
-            "à¤•à¥à¤²à¤¿à¤¨à¤¿à¤•: {clinic_name}\n"
-            "à¤¤à¤¾à¤°à¥€à¤–: {appointment_date}\n"
-            "à¤¸à¤®à¤¯: {appointment_time}\n"
-            "à¤à¤• à¤µà¤¿à¤•à¤²à¥à¤ª à¤šà¥à¤¨à¥‡à¤‚:\n"
-            "1. à¤ªà¥à¤°à¤¾à¤¨à¥€ à¤…à¤ªà¥‰à¤‡à¤‚à¤Ÿà¤®à¥‡à¤‚à¤Ÿ à¤°à¤–à¥‡à¤‚\n"
-            "2. à¤…à¤ªà¥‰à¤‡à¤‚à¤Ÿà¤®à¥‡à¤‚à¤Ÿ cancel à¤•à¤°à¥‡à¤‚\n"
-            "3. Reschedule à¤•à¤°à¥‡à¤‚ (clinic/date/time)"
+            "क्लिनिक: {clinic_name}\n"
+            "तारीख: {appointment_date}\n"
+            "समय: {appointment_time}\n"
+            "एक विकल्प चुनें:\n"
+            "1. पुरानी अपॉइंटमेंट रखें\n"
+            "2. अपॉइंटमेंट cancel करें\n"
+            "3. Reschedule करें (clinic/date/time)\n"
+            "4. किसी और व्यक्ति के लिए बुक करें"
         ),
-        "existing_booking_choice_invalid": "à¤•à¥ƒà¤ªà¤¯à¤¾ 1, 2, à¤¯à¤¾ 3 à¤­à¥‡à¤œà¥‡à¤‚à¥¤",
-        "existing_booking_choice_again": "à¤•à¥ƒà¤ªà¤¯à¤¾ à¤«à¤¿à¤° à¤¸à¥‡ à¤šà¥à¤¨à¥‡à¤‚:\n1. à¤ªà¥à¤°à¤¾à¤¨à¥€ à¤°à¤–à¥‡à¤‚\n2. Cancel à¤•à¤°à¥‡à¤‚\n3. Reschedule à¤•à¤°à¥‡à¤‚",
-        "existing_booking_keep": "à¤ à¥€à¤• à¤¹à¥ˆà¥¤ à¤†à¤ªà¤•à¥€ à¤®à¥Œà¤œà¥‚à¤¦à¤¾ à¤…à¤ªà¥‰à¤‡à¤‚à¤Ÿà¤®à¥‡à¤‚à¤Ÿ à¤µà¥ˆà¤¸à¥€ à¤¹à¥€ à¤°à¤¹à¥‡à¤—à¥€à¥¤",
-        "existing_booking_cancel_only_done": "à¤ à¥€à¤• à¤¹à¥ˆà¥¤ à¤†à¤ªà¤•à¥€ à¤…à¤ªà¥‰à¤‡à¤‚à¤Ÿà¤®à¥‡à¤‚à¤Ÿ cancel à¤•à¤° à¤¦à¥€ à¤—à¤ˆ à¤¹à¥ˆà¥¤",
-        "existing_booking_reschedule_start": "à¤ à¥€à¤• à¤¹à¥ˆà¥¤ à¤†à¤ªà¤•à¥€ à¤ªà¥à¤°à¤¾à¤¨à¥€ à¤•à¥à¤²à¤¿à¤¨à¤¿à¤•: {clinic_name}à¥¤ à¤†à¤ª à¤µà¤¹à¥€ à¤¯à¤¾ à¤¦à¥‚à¤¸à¤°à¥€ à¤•à¥à¤²à¤¿à¤¨à¤¿à¤• à¤šà¥à¤¨à¤•à¤° reschedule à¤•à¤° à¤¸à¤•à¤¤à¥‡ à¤¹à¥ˆà¤‚à¥¤",
+        "existing_booking_choice_invalid": "कृपया 1, 2, 3, या 4 भेजें।",
+        "existing_booking_choice_again": "कृपया फिर से चुनें:\n1. पुरानी रखें\n2. Cancel करें\n3. Reschedule करें\n4. किसी और व्यक्ति के लिए बुक करें",
+        "existing_booking_keep": "ठीक है। आपकी मौजूदा अपॉइंटमेंट वैसी ही रहेगी।",
+        "existing_booking_cancel_only_done": "ठीक है। आपकी अपॉइंटमेंट cancel कर दी गई है।",
+        "existing_booking_reschedule_start": "ठीक है। आपकी पुरानी क्लिनिक: {clinic_name}। आप वही या दूसरी क्लिनिक चुनकर reschedule कर सकते हैं।",
+        "max_active_bookings_actions": (
+            "एक विकल्प चुनें:\n"
+            "1. किसी पुरानी अपॉइंटमेंट को cancel करें\n"
+            "2. किसी पुरानी अपॉइंटमेंट को reschedule करें\n"
+            "0. वापस जाएं"
+        ),
+        "max_active_bookings_invalid": "कृपया 1, 2, या 0 भेजें।",
         "confirm_reschedule_summary": (
-            "à¤•à¥ƒà¤ªà¤¯à¤¾ reschedule à¤•à¥€ à¤ªà¥à¤·à¥à¤Ÿà¤¿ à¤•à¤°à¥‡à¤‚:\n"
-            "à¤•à¥à¤²à¤¿à¤¨à¤¿à¤•: {clinic_name}\n"
-            "à¤ªà¥à¤°à¤¾à¤¨à¤¾ à¤¸à¥à¤²à¥‰à¤Ÿ: {old_date} {old_time}\n"
-            "à¤¨à¤¯à¤¾ à¤¸à¥à¤²à¥‰à¤Ÿ: {new_date} {new_time}\n"
-            "à¤ªà¥à¤·à¥à¤Ÿà¤¿ à¤•à¥‡ à¤²à¤¿à¤ YES à¤¯à¤¾ à¤µà¤¾à¤ªà¤¸ à¤œà¤¾à¤¨à¥‡ à¤•à¥‡ à¤²à¤¿à¤ NO à¤­à¥‡à¤œà¥‡à¤‚à¥¤"
+            "कृपया reschedule की पुष्टि करें:\n"
+            "क्लिनिक: {clinic_name}\n"
+            "पुराना स्लॉट: {old_date} {old_time}\n"
+            "नया स्लॉट: {new_date} {new_time}\n"
+            "1. Confirm\n"
+            "2. Change details\n"
+            "0. Go back\n"
+            "Reply with 1, 2, or 0."
         ),
-        "confirm_reschedule_prompt": "à¤•à¥ƒà¤ªà¤¯à¤¾ reschedule à¤ªà¥à¤·à¥à¤Ÿà¤¿ à¤•à¥‡ à¤²à¤¿à¤ YES à¤¯à¤¾ à¤µà¤¾à¤ªà¤¸ à¤œà¤¾à¤¨à¥‡ à¤•à¥‡ à¤²à¤¿à¤ NO à¤­à¥‡à¤œà¥‡à¤‚à¥¤",
+        "confirm_reschedule_prompt": "1. Confirm\n2. Change details\n0. Go back\nReply with 1, 2, or 0.",
         "reschedule_confirmed": (
-            "à¤…à¤ªà¥‰à¤‡à¤‚à¤Ÿà¤®à¥‡à¤‚à¤Ÿ à¤¸à¤«à¤²à¤¤à¤¾à¤ªà¥‚à¤°à¥à¤µà¤• reschedule à¤¹à¥‹ à¤—à¤ˆà¥¤\n"
+            "अपॉइंटमेंट सफलतापूर्वक reschedule हो गई।\n"
             "*Booking Number:* {appointment_id}\n"
-            "à¤•à¥à¤²à¤¿à¤¨à¤¿à¤•: {clinic_name}\n"
-            "à¤¤à¤¾à¤°à¥€à¤–: {appointment_date}\n"
-            "à¤¸à¤®à¤¯: {appointment_time}"
+            "क्लिनिक: {clinic_name}\n"
+            "तारीख: {appointment_date}\n"
+            "समय: {appointment_time}"
         ),
-        "reschedule_failed": "Reschedule à¤…à¤¸à¤«à¤² à¤°à¤¹à¤¾ à¤•à¥à¤¯à¥‹à¤‚à¤•à¤¿ à¤šà¥à¤¨à¤¾ à¤—à¤¯à¤¾ à¤¸à¥à¤²à¥‰à¤Ÿ à¤…à¤­à¥€ à¤‰à¤ªà¤²à¤¬à¥à¤§ à¤¨à¤¹à¥€à¤‚ à¤¹à¥ˆà¥¤ à¤•à¥ƒà¤ªà¤¯à¤¾ à¤¦à¥‚à¤¸à¤°à¥€ à¤¤à¤¾à¤°à¥€à¤–/à¤¸à¤®à¤¯ à¤šà¥à¤¨à¥‡à¤‚à¥¤",
-        "existing_booking_cancel_failed": "à¤…à¤­à¥€ à¤ªà¥à¤°à¤¾à¤¨à¥€ à¤…à¤ªà¥‰à¤‡à¤‚à¤Ÿà¤®à¥‡à¤‚à¤Ÿ cancel à¤¨à¤¹à¥€à¤‚ à¤¹à¥‹ à¤ªà¤¾à¤ˆà¥¤ à¤•à¥ƒà¤ªà¤¯à¤¾ à¤¬à¤¾à¤¦ à¤®à¥‡à¤‚ à¤«à¤¿à¤° à¤•à¥‹à¤¶à¤¿à¤¶ à¤•à¤°à¥‡à¤‚à¥¤",
-        "invalid_name": "à¤•à¥ƒà¤ªà¤¯à¤¾ à¤¸à¤¹à¥€ à¤¨à¤¾à¤® à¤¬à¤¤à¤¾à¤à¤‚à¥¤ à¤‰à¤¦à¤¾à¤¹à¤°à¤£: Vineeth Raja Banala",
-        "name_ack": "à¤§à¤¨à¥à¤¯à¤µà¤¾à¤¦, {name}à¥¤",
-        "ask_patient_type": "à¤®à¤°à¥€à¤œ à¤ªà¥à¤°à¤¾à¤¨à¤¾ à¤¹à¥ˆ à¤¯à¤¾ à¤¨à¤¯à¤¾?\n1. New\n2. Old",
-        "invalid_patient_type": "à¤•à¥ƒà¤ªà¤¯à¤¾ 'old' à¤¯à¤¾ 'new' à¤®à¥‡à¤‚ à¤‰à¤¤à¥à¤¤à¤° à¤¦à¥‡à¤‚à¥¤",
-        "patient_type_ack": "à¤¨à¥‹à¤Ÿ à¤•à¤¿à¤¯à¤¾ à¤—à¤¯à¤¾à¥¤ à¤®à¤°à¥€à¤œ à¤•à¤¾ à¤ªà¥à¤°à¤•à¤¾à¤°: {patient_type}à¥¤",
-        "ask_age": "à¤•à¥ƒà¤ªà¤¯à¤¾ à¤®à¤°à¥€à¤œ à¤•à¥€ à¤†à¤¯à¥ à¤¬à¤¤à¤¾à¤à¤‚à¥¤",
-        "invalid_age": "à¤•à¥ƒà¤ªà¤¯à¤¾ 1 à¤¸à¥‡ 120 à¤•à¥‡ à¤¬à¥€à¤š à¤¸à¤¹à¥€ à¤†à¤¯à¥ à¤¬à¤¤à¤¾à¤à¤‚à¥¤",
-        "age_ack": "à¤†à¤¯à¥ à¤¨à¥‹à¤Ÿ à¤•à¥€ à¤—à¤ˆ: {age}à¥¤",
-        "ask_gender": "à¤•à¥ƒà¤ªà¤¯à¤¾ à¤®à¤°à¥€à¤œ à¤•à¤¾ à¤œà¥‡à¤‚à¤¡à¤° à¤¬à¤¤à¤¾à¤à¤‚:\n1. Male\n2. Female\n3. Other",
-        "invalid_gender": "à¤•à¥ƒà¤ªà¤¯à¤¾ à¤œà¥‡à¤‚à¤¡à¤° male, female, à¤¯à¤¾ other à¤®à¥‡à¤‚ à¤¬à¤¤à¤¾à¤à¤‚à¥¤",
-        "gender_ack": "à¤œà¥‡à¤‚à¤¡à¤° à¤¨à¥‹à¤Ÿ à¤•à¤¿à¤¯à¤¾ à¤—à¤¯à¤¾: {gender}à¥¤",
+        "reschedule_failed": "Reschedule असफल रहा क्योंकि चुना गया स्लॉट अभी उपलब्ध नहीं है। कृपया दूसरी तारीख/समय चुनें।",
+        "existing_booking_cancel_failed": "अभी पुरानी अपॉइंटमेंट cancel नहीं हो पाई। कृपया बाद में फिर कोशिश करें।",
+        "invalid_name": "कृपया सही नाम बताएं। उदाहरण: Vineeth Raja Banala",
+        "name_ack": "धन्यवाद, {name}।",
+        "ask_patient_type": "मरीज़ पुराना है या नया?\n1. New\n2. Old\nReply with 1, 2, or 0.",
+        "invalid_patient_type": "Reply with 1, 2, or 0.",
+        "patient_type_ack": "नोट किया गया। मरीज़ का प्रकार: {patient_type}।",
+        "ask_age": "कृपया मरीज़ की आयु बताएं।",
+        "invalid_age": "कृपया 1 से 120 के बीच सही आयु बताएं।",
+        "age_ack": "आयु नोट की गई: {age}।",
+        "ask_gender": "कृपया मरीज़ का जेंडर बताएं:\n1. Male\n2. Female\n3. Other\nReply with 1, 2, 3, or 0.",
+        "invalid_gender": "Reply with 1, 2, 3, or 0.",
+        "gender_ack": "जेंडर नोट किया गया: {gender}।",
         "ask_phone": (
-            "à¤•à¥ƒà¤ªà¤¯à¤¾ à¤¸à¤‚à¤ªà¤°à¥à¤• à¤¨à¤‚à¤¬à¤° à¤ªà¥à¤·à¥à¤Ÿà¤¿ à¤•à¤°à¥‡à¤‚:\n"
-            "1. à¤¯à¤¹à¥€ WhatsApp à¤¨à¤‚à¤¬à¤° à¤‰à¤ªà¤¯à¥‹à¤— à¤•à¤°à¥‡à¤‚\n"
-            "2. à¤…à¤²à¤— à¤¨à¤‚à¤¬à¤° à¤­à¥‡à¤œà¥‡à¤‚ (10 à¤…à¤‚à¤•)"
+            "कृपया संपर्क नंबर की पुष्टि करें:\n"
+            "1. यही WhatsApp नंबर उपयोग करें\n"
+            "2. अलग नंबर भेजें (10 अंक)"
         ),
         "ask_phone_telegram": "कृपया वैध 10 अंकों का संपर्क नंबर भेजें।",
-        "invalid_phone_same_missing": "WhatsApp à¤¨à¤‚à¤¬à¤° à¤ªà¤¢à¤¼à¤¾ à¤¨à¤¹à¥€à¤‚ à¤œà¤¾ à¤¸à¤•à¤¾à¥¤ à¤•à¥ƒà¤ªà¤¯à¤¾ 10 à¤…à¤‚à¤•à¥‹à¤‚ à¤•à¤¾ à¤¨à¤‚à¤¬à¤° à¤­à¥‡à¤œà¥‡à¤‚à¥¤",
-        "invalid_phone": "à¤•à¥ƒà¤ªà¤¯à¤¾ 10 à¤…à¤‚à¤•à¥‹à¤‚ à¤•à¤¾ à¤¸à¤¹à¥€ à¤¸à¤‚à¤ªà¤°à¥à¤• à¤¨à¤‚à¤¬à¤° à¤­à¥‡à¤œà¥‡à¤‚à¥¤",
-        "phone_ack": "à¤¸à¤‚à¤ªà¤°à¥à¤• à¤¨à¤‚à¤¬à¤° à¤¨à¥‹à¤Ÿ à¤•à¤¿à¤¯à¤¾ à¤—à¤¯à¤¾: {phone_number}à¥¤",
+        "invalid_phone_same_missing": "WhatsApp नंबर पढ़ा नहीं जा सका। कृपया 10 अंकों का नंबर भेजें।",
+        "invalid_phone": "कृपया 10 अंकों का सही संपर्क नंबर भेजें।",
+        "phone_ack": "संपर्क नंबर नोट किया गया: {phone_number}।",
         "ask_clinic": (
-            "à¤•à¥ƒà¤ªà¤¯à¤¾ à¤•à¥à¤²à¤¿à¤¨à¤¿à¤• à¤šà¥à¤¨à¥‡à¤‚:\n"
-            "1. City Care Clinic | MG Road, Hyderabad | à¤†à¤œ à¤¸à¥à¤²à¥‰à¤Ÿ: 7\n"
-            "2. Sunrise Health Center | KPHB, Hyderabad | à¤†à¤œ à¤¸à¥à¤²à¥‰à¤Ÿ: 5\n"
-            "3. Green Valley Clinic | Gachibowli, Hyderabad | à¤†à¤œ à¤¸à¥à¤²à¥‰à¤Ÿ: 4"
+            "कृपया क्लिनिक चुनें:\n"
+            "1. City Care Clinic | MG Road, Hyderabad | आज स्लॉट: 7\n"
+            "2. Sunrise Health Center | KPHB, Hyderabad | आज स्लॉट: 5\n"
+            "3. Green Valley Clinic | Gachibowli, Hyderabad | आज स्लॉट: 4"
         ),
-        "ask_clinic_header": "à¤•à¥ƒà¤ªà¤¯à¤¾ à¤•à¥à¤²à¤¿à¤¨à¤¿à¤• à¤šà¥à¤¨à¥‡à¤‚:",
-        "invalid_clinic": "à¤•à¥ƒà¤ªà¤¯à¤¾ à¤•à¥à¤²à¤¿à¤¨à¤¿à¤• 1, 2 à¤¯à¤¾ 3 à¤šà¥à¤¨à¥‡à¤‚à¥¤",
-        "no_clinic_available": "à¤«à¤¿à¤²à¤¹à¤¾à¤² à¤¬à¥à¤•à¤¿à¤‚à¤— à¤•à¥‡ à¤²à¤¿à¤ à¤•à¥‹à¤ˆ à¤•à¥à¤²à¤¿à¤¨à¤¿à¤• à¤‰à¤ªà¤²à¤¬à¥à¤§ à¤¨à¤¹à¥€à¤‚ à¤¹à¥ˆà¥¤ à¤•à¥ƒà¤ªà¤¯à¤¾ à¤¬à¤¾à¤¦ à¤®à¥‡à¤‚ à¤«à¤¿à¤° à¤•à¥‹à¤¶à¤¿à¤¶ à¤•à¤°à¥‡à¤‚à¥¤",
-        "no_clinic_available_restart": "Abhi koi clinic available nahi hai. Kripya baad mein try karein. Restart ke liye 'book appointment' bhejein.",
-        "clinic_ack": "à¤•à¥à¤²à¤¿à¤¨à¤¿à¤• à¤¨à¥‹à¤Ÿ à¤•à¤¿à¤¯à¤¾ à¤—à¤¯à¤¾: {clinic_name}, {clinic_address}à¥¤",
+        "ask_clinic_header": "कृपया क्लिनिक चुनें:",
+        "invalid_clinic": "कृपया क्लिनिक 1, 2 या 3 चुनें।",
+        "no_clinic_available": "फिलहाल बुकिंग के लिए कोई क्लिनिक उपलब्ध नहीं है। कृपया बाद में फिर कोशिश करें।",
+        "no_clinic_available_restart": "फिलहाल कोई क्लिनिक उपलब्ध नहीं है। कृपया बाद में कोशिश करें। पुनः शुरू करने के लिए 'book appointment' भेजें।",
+        "clinic_ack": "क्लिनिक नोट किया गया: {clinic_name}, {clinic_address}।",
         "ask_reason": (
-            "à¤•à¤¾à¤°à¤£ à¤šà¥à¤¨à¥‡à¤‚ (à¤à¤• à¤¸à¥‡ à¤…à¤§à¤¿à¤• à¤šà¥à¤¨ à¤¸à¤•à¤¤à¥‡ à¤¹à¥ˆà¤‚, à¤œà¥ˆà¤¸à¥‡ 1,3):\n"
+            "कारण चुनें (एक से अधिक चुन सकते हैं, जैसे 1,3):\n"
             "1. Fever\n"
             "2. Headache\n"
             "3. Stomach pain\n"
             "4. Cold\n"
-            "5. Other (à¤•à¤¾à¤°à¤£ à¤Ÿà¤¾à¤‡à¤ª à¤•à¤°à¥‡à¤‚)"
+            "5. Other (कारण टाइप करें)\n"
+            "Reply with 1, 2, 3, 4, 5, or 0."
         ),
-        "ask_reason_other": "à¤•à¥ƒà¤ªà¤¯à¤¾ à¤•à¤¾à¤°à¤£ à¤Ÿà¤¾à¤‡à¤ª à¤•à¤°à¥‡à¤‚à¥¤",
-        "invalid_reason_option": "à¤•à¥ƒà¤ªà¤¯à¤¾ à¤¸à¤¹à¥€ à¤•à¤¾à¤°à¤£ à¤µà¤¿à¤•à¤²à¥à¤ª à¤šà¥à¤¨à¥‡à¤‚, à¤¯à¤¾ à¤•à¤¾à¤°à¤£ à¤Ÿà¥‡à¤•à¥à¤¸à¥à¤Ÿ à¤®à¥‡à¤‚ à¤²à¤¿à¤–à¥‡à¤‚à¥¤",
-        "invalid_reason": "à¤•à¥ƒà¤ªà¤¯à¤¾ à¤•à¤¾à¤°à¤£ à¤¥à¥‹à¤¡à¤¼à¥‡ à¤¸à¥à¤ªà¤·à¥à¤Ÿ à¤°à¥‚à¤ª à¤®à¥‡à¤‚ à¤¬à¤¤à¤¾à¤à¤‚à¥¤",
-        "reason_ack": "à¤•à¤¾à¤°à¤£ à¤¨à¥‹à¤Ÿ à¤•à¤¿à¤¯à¤¾ à¤—à¤¯à¤¾à¥¤",
-        "ask_symptoms": "à¤•à¥ƒà¤ªà¤¯à¤¾ à¤²à¤•à¥à¤·à¤£ à¤¬à¤¤à¤¾à¤à¤‚à¥¤",
-        "invalid_symptoms": "à¤•à¥ƒà¤ªà¤¯à¤¾ à¤²à¤•à¥à¤·à¤£ à¤¥à¥‹à¤¡à¤¼à¥‡ à¤¸à¥à¤ªà¤·à¥à¤Ÿ à¤°à¥‚à¤ª à¤®à¥‡à¤‚ à¤¬à¤¤à¤¾à¤à¤‚à¥¤",
-        "symptoms_ack": "à¤²à¤•à¥à¤·à¤£ à¤¨à¥‹à¤Ÿ à¤•à¤¿à¤ à¤—à¤à¥¤",
-        "ask_date": "à¤•à¥ƒà¤ªà¤¯à¤¾ à¤ªà¤¸à¤‚à¤¦à¥€à¤¦à¤¾ à¤¤à¤¾à¤°à¥€à¤– à¤­à¥‡à¤œà¥‡à¤‚ (YYYY-MM-DD à¤¯à¤¾ 'tomorrow').",
+        "ask_reason_other": "कृपया कारण टाइप करें।",
+        "invalid_reason_option": "कृपया सही कारण विकल्प चुनें, या कारण टेक्स्ट में लिखें।",
+        "invalid_reason": "कृपया कारण थोड़े स्पष्ट रूप में बताएं।",
+        "reason_ack": "कारण नोट किया गया।",
+        "ask_symptoms": "कृपया लक्षण बताएं।",
+        "invalid_symptoms": "कृपया लक्षण थोड़े स्पष्ट रूप में बताएं।",
+        "symptoms_ack": "लक्षण नोट किए गए।",
+        "ask_date": "कृपया पसंदीदा तारीख भेजें (YYYY-MM-DD या 'tomorrow').",
         "ask_date_options": (
-            "à¤•à¥ƒà¤ªà¤¯à¤¾ à¤…à¤ªà¥‰à¤‡à¤‚à¤Ÿà¤®à¥‡à¤‚à¤Ÿ à¤¤à¤¾à¤°à¥€à¤– à¤šà¥à¤¨à¥‡à¤‚:\n"
+            "कृपया अपॉइंटमेंट तारीख चुनें:\n"
             "1. {date_1}\n"
             "2. {date_2}\n"
             "3. Other date"
         ),
-        "ask_date_manual": "à¤•à¥ƒà¤ªà¤¯à¤¾ à¤¤à¤¾à¤°à¥€à¤– YYYY-MM-DD à¤«à¥‰à¤°à¥à¤®à¥‡à¤Ÿ à¤®à¥‡à¤‚ à¤Ÿà¤¾à¤‡à¤ª à¤•à¤°à¥‡à¤‚à¥¤",
-        "invalid_date": "à¤¤à¤¾à¤°à¥€à¤– à¤…à¤®à¤¾à¤¨à¥à¤¯ à¤¹à¥ˆà¥¤ à¤•à¥ƒà¤ªà¤¯à¤¾ à¤­à¤µà¤¿à¤·à¥à¤¯ à¤•à¥€ à¤¤à¤¾à¤°à¥€à¤– YYYY-MM-DD à¤«à¤¼à¥‰à¤°à¥à¤®à¥‡à¤Ÿ à¤®à¥‡à¤‚ à¤­à¥‡à¤œà¥‡à¤‚à¥¤",
-        "no_date_available": "à¤‡à¤¸ à¤•à¥à¤²à¤¿à¤¨à¤¿à¤• à¤®à¥‡à¤‚ à¤«à¤¿à¤²à¤¹à¤¾à¤² à¤•à¥‹à¤ˆ à¤‰à¤ªà¤²à¤¬à¥à¤§ à¤¤à¤¾à¤°à¥€à¤– à¤¨à¤¹à¥€à¤‚ à¤¹à¥ˆà¥¤ à¤•à¥ƒà¤ªà¤¯à¤¾ à¤¦à¥‚à¤¸à¤°à¤¾ à¤•à¥à¤²à¤¿à¤¨à¤¿à¤• à¤šà¥à¤¨à¥‡à¤‚ à¤¯à¤¾ à¤¬à¤¾à¤¦ à¤®à¥‡à¤‚ à¤•à¥‹à¤¶à¤¿à¤¶ à¤•à¤°à¥‡à¤‚à¥¤",
-        "date_ack": "à¤¤à¤¾à¤°à¥€à¤– à¤¨à¥‹à¤Ÿ à¤•à¥€ à¤—à¤ˆ: {appointment_date}à¥¤",
-        "ask_time": "à¤•à¥ƒà¤ªà¤¯à¤¾ à¤ªà¤¸à¤‚à¤¦à¥€à¤¦à¤¾ à¤¸à¤®à¤¯ à¤­à¥‡à¤œà¥‡à¤‚ (à¤œà¥ˆà¤¸à¥‡ 10 am à¤¯à¤¾ 14:30)à¥¤",
+        "ask_date_manual": "कृपया सही विकल्प संख्या चुनें, या वापस जाने के लिए 0 भेजें।",
+        "invalid_date": "तारीख अमान्य है। कृपया भविष्य की तारीख YYYY-MM-DD फ़ॉर्मेट में भेजें।",
+        "no_date_available": "इस क्लिनिक में फिलहाल कोई उपलब्ध तारीख नहीं है। कृपया दूसरा क्लिनिक चुनें या बाद में कोशिश करें।",
+        "date_ack": "तारीख नोट की गई: {appointment_date}।",
+        "ask_time": "कृपया पसंदीदा समय भेजें (जैसे 10 am या 14:30)।",
         "ask_time_slots": (
-            "à¤•à¥ƒà¤ªà¤¯à¤¾ à¤¸à¥à¤²à¥‰à¤Ÿ à¤šà¥à¤¨à¥‡à¤‚:\n"
+            "कृपया स्लॉट चुनें:\n"
             "1. {slot_1}\n"
             "2. {slot_2}\n"
             "3. {slot_3}\n"
-            "à¤¯à¤¾ à¤¦à¥‚à¤¸à¤°à¤¾ à¤¸à¤®à¤¯ à¤Ÿà¤¾à¤‡à¤ª à¤•à¤°à¥‡à¤‚à¥¤"
+            "या दूसरा समय टाइप करें।\n"
+            "Reply with 1, 2, 3, or 0.\n"
         ),
-        "time_not_available": "à¤®à¤¾à¤‚à¤—à¤¾ à¤—à¤¯à¤¾ à¤¸à¤®à¤¯ {requested_time} à¤‰à¤ªà¤²à¤¬à¥à¤§ à¤¨à¤¹à¥€à¤‚ à¤¹à¥ˆà¥¤",
-        "no_time_available": "à¤‡à¤¸ à¤¤à¤¾à¤°à¥€à¤– à¤•à¥‡ à¤²à¤¿à¤ à¤•à¥‹à¤ˆ à¤‰à¤ªà¤²à¤¬à¥à¤§ à¤¸à¤®à¤¯ à¤¸à¥à¤²à¥‰à¤Ÿ à¤¨à¤¹à¥€à¤‚ à¤¹à¥ˆà¥¤ à¤•à¥ƒà¤ªà¤¯à¤¾ à¤¦à¥‚à¤¸à¤°à¥€ à¤¤à¤¾à¤°à¥€à¤– à¤šà¥à¤¨à¥‡à¤‚à¥¤",
-        "time_ack": "à¤¸à¤®à¤¯ à¤¨à¥‹à¤Ÿ à¤•à¤¿à¤¯à¤¾ à¤—à¤¯à¤¾: {appointment_time}à¥¤",
-        "invalid_time": "à¤¸à¤®à¤¯ à¤•à¤¾ à¤«à¤¼à¥‰à¤°à¥à¤®à¥‡à¤Ÿ à¤…à¤®à¤¾à¤¨à¥à¤¯ à¤¹à¥ˆà¥¤ à¤‰à¤¦à¤¾à¤¹à¤°à¤£: 10 am à¤¯à¤¾ 14:30",
+        "time_not_available": "माँगा गया समय {requested_time} उपलब्ध नहीं है।",
+        "no_time_available": "इस तारीख के लिए कोई उपलब्ध समय स्लॉट नहीं है। कृपया दूसरी तारीख चुनें।",
+        "time_ack": "समय नोट किया गया: {appointment_time}।",
+        "invalid_time": "समय का फ़ॉर्मेट अमान्य है। उदाहरण: 10 am या 14:30",
         "confirm_summary": (
-            "à¤•à¥ƒà¤ªà¤¯à¤¾ à¤…à¤ªà¥‰à¤‡à¤‚à¤Ÿà¤®à¥‡à¤‚à¤Ÿ à¤µà¤¿à¤µà¤°à¤£ à¤•à¥€ à¤ªà¥à¤·à¥à¤Ÿà¤¿ à¤•à¤°à¥‡à¤‚:\n"
-            "à¤¨à¤¾à¤®: {patient_name}\n"
-            "à¤®à¤°à¥€à¤œ à¤•à¤¾ à¤ªà¥à¤°à¤•à¤¾à¤°: {patient_type}\n"
-            "à¤†à¤¯à¥: {age}\n"
-            "à¤œà¥‡à¤‚à¤¡à¤°: {gender}\n"
-            "à¤¸à¤‚à¤ªà¤°à¥à¤•: {phone_number}\n"
-            "à¤•à¥à¤²à¤¿à¤¨à¤¿à¤•: {clinic_name}\n"
-            "à¤•à¥à¤²à¤¿à¤¨à¤¿à¤• à¤ªà¤¤à¤¾: {clinic_address}\n"
-            "à¤•à¤¾à¤°à¤£: {reason}\n"
-            "à¤¤à¤¾à¤°à¥€à¤–: {appointment_date}\n"
-            "à¤¸à¤®à¤¯: {appointment_time}\n"
-            "à¤ªà¥à¤·à¥à¤Ÿà¤¿ à¤•à¥‡ à¤²à¤¿à¤ YES à¤”à¤° à¤µà¤¿à¤µà¤°à¤£ à¤¬à¤¦à¤²à¤¨à¥‡ à¤•à¥‡ à¤²à¤¿à¤ NO à¤­à¥‡à¤œà¥‡à¤‚à¥¤"
+            "कृपया अपॉइंटमेंट विवरण की पुष्टि करें:\n"
+            "नाम: {patient_name}\n"
+            "मरीज़ का प्रकार: {patient_type}\n"
+            "आयु: {age}\n"
+            "जेंडर: {gender}\n"
+            "संपर्क: {phone_number}\n"
+            "क्लिनिक: {clinic_name}\n"
+            "क्लिनिक पता: {clinic_address}\n"
+            "कारण: {reason}\n"
+            "तारीख: {appointment_date}\n"
+            "समय: {appointment_time}\n"
+            "1. Confirm\n"
+            "2. Change details\n"
+            "0. Go back\n"
+            "Reply with 1, 2, or 0."
         ),
-        "confirm_prompt": "à¤•à¥ƒà¤ªà¤¯à¤¾ à¤ªà¥à¤·à¥à¤Ÿà¤¿ à¤•à¥‡ à¤²à¤¿à¤ YES à¤¯à¤¾ à¤µà¤¿à¤µà¤°à¤£ à¤¬à¤¦à¤²à¤¨à¥‡ à¤•à¥‡ à¤²à¤¿à¤ NO à¤­à¥‡à¤œà¥‡à¤‚à¥¤",
+        "confirm_prompt": "1. Confirm\n2. Change details\n0. Go back\nReply with 1, 2, or 0.",
         "ask_change_field": (
-            "à¤•à¥‹à¤ˆ à¤¬à¤¾à¤¤ à¤¨à¤¹à¥€à¤‚à¥¤ à¤†à¤ª à¤•à¥Œà¤¨-à¤¸à¤¾ à¤µà¤¿à¤µà¤°à¤£ à¤¬à¤¦à¤²à¤¨à¤¾ à¤šà¤¾à¤¹à¤¤à¥‡ à¤¹à¥ˆà¤‚?\n"
-            "1. à¤¨à¤¾à¤®\n"
-            "2. à¤®à¤°à¥€à¤œ à¤•à¤¾ à¤ªà¥à¤°à¤•à¤¾à¤°\n"
-            "3. à¤†à¤¯à¥\n"
-            "4. à¤œà¥‡à¤‚à¤¡à¤°\n"
-            "5. à¤¸à¤‚à¤ªà¤°à¥à¤• à¤¨à¤‚à¤¬à¤°\n"
-            "6. à¤•à¥à¤²à¤¿à¤¨à¤¿à¤•\n"
-            "7. à¤¤à¤¾à¤°à¥€à¤–\n"
-            "8. à¤¸à¤®à¤¯\n"
-            "9. à¤•à¤¾à¤°à¤£\n"
-            "10. à¤²à¤•à¥à¤·à¤£"
+            "कोई बात नहीं। आप कौन-सा विवरण बदलना चाहते हैं?\n"
+            "1. नाम\n"
+            "2. मरीज़ का प्रकार\n"
+            "3. आयु\n"
+            "4. जेंडर\n"
+            "5. संपर्क नंबर\n"
+            "6. क्लिनिक\n"
+            "7. तारीख\n"
+            "8. समय\n"
+            "9. कारण\n"
+            "10. लक्षण\n"
+            "0. Go back\n"
+            "Reply with 1-10 or 0."
         ),
-        "invalid_change_field": "à¤•à¥ƒà¤ªà¤¯à¤¾ à¤¸à¤¹à¥€ à¤µà¤¿à¤•à¤²à¥à¤ª à¤šà¥à¤¨à¥‡à¤‚ (1-10), à¤¯à¤¾ à¤«à¤¼à¥€à¤²à¥à¤¡ à¤•à¤¾ à¤¨à¤¾à¤® à¤²à¤¿à¤–à¥‡à¤‚à¥¤",
-        "change_ack": (
-            "à¤ à¥€à¤• à¤¹à¥ˆà¥¤ à¤¹à¤® à¤µà¤¹ à¤µà¤¿à¤µà¤°à¤£ à¤…à¤ªà¤¡à¥‡à¤Ÿ à¤•à¤°à¤¤à¥‡ à¤¹à¥ˆà¤‚à¥¤"
-        ),
+        "invalid_change_field": "Please choose a valid option (1-10 or 0).",
+        "change_ack": "ठीक है। हम वह विवरण अपडेट करते हैं।",
         "confirmed": (
-            "à¤…à¤ªà¥‰à¤‡à¤‚à¤Ÿà¤®à¥‡à¤‚à¤Ÿ à¤…à¤¨à¥à¤°à¥‹à¤§ à¤ªà¥à¤·à¥à¤Ÿà¤¿ à¤¹à¥‹ à¤—à¤¯à¤¾ à¤¹à¥ˆà¥¤\n"
-            "à¤¨à¤¾à¤®: {patient_name}\n"
-            "à¤®à¤°à¥€à¤œ à¤•à¤¾ à¤ªà¥à¤°à¤•à¤¾à¤°: {patient_type}\n"
-            "à¤†à¤¯à¥: {age}\n"
-            "à¤œà¥‡à¤‚à¤¡à¤°: {gender}\n"
-            "à¤¸à¤‚à¤ªà¤°à¥à¤•: {phone_number}\n"
-            "à¤•à¥à¤²à¤¿à¤¨à¤¿à¤•: {clinic_name}\n"
-            "à¤•à¥à¤²à¤¿à¤¨à¤¿à¤• à¤ªà¤¤à¤¾: {clinic_address}\n"
-            "à¤•à¤¾à¤°à¤£: {reason}\n"
-            "à¤¤à¤¾à¤°à¥€à¤–: {appointment_date}\n"
-            "à¤¸à¤®à¤¯: {appointment_time}"
+            "अपॉइंटमेंट अनुरोध पुष्टि हो गया है।\n"
+            "नाम: {patient_name}\n"
+            "मरीज़ का प्रकार: {patient_type}\n"
+            "आयु: {age}\n"
+            "जेंडर: {gender}\n"
+            "संपर्क: {phone_number}\n"
+            "क्लिनिक: {clinic_name}\n"
+            "क्लिनिक पता: {clinic_address}\n"
+            "कारण: {reason}\n"
+            "तारीख: {appointment_date}\n"
+            "समय: {appointment_time}"
         ),
-        "not_confirmed": "à¤•à¥‹à¤ˆ à¤¬à¤¾à¤¤ à¤¨à¤¹à¥€à¤‚à¥¤ à¤ªà¥à¤°à¤•à¥à¤°à¤¿à¤¯à¤¾ à¤¦à¥‹à¤¬à¤¾à¤°à¤¾ à¤¶à¥à¤°à¥‚ à¤•à¤° à¤°à¤¹à¤¾ à¤¹à¥‚à¤à¥¤ à¤•à¥ƒà¤ªà¤¯à¤¾ à¤®à¤°à¥€à¤œ à¤•à¤¾ à¤ªà¥‚à¤°à¤¾ à¤¨à¤¾à¤® à¤¬à¤¤à¤¾à¤à¤‚à¥¤",
-        "completed_hint": "à¤¯à¤¹ à¤¬à¥à¤•à¤¿à¤‚à¤— à¤ªà¥‚à¤°à¥€ à¤¹à¥‹ à¤šà¥à¤•à¥€ à¤¹à¥ˆà¥¤ à¤¨à¤ˆ à¤¬à¥à¤•à¤¿à¤‚à¤— à¤•à¥‡ à¤²à¤¿à¤ 'book appointment' à¤­à¥‡à¤œà¥‡à¤‚à¥¤",
-        "db_save_ok": "à¤…à¤ªà¥‰à¤‡à¤‚à¤Ÿà¤®à¥‡à¤‚à¤Ÿ à¤¸à¤«à¤²à¤¤à¤¾à¤ªà¥‚à¤°à¥à¤µà¤• à¤¬à¥à¤• à¤¹à¥‹ à¤—à¤ˆà¥¤\n*à¤¬à¥à¤•à¤¿à¤‚à¤— à¤¨à¤‚à¤¬à¤°:* {appointment_id}",
-        "db_save_failed": "à¤¬à¥à¤•à¤¿à¤‚à¤— à¤•à¤¨à¥à¤«à¤°à¥à¤® à¤¹à¥à¤ˆ, à¤²à¥‡à¤•à¤¿à¤¨ à¤¡à¥‡à¤Ÿà¤¾à¤¬à¥‡à¤¸ à¤¸à¥‡à¤µ à¤²à¤‚à¤¬à¤¿à¤¤ à¤¹à¥ˆà¥¤ à¤®à¥ˆà¤¨à¥à¤…à¤² à¤«à¥‰à¤²à¥‹-à¤…à¤ª à¤†à¤µà¤¶à¥à¤¯à¤• à¤¹à¥ˆà¥¤",
-        "ended": "à¤ à¥€à¤• à¤¹à¥ˆ, à¤ªà¥à¤°à¤•à¥à¤°à¤¿à¤¯à¤¾ à¤¸à¤®à¤¾à¤ªà¥à¤¤ à¤•à¤° à¤¦à¥€ à¤—à¤ˆ à¤¹à¥ˆà¥¤ à¤¦à¥‹à¤¬à¤¾à¤°à¤¾ à¤¶à¥à¤°à¥‚ à¤•à¤°à¤¨à¥‡ à¤•à¥‡ à¤²à¤¿à¤ 'book appointment' à¤­à¥‡à¤œà¥‡à¤‚à¥¤",
-        "cancelled_hint": "à¤ªà¥à¤°à¤•à¥à¤°à¤¿à¤¯à¤¾ à¤¸à¤®à¤¾à¤ªà¥à¤¤ à¤¹à¥ˆà¥¤ à¤¨à¤ˆ à¤¬à¥à¤•à¤¿à¤‚à¤— à¤•à¥‡ à¤²à¤¿à¤ 'book appointment' à¤­à¥‡à¤œà¥‡à¤‚à¥¤",
-        "restart": "à¤…à¤ªà¥‰à¤‡à¤‚à¤Ÿà¤®à¥‡à¤‚à¤Ÿ à¤ªà¥à¤°à¤•à¥à¤°à¤¿à¤¯à¤¾ à¤¦à¥‹à¤¬à¤¾à¤°à¤¾ à¤¶à¥à¤°à¥‚ à¤•à¥€ à¤œà¤¾ à¤°à¤¹à¥€ à¤¹à¥ˆà¥¤",
+        "not_confirmed": "कोई बात नहीं। प्रक्रिया दोबारा शुरू कर रहा हूँ। कृपया मरीज़ का पूरा नाम बताएं।",
+        "completed_hint": "यह बुकिंग पूरी हो चुकी है। नई बुकिंग के लिए 'book appointment' भेजें।",
+        "db_save_ok": "अपॉइंटमेंट सफलतापूर्वक बुक हो गई।\n*Patient ID:* {appointment_id}",
+        "db_save_failed": "बुकिंग confirm हुई, लेकिन डेटाबेस सेव लंबित है। मैनुअल फ़ॉलो-अप आवश्यक है।",
+        "ended": "ठीक है, प्रक्रिया समाप्त कर दी गई है। दोबारा शुरू करने के लिए 'book appointment' भेजें।",
+        "cancelled_hint": "प्रक्रिया समाप्त है। नई बुकिंग के लिए 'book appointment' भेजें।",
+        "restart": "अपॉइंटमेंट प्रक्रिया दोबारा शुरू की जा रही है।",
     }
-
     hinglish = {
         "greeting": "Hello, main aapka medical appointment assistant hoon. Main booking aur doctor availability mein help kar sakta hoon.",
         "ask_booking_for": (
@@ -403,11 +432,11 @@
             "1. Self\n"
             "2. Another person"
         ),
-        "invalid_booking_for": "Please 1 ya 2 mein reply kariye.",
+        "invalid_booking_for": "Please 1, 2, ya 0 mein reply kariye.",
         "booking_for_self_ack": "Noted. Booking for self.",
         "booking_for_other_ack": "Noted. Booking for another person.",
-        "go_back_hint": "0. Go back",
-        "welcome_known_patient": "Welcome to Dr. {doctor_name} clinic, {patient_name}. How can I help you today?",
+        "go_back_hint": "Press \"0\" to go back.",
+        "welcome_known_patient": "Welcome to Dr. {doctor_name} clinic, {patient_name}. How can I help you today?.",
         "welcome_new_patient": "Welcome to Dr. {doctor_name} clinic. How can I help you today?",
         "general_help": "Main appointment booking ya doctor availability mein help kar sakta hoon. Aapko kya chahiye?",
         "intent_ack": "Theek hai, main aapki appointment booking mein help kar sakta hoon.",
@@ -426,7 +455,8 @@
         "clarify_intent": (
             "Please ek option choose kariye:\n"
             "1. Book appointment\n"
-            "2. Check doctor availability"
+            "2. Check doctor availability\n"
+            "Reply with 1 or 2."
         ),
         "final_booking_check": "Kya aap abhi medical appointment book karna chahte hain? YES ya NO mein reply kariye.",
         "non_scope_final": (
@@ -451,6 +481,13 @@
         "existing_booking_pick_header": "Please kaunsa booking modify karna hai choose kariye:",
         "existing_booking_pick_invalid": "Please valid booking option number choose kariye.",
         "max_active_bookings_reached": "Is number par maximum 2 active bookings allowed hain. Pehle existing booking cancel ya reschedule kariye.",
+        "max_active_bookings_actions": (
+            "Ek option choose kariye:\n"
+            "1. Existing appointment cancel kariye\n"
+            "2. Existing appointment reschedule kariye\n"
+            "Press \"0\" to go back."
+        ),
+        "max_active_bookings_invalid": "Please 1, 2, ya 0 reply kariye.",
         "existing_booking_keep": "Theek hai. Aapka existing appointment same rahega.",
         "existing_booking_cancel_only_done": "Done. Aapka appointment cancel ho gaya.",
         "existing_booking_reschedule_start": "Theek hai. Previous clinic: {clinic_name}. Aap same ya doosra clinic choose karke reschedule kar sakte hain.",
@@ -459,9 +496,12 @@
             "Clinic: {clinic_name}\n"
             "Old slot: {old_date} {old_time}\n"
             "New slot: {new_date} {new_time}\n"
-            "Confirm ke liye YES ya back ke liye NO bhejiye."
+            "1. Confirm kariye\n"
+            "2. Details badliye\n"
+            "0. Go back\n"
+            "Reply with 1, 2, or 0."
         ),
-        "confirm_reschedule_prompt": "Please reschedule confirm ke liye YES ya back ke liye NO bhejiye.",
+        "confirm_reschedule_prompt": "1. Confirm kariye\n2. Details badliye\n0. Go back\nReply with 1, 2, or 0.",
         "reschedule_confirmed": (
             "Appointment successfully reschedule ho gaya.\n"
             "*Booking Number:* {appointment_id}\n"
@@ -477,18 +517,18 @@
             "Please appointment type choose kariye:\n"
             "1. Online appointment\n"
             "2. Walk-in appointment\n"
-            "Please 1 ya 2 number mein reply kariye."
+            "Please 1, 2, ya 0 number mein reply kariye."
         ),
-        "invalid_appointment_mode": "Please 1 ya 2 number mein reply kariye.",
+        "invalid_appointment_mode": "Please 1, 2, ya 0 number mein reply kariye.",
         "appointment_mode_ack": "Noted. Appointment type: {appointment_mode}.",
-        "ask_patient_type": "Patient old hai ya new?\n1. New\n2. Old",
-        "invalid_patient_type": "Please 'old' ya 'new' mein reply kariye.",
+        "ask_patient_type": "Patient old hai ya new?\n1. New\n2. Old\nPlease 1, 2, ya 0 reply kariye.",
+        "invalid_patient_type": "Please 1, 2, ya 0 reply kariye.",
         "patient_type_ack": "Noted. Patient type: {patient_type}.",
         "ask_age": "Please patient age share kariye.",
         "invalid_age": "Please 1 se 120 ke beech valid age batayiye.",
         "age_ack": "Age noted: {age}.",
-        "ask_gender": "Please patient gender share kariye:\n1. Male\n2. Female\n3. Other",
-        "invalid_gender": "Please gender male, female, ya other mein reply kariye.",
+        "ask_gender": "Please patient gender share kariye:\n1. Male\n2. Female\n3. Other\nPlease 1, 2, 3, ya 0 reply kariye.",
+        "invalid_gender": "Please 1, 2, 3, ya 0 reply kariye.",
         "gender_ack": "Gender noted: {gender}.",
         "ask_phone": (
             "Kya contact number yehi WhatsApp number hai?\n"
@@ -516,7 +556,8 @@
             "2. Headache\n"
             "3. Stomach pain\n"
             "4. Cold\n"
-            "5. Other (reason type kariye)"
+            "5. Other (reason type kariye)\n"
+            "Please 1, 2, 3, 4, 5, ya 0 reply kariye."
         ),
         "ask_reason_other": "Please apna reason type kariye.",
         "invalid_reason_option": "Please valid reason option choose kariye, ya reason text type kariye.",
@@ -532,7 +573,7 @@
             "2. {date_2}\n"
             "3. Other date"
         ),
-        "ask_date_manual": "Please date YYYY-MM-DD format mein type kariye.",
+        "ask_date_manual": "Please valid option number choose kariye, ya \"0\" to go back press kariye.",
         "invalid_date": "Invalid date. Please future date YYYY-MM-DD format mein bhejiye.",
         "no_date_available": "Is clinic ke liye abhi koi date available nahi hai. Please doosra clinic choose kariye ya baad mein try kariye.",
         "date_ack": "Date noted: {appointment_date}.",
@@ -542,6 +583,7 @@
             "1. {slot_1}\n"
             "2. {slot_2}\n"
             "3. {slot_3}\n"
+            "Please 1, 2, 3, ya 0 reply kariye.\n"
             "Ya apna preferred time type kariye."
         ),
         "time_not_available": "Requested time {requested_time} available nahi hai.",
@@ -556,18 +598,23 @@
             "Clinic address: {clinic_address}\n"
             "Date: {appointment_date}\n"
             "Time: {appointment_time}\n"
-            "Confirm ke liye YES ya details change karne ke liye NO bhejiye."
+            "1. Confirm kariye\n"
+            "2. Details badliye\n"
+            "0. Go back\n"
+            "Reply with 1, 2, or 0."
         ),
-        "confirm_prompt": "Please confirm ke liye YES ya details change karne ke liye NO bhejiye.",
+        "confirm_prompt": "1. Confirm\n2. Change details\n0. Go back\nReply with 1, 2, or 0.",
         "ask_change_field": (
             "No problem. Kaunsa detail change karna hai?\n"
             "1. Name\n"
             "2. Contact number\n"
             "3. Clinic\n"
             "4. Date\n"
-            "5. Time"
+            "5. Time\n"
+            "0. Go back\n"
+            "Please 1, 2, 3, 4, 5, ya 0 reply kariye."
         ),
-        "invalid_change_field": "Please valid option choose kariye (1-5).",
+        "invalid_change_field": "Please valid option choose kariye (1-5 ya 0).",
         "change_ack": "No problem. Chaliye woh detail update karte hain.",
         "confirmed": (
             "Appointment request confirm ho gaya.\n"
@@ -580,7 +627,7 @@
         ),
         "not_confirmed": "No problem. Booking flow restart kar raha hoon. Please patient ka full name share kariye.",
         "completed_hint": "Yeh appointment flow complete ho chuka hai. Nayi booking ke liye 'book appointment' bhejiye.",
-        "db_save_ok": "Appointment successfully book ho gaya.\n*Booking Number:* {appointment_id}",
+        "db_save_ok": "Appointment successfully book ho gaya.\n*Patient ID:* {appointment_id}",
         "db_save_failed": "Booking confirm ho gayi, lekin database save pending hai. Manual follow-up zaroori hai.",
         "ended": "Theek hai, process end kar diya gaya hai. Dobara start karne ke liye 'book appointment' bhejiye.",
         "cancelled_hint": "Process ended hai. Nayi booking ke liye 'book appointment' bhejiye.",
@@ -595,15 +642,15 @@
         source = en
     if response_language == "hi" and key == "ask_appointment_mode":
         return (
-            "à¤•à¥ƒà¤ªà¤¯à¤¾ à¤¨à¤¿à¤¯à¥à¤•à¥à¤¤à¤¿ à¤ªà¥à¤°à¤•à¤¾à¤° à¤šà¥à¤¨à¥‡à¤‚:\n"
-            "1. à¤‘à¤¨à¤²à¤¾à¤‡à¤¨ à¤ªà¤°à¤¾à¤®à¤°à¥à¤¶\n"
-            "2. à¤•à¥à¤²à¤¿à¤¨à¤¿à¤• à¤®à¥‡à¤‚ à¤ªà¤°à¤¾à¤®à¤°à¥à¤¶\n"
-            "à¤•à¥ƒà¤ªà¤¯à¤¾ 1 à¤¯à¤¾ 2 à¤®à¥‡à¤‚ à¤‰à¤¤à¥à¤¤à¤° à¤¦à¥‡à¤‚à¥¤"
+            "कृपया अपॉइंटमेंट प्रकार चुनें:\n"
+            "1. ऑनलाइन परामर्श\n"
+            "2. क्लिनिक में परामर्श\n"
+            "कृपया 1, 2, या 0 में उत्तर दें।"
         )
     if response_language == "hi" and key == "invalid_appointment_mode":
-        return "à¤•à¥ƒà¤ªà¤¯à¤¾ 1 à¤¯à¤¾ 2 à¤®à¥‡à¤‚ à¤‰à¤¤à¥à¤¤à¤° à¤¦à¥‡à¤‚à¥¤"
+        return "कृपया 1, 2, या 0 में उत्तर दें।"
     if response_language == "hi" and key == "appointment_mode_ack":
-        return f"à¤¨à¥‹à¤Ÿ à¤•à¤¿à¤¯à¤¾ à¤—à¤¯à¤¾à¥¤ à¤…à¤ªà¥‰à¤‡à¤‚à¤Ÿà¤®à¥‡à¤‚à¤Ÿ à¤ªà¥à¤°à¤•à¤¾à¤°: {kwargs.get('appointment_mode', '-')}à¥¤"
+        return f"नोट किया गया। अपॉइंटमेंट प्रकार: {kwargs.get('appointment_mode', '-')}।"
     if key == "change_ack":
         step = kwargs.get("step")
         if source is en:
@@ -622,16 +669,16 @@
             }
         elif source is hi:
             prompts = {
-                "ASK_NAME": "à¤•à¥ƒà¤ªà¤¯à¤¾ à¤®à¤°à¥€à¤œ à¤•à¤¾ à¤ªà¥‚à¤°à¤¾ à¤¨à¤¾à¤® à¤¬à¤¤à¤¾à¤à¤‚à¥¤",
-                "ASK_PATIENT_TYPE": "à¤®à¤°à¥€à¤œ à¤ªà¥à¤°à¤¾à¤¨à¤¾ à¤¹à¥ˆ à¤¯à¤¾ à¤¨à¤¯à¤¾?",
-                "ASK_AGE": "à¤•à¥ƒà¤ªà¤¯à¤¾ à¤®à¤°à¥€à¤œ à¤•à¥€ à¤†à¤¯à¥ à¤¬à¤¤à¤¾à¤à¤‚à¥¤",
-                "ASK_GENDER": "à¤•à¥ƒà¤ªà¤¯à¤¾ à¤®à¤°à¥€à¤œ à¤•à¤¾ à¤œà¥‡à¤‚à¤¡à¤° à¤¬à¤¤à¤¾à¤à¤‚: male, female, à¤¯à¤¾ otherà¥¤",
-                "ASK_PHONE": "à¤•à¥ƒà¤ªà¤¯à¤¾ à¤¸à¤‚à¤ªà¤°à¥à¤• à¤¨à¤‚à¤¬à¤° à¤­à¥‡à¤œà¥‡à¤‚ (10 à¤…à¤‚à¤•)à¥¤",
-                "ASK_CLINIC": "à¤•à¥ƒà¤ªà¤¯à¤¾ à¤•à¥à¤²à¤¿à¤¨à¤¿à¤• 1, 2 à¤¯à¤¾ 3 à¤šà¥à¤¨à¥‡à¤‚à¥¤",
-                "ASK_REASON": "à¤…à¤ªà¥‰à¤‡à¤‚à¤Ÿà¤®à¥‡à¤‚à¤Ÿ à¤•à¤¾ à¤•à¤¾à¤°à¤£ à¤•à¥à¤¯à¤¾ à¤¹à¥ˆ?",
-                "ASK_SYMPTOMS": "à¤•à¥ƒà¤ªà¤¯à¤¾ à¤²à¤•à¥à¤·à¤£ à¤¬à¤¤à¤¾à¤à¤‚à¥¤",
-                "ASK_DATE": "à¤•à¥ƒà¤ªà¤¯à¤¾ à¤ªà¤¸à¤‚à¤¦à¥€à¤¦à¤¾ à¤¤à¤¾à¤°à¥€à¤– à¤­à¥‡à¤œà¥‡à¤‚ (YYYY-MM-DD à¤¯à¤¾ 'tomorrow').",
-                "ASK_TIME": "à¤•à¥ƒà¤ªà¤¯à¤¾ à¤ªà¤¸à¤‚à¤¦à¥€à¤¦à¤¾ à¤¸à¤®à¤¯ à¤­à¥‡à¤œà¥‡à¤‚ (à¤œà¥ˆà¤¸à¥‡ 10 am à¤¯à¤¾ 14:30)à¥¤",
+                "ASK_NAME": "कृपया मरीज़ का पूरा नाम बताएं।",
+                "ASK_PATIENT_TYPE": "मरीज़ पुराना है या नया?",
+                "ASK_AGE": "कृपया मरीज़ की आयु बताएं।",
+                "ASK_GENDER": "कृपया मरीज़ का जेंडर बताएं: male, female, या other।",
+                "ASK_PHONE": "कृपया संपर्क नंबर भेजें (10 अंक)।",
+                "ASK_CLINIC": "कृपया क्लिनिक 1, 2 या 3 चुनें।",
+                "ASK_REASON": "अपॉइंटमेंट का कारण क्या है?",
+                "ASK_SYMPTOMS": "कृपया लक्षण बताएं।",
+                "ASK_DATE": "कृपया पसंदीदा तारीख भेजें (YYYY-MM-DD या 'tomorrow').",
+                "ASK_TIME": "कृपया पसंदीदा समय भेजें (जैसे 10 am या 14:30)।",
             }
         else:
             prompts = {

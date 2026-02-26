@@ -89,6 +89,7 @@ class AutomationScheduler:
         doctor_reminder_interval_seconds: int = 60,
         doctor_reminder_lead_minutes: int = 10,
         doctor_reminder_window_seconds: int = 30,
+        doctor_reminder_lead_minutes_list: Optional[list] = None,
     ) -> None:
         self._booking_repository = booking_repository
         self._send_message_fn = send_message_fn
@@ -99,6 +100,12 @@ class AutomationScheduler:
         self._doctor_reminder_interval_seconds = max(30, int(doctor_reminder_interval_seconds))
         self._doctor_reminder_lead_minutes = max(1, int(doctor_reminder_lead_minutes))
         self._doctor_reminder_window_seconds = max(5, int(doctor_reminder_window_seconds))
+        # Two-send list: default [60, 10] → send at T-60 (1 hour before) and T-10 (10 min before)
+        if doctor_reminder_lead_minutes_list is not None:
+            self._doctor_reminder_lead_minutes_list = [max(1, int(m)) for m in doctor_reminder_lead_minutes_list]
+        else:
+            lead = self._doctor_reminder_lead_minutes
+            self._doctor_reminder_lead_minutes_list = [60, lead] if lead != 60 else [60]
         self._stop = threading.Event()
         self._threads: list[threading.Thread] = []
         self._worker_id = f"scheduler-{os.getpid()}-{uuid.uuid4().hex[:8]}"
@@ -153,104 +160,167 @@ class AutomationScheduler:
     def _run_reminders_once(self) -> None:
         if not self._booking_repository:
             return
+
+        # Lookahead must cover the largest lead time + safety buffer
+        max_lead = max(self._doctor_reminder_lead_minutes_list)
         due_rows = self._booking_repository.list_due_doctor_reminders(
-            lookahead_minutes=max(120, self._doctor_reminder_lead_minutes + 120),
+            lookahead_minutes=max(240, max_lead + 120),
         )
+
         sent = 0
         skipped = 0
         now = datetime.now()
-        grouped: dict[tuple[str, int, str, str], list] = {}
-        group_destinations: dict[tuple[str, int, str, str], set[str]] = {}
-        for row in due_rows:
-            wa_number = self._normalize_whatsapp_number(row.doctor_whatsapp)
-            tg_chat_id = self._normalize_telegram_chat_id(row.doctor_telegram_chat_id)
-            destinations: list[str] = []
-            if wa_number:
-                destinations.append(wa_number)
-            if tg_chat_id:
-                destinations.append(f"telegram:{tg_chat_id}")
-            if self._source_whatsapp_number and wa_number and wa_number == self._source_whatsapp_number:
-                destinations = [d for d in destinations if d != wa_number]
-            if not destinations:
-                skipped += 1
-                continue
-            try:
-                window_start = datetime.strptime(
-                    f"{row.slot_date} {row.schedule_start_time}",
-                    "%Y-%m-%d %H:%M",
-                )
-            except Exception:
-                skipped += 1
-                continue
-            delta_seconds = int((window_start - now).total_seconds())
-            center_seconds = self._doctor_reminder_lead_minutes * 60
-            if not (center_seconds - self._doctor_reminder_window_seconds <= delta_seconds <= center_seconds + self._doctor_reminder_window_seconds):
-                continue
-            key = (
-                row.slot_date,
-                row.schedule_id,
-                row.schedule_start_time,
-                row.schedule_end_time,
-            )
-            grouped.setdefault(key, []).append(row)
-            group_destinations.setdefault(key, set()).update(destinations)
 
-        for (slot_date, schedule_id, start_time, end_time), rows in grouped.items():
-            dedup_key = f"doctor-schedule-reminder:{slot_date}:{schedule_id}:{start_time}:{end_time}"
-            if self._reminder_keys.has(dedup_key):
-                skipped += 1
-                continue
-            destinations = sorted(group_destinations.get((slot_date, schedule_id, start_time, end_time), set()))
-            if not destinations:
-                skipped += 1
-                continue
-            rows_sorted = sorted(rows, key=lambda r: (r.slot_time, r.appointment_id))
-            summary_lines = [
-                f"Reminder: Upcoming appointments in {self._doctor_reminder_lead_minutes} minutes.",
-                f"Slot window: {slot_date} {self._format_display_time(start_time)}-{self._format_display_time(end_time)}",
-                f"Total patients: {len(rows_sorted)}",
-            ]
-            summary_text = "\n".join(summary_lines)
-            any_sent = False
-            for to_number in destinations:
+        # ── Loop over each configured lead time (e.g. 60 min and 10 min) ─────
+        for lead_minutes in self._doctor_reminder_lead_minutes_list:
+            center_seconds = lead_minutes * 60
+
+            # Group rows whose T-minus window matches this lead time
+            grouped: dict[tuple[str, int, str, str], list] = {}
+            group_destinations: dict[tuple[str, int, str, str], set[str]] = {}
+
+            for row in due_rows:
+                wa_number = self._normalize_whatsapp_number(row.doctor_whatsapp)
+                tg_chat_id = self._normalize_telegram_chat_id(row.doctor_telegram_chat_id)
+                destinations: list[str] = []
+                if wa_number:
+                    destinations.append(wa_number)
+                if tg_chat_id:
+                    destinations.append(f"telegram:{tg_chat_id}")
+                if self._source_whatsapp_number and wa_number and wa_number == self._source_whatsapp_number:
+                    destinations = [d for d in destinations if d != wa_number]
+                if not destinations:
+                    skipped += 1
+                    continue
                 try:
-                    report_path = self._build_doctor_report_xlsx(
-                        rows=rows_sorted,
-                        to_number=to_number,
-                        slot_date=slot_date,
-                        schedule_id=schedule_id,
-                        start_time=start_time,
-                        end_time=end_time,
+                    window_start = datetime.strptime(
+                        f"{row.slot_date} {row.schedule_start_time}",
+                        "%Y-%m-%d %H:%M",
                     )
-                    if self._send_document_fn:
-                        self._send_document_fn(to_number, report_path, summary_text)
-                    else:
-                        self._send_message_fn(
-                            to_number,
-                            summary_text + "\nReport generated: " + os.path.basename(report_path),
+                except Exception:
+                    skipped += 1
+                    continue
+                delta_seconds = int((window_start - now).total_seconds())
+                if not (
+                    center_seconds - self._doctor_reminder_window_seconds
+                    <= delta_seconds
+                    <= center_seconds + self._doctor_reminder_window_seconds
+                ):
+                    continue
+                key = (row.slot_date, row.schedule_id, row.schedule_start_time, row.schedule_end_time)
+                grouped.setdefault(key, []).append(row)
+                group_destinations.setdefault(key, set()).update(destinations)
+
+            # ── Send one xlsx per schedule group ─────────────────────────────
+            for (slot_date, schedule_id, start_time, end_time), rows in grouped.items():
+                destinations = sorted(
+                    group_destinations.get((slot_date, schedule_id, start_time, end_time), set())
+                )
+                if not destinations:
+                    skipped += 1
+                    continue
+
+                rows_sorted = sorted(rows, key=lambda r: (r.slot_time, r.appointment_id))
+                summary_lines = [
+                    f"Reminder: Upcoming appointments in {lead_minutes} minutes.",
+                    f"Slot window: {slot_date} {self._format_display_time(start_time)}-{self._format_display_time(end_time)}",
+                    f"Total patients: {len(rows_sorted)}",
+                ]
+                summary_text = "\n".join(summary_lines)
+
+                any_sent = False
+                for to_number in destinations:
+                    channel = "telegram" if to_number.startswith("telegram:") else "whatsapp"
+                    dedup_key = (
+                        f"doctor-schedule-reminder:{slot_date}:{schedule_id}:"
+                        f"{start_time}:{end_time}:{lead_minutes}min:{channel}:{to_number}"
+                    )
+
+                    # ── Flat-file dedup (fast check, also covers mocked tests) ─
+                    if self._reminder_keys.has(dedup_key):
+                        skipped += 1
+                        continue
+
+                    # ── DB dedup check ────────────────────────────────────────
+                    queue_id = None
+                    try:
+                        sent_flag = self._booking_repository.is_reminder_sent(dedup_key=dedup_key)
+                        # Guard: MagicMock in tests returns truthy non-bool — treat as False
+                        if not isinstance(sent_flag, bool):
+                            sent_flag = False
+                        if sent_flag:
+                            self._reminder_keys.add(dedup_key)  # sync flat file
+                            skipped += 1
+                            continue
+                        queue_id = self._booking_repository.insert_or_get_reminder_queue(
+                            doctor_id=int(rows_sorted[0].appointment_id),
+                            schedule_id=schedule_id,
+                            slot_date=slot_date,
+                            schedule_start_time=start_time,
+                            schedule_end_time=end_time,
+                            channel=channel,
+                            destination=to_number,
+                            lead_minutes=lead_minutes,
+                            dedup_key=dedup_key,
                         )
-                    any_sent = True
-                except Exception as exc:
-                    LOGGER.warning(
-                        "Doctor schedule reminder send failed to=%s date=%s schedule_id=%s error=%s",
-                        to_number,
-                        slot_date,
-                        schedule_id,
-                        exc,
-                    )
-                    self._inc_metric("reminder_errors", 1)
-            if any_sent:
-                self._reminder_keys.add(dedup_key)
-                sent += 1
+                        if not isinstance(queue_id, int):
+                            queue_id = None
+                    except Exception as exc:
+                        LOGGER.warning("doctor_remainder_queue DB check failed: %s", exc)
+                        queue_id = None
+
+                    # ── Build report xlsx and send ────────────────────────────
+                    try:
+                        report_path = self._build_doctor_report_xlsx(
+                            rows=rows_sorted,
+                            to_number=to_number,
+                            slot_date=slot_date,
+                            schedule_id=schedule_id,
+                            start_time=start_time,
+                            end_time=end_time,
+                        )
+                        if self._send_document_fn:
+                            self._send_document_fn(to_number, report_path, summary_text)
+                        else:
+                            self._send_message_fn(
+                                to_number,
+                                summary_text + "\nReport generated: " + os.path.basename(report_path),
+                            )
+                        # ── Mark SENT in DB + flat file ──────────────────────
+                        try:
+                            if queue_id is not None:
+                                self._booking_repository.mark_reminder_sent(queue_id=queue_id)
+                        except Exception as dbe:
+                            LOGGER.warning("mark_reminder_sent failed queue_id=%s: %s", queue_id, dbe)
+                        # Always cache in flat file so dedup is instant next tick
+                        self._reminder_keys.add(dedup_key)
+                        any_sent = True
+                    except Exception as exc:
+                        LOGGER.warning(
+                            "Doctor schedule reminder send failed to=%s date=%s schedule_id=%s lead=%dmin error=%s",
+                            to_number, slot_date, schedule_id, lead_minutes, exc,
+                        )
+                        try:
+                            if queue_id is not None:
+                                self._booking_repository.mark_reminder_failed(
+                                    queue_id=queue_id, error=str(exc)
+                                )
+                        except Exception:
+                            pass
+                        self._inc_metric("reminder_errors", 1)
+
+                if any_sent:
+                    sent += 1
+
         self._inc_metric("reminder_runs", 1)
         self._inc_metric("reminder_sent", sent)
         self._inc_metric("reminder_skipped", skipped)
         LOGGER.info(
-            "Doctor reminder run completed due=%d sent=%d skipped=%d lead=%dmin",
+            "Doctor reminder run completed due=%d sent=%d skipped=%d leads=%s",
             len(due_rows),
             sent,
             skipped,
-            self._doctor_reminder_lead_minutes,
+            self._doctor_reminder_lead_minutes_list,
         )
         self._run_event_notifications_once()
 

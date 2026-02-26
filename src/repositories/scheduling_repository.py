@@ -357,21 +357,13 @@ class SchedulingRepository:
                 )
                 rows = cur.fetchall()
                 options: list[ClinicOption] = []
-                today = date.today().isoformat()
                 for row in rows:
-                    times = self.list_available_times(
-                        doctor_id=doctor_id,
-                        clinic_id=int(row["clinic_id"]),
-                        slot_date=today,
-                        admin_id=admin_id,
-                        limit=500,
-                    )
                     options.append(
                         ClinicOption(
                             clinic_id=int(row["clinic_id"]),
                             clinic_name=row["clinic_name"] or "",
                             location=row["location"] or "",
-                            today_slots=len(times),
+                            today_slots=0,
                         )
                     )
                 return options
@@ -435,7 +427,7 @@ class SchedulingRepository:
     ) -> list[str]:
         if self._use_appointment_mode():
             today = date.today()
-            max_days = 14
+            max_days = max(0, int(limit) - 1)
             available: list[str] = []
             for offset in range(max_days + 1):
                 d = (today + timedelta(days=offset)).isoformat()

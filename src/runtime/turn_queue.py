@@ -122,13 +122,15 @@ class TurnQueueProcessor:
             if self._on_success:
                 self._on_success(task)
         except Exception as exc:
-            if isinstance(exc, TimeoutError) and self._timeout_fn:
-                try:
-                    self._timeout_fn(task, exc)
-                except Exception:
-                    LOGGER.exception("Failed to send timeout-safe message sid=%s", task.inbound_sid or "-")
+            is_timeout = isinstance(exc, TimeoutError)
+            # Timeouts are NOT retried — Ollama is still busy, retrying causes another timeout
+            can_retry = (
+                not is_timeout
+                and task.attempt < self.retry_attempts
+                and not self._stop.is_set()
+            )
 
-            if task.attempt < self.retry_attempts and not self._stop.is_set():
+            if can_retry:
                 backoff_seconds = min(4.0, 0.8 * (2 ** task.attempt))
                 if self._on_failure:
                     self._on_failure(task, exc, True, backoff_seconds)
@@ -148,6 +150,12 @@ class TurnQueueProcessor:
                 if not self.submit(task):
                     LOGGER.error("Queue full while retrying sid=%s from=%s", task.inbound_sid or "-", task.from_number)
             else:
+                # Send "busy" message only once — on final failure
+                if is_timeout and self._timeout_fn:
+                    try:
+                        self._timeout_fn(task, exc)
+                    except Exception:
+                        LOGGER.exception("Failed to send timeout-safe message sid=%s", task.inbound_sid or "-")
                 if self._on_failure:
                     self._on_failure(task, exc, False, 0.0)
                 with self._metrics_lock:
