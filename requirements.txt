@@ -8,3 +8,5 @@ mysql-connector-python-8.4.0
 
 httpx
 openpyxl
+
+redis

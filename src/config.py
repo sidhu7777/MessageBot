@@ -63,7 +63,7 @@ class Settings:
     admin_api_rate_limit_per_minute: int = 60
     admin_auth_token_ttl_minutes: int = 480
 
-    session_ttl_minutes: int = 120
+    session_ttl_minutes: int = 10
     max_message_chars: int = 1500
     automation_enabled: bool = True
     doctor_reminder_enabled: bool = True
@@ -119,7 +119,7 @@ def load_settings() -> Settings:
         admin_api_key=os.getenv("ADMIN_API_KEY", "").strip(),
         admin_api_rate_limit_per_minute=int(os.getenv("ADMIN_API_RATE_LIMIT_PER_MINUTE", "60")),
         admin_auth_token_ttl_minutes=int(os.getenv("ADMIN_AUTH_TOKEN_TTL_MINUTES", "480")),
-        session_ttl_minutes=int(os.getenv("SESSION_TTL_MINUTES", "120")),
+        session_ttl_minutes=int(os.getenv("SESSION_TTL_MINUTES", "10")),
         max_message_chars=int(os.getenv("MAX_MESSAGE_CHARS", "1500")),
         automation_enabled=_as_bool(os.getenv("AUTOMATION_ENABLED", "true")),
         doctor_reminder_enabled=_as_bool(os.getenv("DOCTOR_REMINDER_ENABLED", "true")),

@@ -4,26 +4,26 @@ import os
 import time
 import threading
 import uuid
-from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
+from contextlib import asynccontextmanager
 from urllib import error as urlerror
 from urllib import request as urlrequest
 from threading import Lock
-from typing import Dict, Tuple
+from typing import Dict, Optional, Tuple
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import PlainTextResponse
 from twilio.rest import Client
 from twilio.request_validator import RequestValidator
-from twilio.twiml.messaging_response import MessagingResponse
 from dotenv import load_dotenv
 
 from src.automation import AutomationScheduler
-from src.api.admin_router import create_admin_router
 from src.config import load_settings
-from src.db_store import auth_repository_from_env, conversation_repository_from_env, repositories_from_env
+from src.db_store import conversation_repository_from_env, repositories_from_env
 from src.llm.client import LLMClient
 from src.ollama_runtime import OllamaStartupError, ensure_ollama_ready
 from src.runtime import PersistentMessageSidStore, TurnQueueProcessor, TurnTask
+from src.runtime.user_turn_buffer import UserTurnBuffer
+from src.runtime.user_processing_guard import UserProcessingGuard, build_redis_client_from_env
 from src.session_store import SessionManager
 
 
@@ -45,7 +45,6 @@ llm_client = LLMClient(
 )
 booking_repository, scheduling_repository = repositories_from_env()
 conversation_repository = conversation_repository_from_env()
-auth_repository = auth_repository_from_env()
 
 session_manager = SessionManager(
     llm_client=llm_client,
@@ -54,6 +53,7 @@ session_manager = SessionManager(
     booking_repository=booking_repository if settings.enable_db_booking else None,
     scheduling_repository=scheduling_repository if settings.enable_db_booking else None,
     conversation_repository=conversation_repository if settings.enable_db_booking else None,
+    redis_key_prefix=os.getenv("REDIS_KEY_PREFIX", "msgbot"),
     bot_whatsapp_number="",
     ttl_minutes=settings.session_ttl_minutes,
 )
@@ -63,35 +63,127 @@ twilio_client = (
     if settings.twilio_account_sid and settings.twilio_auth_token
     else None
 )
-_user_locks: Dict[str, Lock] = {}
-_user_locks_guard = Lock()
+# Use striped locks (fixed-size pool) to avoid unbounded per-user lock growth.
+_user_lock_stripes_count = max(64, int(os.getenv("USER_LOCK_STRIPES", "4096")))
+_user_lock_stripes = [Lock() for _ in range(_user_lock_stripes_count)]
 
 SID_STORE_PATH = os.path.join("data", "seen_message_sids.jsonl")
 sid_store = PersistentMessageSidStore(path=SID_STORE_PATH, max_entries=50000)
 _overflow_poll_stop = threading.Event()
 _overflow_poll_thread: threading.Thread | None = None
 _overflow_worker_id = f"overflow-{uuid.uuid4().hex[:10]}"
+_cache_inv_stop = threading.Event()
+_cache_inv_thread: threading.Thread | None = None
+_cache_inv_worker_id = f"dcache-{uuid.uuid4().hex[:10]}"
 _overflow_turn_map: dict[str, int] = {}
 _overflow_turn_map_lock = Lock()
-_process_executor = ThreadPoolExecutor(max_workers=max(4, settings.queue_worker_count * 2))
-_ollama_semaphore = threading.Semaphore(1)  # Ollama handles 1 inference at a time
+_user_bot_identity: Dict[str, str] = {}
+_user_bot_identity_lock = Lock()
+_user_turn_generation: Dict[str, int] = {}
+_user_turn_generation_lock = Lock()
+# Maximum number of per-user entries kept in the identity/generation dicts.
+# Protects against unbounded memory growth with many unique users.
+_PER_USER_DICT_MAX = max(5000, int(os.getenv("PER_USER_DICT_MAX", "20000")))
+
+
+def _evict_dict_if_needed(d: dict, lock: Lock) -> None:
+    """Drop the oldest half of entries once the dict exceeds _PER_USER_DICT_MAX."""
+    with lock:
+        if len(d) <= _PER_USER_DICT_MAX:
+            return
+        keep = _PER_USER_DICT_MAX // 2
+        keys_to_delete = list(d.keys())[:-keep] if keep else list(d.keys())
+        for k in keys_to_delete:
+            d.pop(k, None)
+_ollama_max_concurrency = max(1, int(os.getenv("OLLAMA_MAX_CONCURRENCY", "1")))
+_ollama_semaphore = threading.Semaphore(_ollama_max_concurrency)
+_redis_client = build_redis_client_from_env()
+session_manager.redis_client = _redis_client
+if scheduling_repository:
+    scheduling_repository.set_redis_client(_redis_client)
+    scheduling_repository.set_cache_config(
+        ttl_seconds=int(os.getenv("REDIS_DOCTOR_CACHE_TTL_SECONDS", "3600")),
+        key_prefix=os.getenv("REDIS_KEY_PREFIX", "msgbot"),
+    )
+_user_processing_guard = UserProcessingGuard(
+    redis_client=_redis_client,
+    lock_ttl_seconds=int(os.getenv("REDIS_PROCESSING_TTL_SECONDS", "45")),
+    busy_ttl_seconds=int(os.getenv("REDIS_BUSY_HINT_TTL_SECONDS", "8")),
+    key_prefix=os.getenv("REDIS_KEY_PREFIX", "msgbot"),
+)
+_user_turn_buffer = UserTurnBuffer(
+    max_per_user=int(os.getenv("PER_USER_QUEUE_MAX", "5")),
+    collapse_window_seconds=float(os.getenv("PER_USER_COALESCE_WINDOW_SECONDS", "6")),
+)
+
+
+def _set_user_bot_identity(user_id: str, identity: str) -> None:
+    uid = (user_id or "").strip()
+    if not uid:
+        return
+    with _user_bot_identity_lock:
+        if identity:
+            _user_bot_identity[uid] = identity
+        else:
+            _user_bot_identity.pop(uid, None)
+    _evict_dict_if_needed(_user_bot_identity, _user_bot_identity_lock)
+
+
+def _get_user_bot_identity(user_id: str) -> str:
+    uid = (user_id or "").strip()
+    if not uid:
+        return ""
+    with _user_bot_identity_lock:
+        return str(_user_bot_identity.get(uid) or "")
+
+
+def _next_user_turn_generation(user_id: str) -> int:
+    uid = (user_id or "").strip()
+    if not uid:
+        return 0
+    with _user_turn_generation_lock:
+        next_value = int(_user_turn_generation.get(uid, 0)) + 1
+        _user_turn_generation[uid] = next_value
+    _evict_dict_if_needed(_user_turn_generation, _user_turn_generation_lock)
+    return next_value
+
+
+def _is_user_turn_generation_current(user_id: str, generation: int) -> bool:
+    uid = (user_id or "").strip()
+    if not uid:
+        return True
+    with _user_turn_generation_lock:
+        return int(_user_turn_generation.get(uid, 0)) == int(generation)
 
 turn_processor = TurnQueueProcessor(
     worker_count=max(1, settings.queue_worker_count),
     max_queue_size=max(1, settings.queue_max_size),
-    process_fn=lambda from_number, body: _process_turn_with_timeout(from_number, body),
-    send_fn=lambda to_number, reply, post_state, inbound_sid: _send_channel_response(
+    process_fn=lambda from_number, body: _process_turn(from_number, body),
+    send_fn=lambda to_number, reply, post_state, inbound_sid, fsm=None: _send_channel_response(
         to_number=to_number,
         reply_text=reply,
         fsm_state=post_state,
-        fsm=session_manager.get_or_create(to_number),
+        fsm=fsm or session_manager.get_or_create(to_number),
         inbound_sid=inbound_sid,
     ),
     retry_attempts=max(0, settings.queue_retry_attempts),
+    processing_timeout_seconds=max(0.0, float(settings.processing_timeout_seconds)),
     timeout_fn=lambda task, exc: _handle_turn_timeout(task, exc),
     on_success=lambda task: _on_turn_success(task),
     on_failure=lambda task, exc, will_retry, backoff: _on_turn_failure(task, exc, will_retry, backoff),
 )
+_doctor_reminder_lead_minutes_list: Optional[list] = None
+_raw_lead_list = os.getenv("DOCTOR_REMINDER_LEAD_MINUTES_LIST", "").strip()
+if _raw_lead_list:
+    try:
+        _doctor_reminder_lead_minutes_list = [
+            max(1, int(x.strip())) for x in _raw_lead_list.split(",") if x.strip()
+        ]
+    except Exception:
+        LOGGER.warning(
+            "Invalid DOCTOR_REMINDER_LEAD_MINUTES_LIST=%r — using default.", _raw_lead_list
+        )
+
 automation_scheduler = AutomationScheduler(
     booking_repository=booking_repository if settings.enable_db_booking else None,
     send_message_fn=lambda to_number, body: _send_plain_channel_message(to_number=to_number, body=body),
@@ -106,24 +198,23 @@ automation_scheduler = AutomationScheduler(
     doctor_reminder_interval_seconds=settings.doctor_reminder_interval_seconds,
     doctor_reminder_lead_minutes=settings.doctor_reminder_lead_minutes,
     doctor_reminder_window_seconds=settings.doctor_reminder_window_seconds,
+    doctor_reminder_lead_minutes_list=_doctor_reminder_lead_minutes_list,
 )
 
-app = FastAPI(title=settings.app_name)
-app.include_router(
-    create_admin_router(
-        booking_repository,
-        scheduling_repository,
-        auth_repository=auth_repository,
-        admin_api_key=settings.admin_api_key,
-        rate_limit_per_minute=settings.admin_api_rate_limit_per_minute,
-        token_ttl_minutes=settings.admin_auth_token_ttl_minutes,
-    )
-)
+@asynccontextmanager
+async def _app_lifespan(_app: FastAPI):
+    await startup_validation()
+    try:
+        yield
+    finally:
+        await shutdown_workers()
 
 
-@app.on_event("startup")
+app = FastAPI(title=settings.app_name, lifespan=_app_lifespan)
+
+
 async def startup_validation() -> None:
-    global _telegram_bot_username_runtime, _overflow_poll_thread
+    global _telegram_bot_username_runtime, _overflow_poll_thread, _cache_inv_thread
     if settings.enable_db_booking and booking_repository:
         try:
             booking_repository.ensure_notification_schema()
@@ -135,6 +226,19 @@ async def startup_validation() -> None:
         except Exception as exc:
             LOGGER.warning("Conversation schema ensure failed: %s", exc)
     turn_processor.start()
+    if scheduling_repository:
+        try:
+            scheduling_repository.ensure_cache_invalidation_schema()
+        except Exception as exc:
+            LOGGER.warning("Doctor cache invalidation schema ensure failed: %s", exc)
+        if _cache_inv_thread is None or not _cache_inv_thread.is_alive():
+            _cache_inv_stop.clear()
+            _cache_inv_thread = threading.Thread(
+                target=_doctor_cache_invalidation_loop,
+                name="doctor-cache-invalidation-poller",
+                daemon=True,
+            )
+            _cache_inv_thread.start()
     if conversation_repository and (_overflow_poll_thread is None or not _overflow_poll_thread.is_alive()):
         _overflow_poll_stop.clear()
         _overflow_poll_thread = threading.Thread(
@@ -170,14 +274,15 @@ async def startup_validation() -> None:
         raise RuntimeError(str(exc)) from exc
 
 
-@app.on_event("shutdown")
 async def shutdown_workers() -> None:
+    _cache_inv_stop.set()
+    if _cache_inv_thread and _cache_inv_thread.is_alive():
+        _cache_inv_thread.join(timeout=2.0)
     _overflow_poll_stop.set()
     if _overflow_poll_thread and _overflow_poll_thread.is_alive():
         _overflow_poll_thread.join(timeout=2.0)
     automation_scheduler.stop()
     turn_processor.stop()
-    _process_executor.shutdown(wait=False, cancel_futures=True)
 
 
 @app.get("/health")
@@ -260,52 +365,63 @@ async def webhook(request: Request):
     )
 
     if inbound_sid:
-        duplicate = False
-        if conversation_repository:
-            try:
-                duplicate = conversation_repository.seen_or_add_message_sid(
-                    message_sid=inbound_sid,
-                    user_id=from_number,
-                    body=body,
-                )
-            except Exception:
-                duplicate = sid_store.seen_or_add(inbound_sid)
-        else:
-            duplicate = sid_store.seen_or_add(inbound_sid)
+        # Keep webhook path ultra-light: fast local dedup only.
+        duplicate = sid_store.seen_or_add(inbound_sid)
         if duplicate:
             LOGGER.info("Duplicate inbound MessageSid ignored sid=%s from=%s", inbound_sid, from_number)
             return PlainTextResponse("", status_code=200)
-
-    fsm = session_manager.get_or_create(from_number)
-    if to_number:
-        fsm.bot_whatsapp_number = to_number
-    pre_state = fsm.state
+    _set_user_bot_identity(from_number, to_number)
+    try:
+        pre_state = session_manager.get_or_create(from_number).state
+    except Exception:
+        pre_state = "INIT"
 
     if settings.twilio_use_rest_responses and twilio_client and settings.twilio_whatsapp_from:
+        acquired = False
         try:
+            acquired = _user_processing_guard.acquire(from_number)
+            if not acquired:
+                buffered = _user_turn_buffer.push(
+                    TurnTask(
+                        from_number=from_number,
+                        body=body,
+                        inbound_sid=inbound_sid,
+                        pre_state=pre_state,
+                    )
+                )
+                LOGGER.info(
+                    "Buffered inbound while processing sid=%s from=%s pending=%d collapsed=%s dropped_oldest=%s",
+                    inbound_sid or "-",
+                    from_number,
+                    buffered.pending_count,
+                    buffered.collapsed,
+                    buffered.dropped_oldest,
+                )
+                return PlainTextResponse("", status_code=200)
+
             task = TurnTask(
                 from_number=from_number,
                 body=body,
                 inbound_sid=inbound_sid,
                 pre_state=pre_state,
             )
+            # Record this dispatch so rapid duplicate messages sent while this
+            # turn is processing are collapsed instead of queued.
+            _user_turn_buffer.record_dispatch(from_number, body)
             enqueued = turn_processor.submit(task)
             if not enqueued:
-                busy_msg = _busy_message(fsm.response_language, pre_state)
-                _send_plain_channel_message(to_number=from_number, body=busy_msg, inbound_sid=inbound_sid)
-                _enqueue_overflow_turn(task)
+                _user_processing_guard.release(from_number)
+                buffered = _user_turn_buffer.push(task)
                 LOGGER.warning(
-                    "Queue full. Busy message sent sid=%s from=%s backlog=%d",
+                    "Queue full. Buffered inbound sid=%s from=%s backlog=%d pending=%d collapsed=%s dropped_oldest=%s",
                     inbound_sid or "-",
                     from_number,
                     turn_processor.backlog_size(),
+                    buffered.pending_count,
+                    buffered.collapsed,
+                    buffered.dropped_oldest,
                 )
                 return PlainTextResponse("", status_code=200)
-
-            # If queue is already backlogged, proactively send processing notice.
-            if turn_processor.backlog_size() >= max(1, settings.queue_busy_threshold):
-                safe_msg = _processing_message(fsm.response_language, pre_state)
-                _send_plain_channel_message(to_number=from_number, body=safe_msg, inbound_sid=inbound_sid)
 
             elapsed_ms = int((time.perf_counter() - started) * 1000)
             LOGGER.info(
@@ -317,27 +433,45 @@ async def webhook(request: Request):
                 elapsed_ms,
             )
             return PlainTextResponse("", status_code=200)
-        except Exception:
-            LOGGER.warning("Falling back to TwiML response after REST send failure.")
+        except Exception as exc:
+            if acquired:
+                _user_processing_guard.release(from_number)
+            buffered = _user_turn_buffer.push(
+                TurnTask(
+                    from_number=from_number,
+                    body=body,
+                    inbound_sid=inbound_sid,
+                    pre_state=pre_state,
+                )
+            )
+            LOGGER.warning(
+                "ACK-first fallback buffered sid=%s from=%s pending=%d error=%s",
+                inbound_sid or "-",
+                from_number,
+                buffered.pending_count,
+                exc,
+            )
+            return PlainTextResponse("", status_code=200)
 
-    reply, post_state = _process_turn(from_number, body)
-    reply = reply[: settings.max_message_chars]
-    elapsed_ms = int((time.perf_counter() - started) * 1000)
+    # TwiML/direct mode also stays ACK-first by buffering for async worker processing.
+    buffered = _user_turn_buffer.push(
+        TurnTask(
+            from_number=from_number,
+            body=body,
+            inbound_sid=inbound_sid,
+            pre_state=pre_state,
+        )
+    )
     LOGGER.info(
-        "Reply generated in %dms sid=%s from=%s state=%s->%s chars=%d",
-        elapsed_ms,
+        "ACK-first buffered inbound sid=%s from=%s pending=%d collapsed=%s dropped_oldest=%s",
         inbound_sid or "-",
         from_number,
-        pre_state,
-        post_state,
-        len(reply),
+        buffered.pending_count,
+        buffered.collapsed,
+        buffered.dropped_oldest,
     )
-    if not (reply or "").strip():
-        LOGGER.info("Direct webhook reply suppressed sid=%s from=%s (empty/silent response).", inbound_sid or "-", from_number)
-        return PlainTextResponse("", status_code=200)
-    twiml = MessagingResponse()
-    twiml.message(reply)
-    return PlainTextResponse(str(twiml), media_type="application/xml")
+    _submit_next_buffered_turn(from_number)
+    return PlainTextResponse("", status_code=200)
 
 
 @app.post("/telegram/webhook")
@@ -376,33 +510,57 @@ async def telegram_webhook(request: Request):
             LOGGER.info("Duplicate inbound Telegram message ignored sid=%s from=%s", dedup_sid, from_number)
             return PlainTextResponse("", status_code=200)
 
-    fsm = session_manager.get_or_create(from_number)
-    if _telegram_bot_username_runtime:
-        fsm.bot_whatsapp_number = f"telegram_username:{_telegram_bot_username_runtime}"
-    pre_state = fsm.state
+    bot_identity = f"telegram_username:{_telegram_bot_username_runtime}" if _telegram_bot_username_runtime else ""
+    _set_user_bot_identity(from_number, bot_identity)
     try:
+        pre_state = session_manager.get_or_create(from_number).state
+    except Exception:
+        pre_state = "INIT"
+    acquired = False
+    try:
+        acquired = _user_processing_guard.acquire(from_number)
+        if not acquired:
+            buffered = _user_turn_buffer.push(
+                TurnTask(
+                    from_number=from_number,
+                    body=text,
+                    inbound_sid=inbound_sid,
+                    pre_state=pre_state,
+                )
+            )
+            LOGGER.info(
+                "Buffered inbound Telegram while processing sid=%s from=%s pending=%d collapsed=%s dropped_oldest=%s",
+                inbound_sid or "-",
+                from_number,
+                buffered.pending_count,
+                buffered.collapsed,
+                buffered.dropped_oldest,
+            )
+            return PlainTextResponse("", status_code=200)
+
         task = TurnTask(
             from_number=from_number,
             body=text,
             inbound_sid=inbound_sid,
             pre_state=pre_state,
         )
+        # Record this dispatch so rapid duplicate messages sent while this
+        # turn is processing are collapsed instead of queued.
+        _user_turn_buffer.record_dispatch(from_number, text)
         enqueued = turn_processor.submit(task)
         if not enqueued:
-            busy_msg = _busy_message(fsm.response_language, pre_state)
-            _send_plain_channel_message(to_number=from_number, body=busy_msg, inbound_sid=inbound_sid)
-            _enqueue_overflow_turn(task)
+            _user_processing_guard.release(from_number)
+            buffered = _user_turn_buffer.push(task)
             LOGGER.warning(
-                "Queue full. Busy message sent sid=%s from=%s backlog=%d",
+                "Queue full. Buffered inbound sid=%s from=%s backlog=%d pending=%d collapsed=%s dropped_oldest=%s",
                 inbound_sid or "-",
                 from_number,
                 turn_processor.backlog_size(),
+                buffered.pending_count,
+                buffered.collapsed,
+                buffered.dropped_oldest,
             )
             return PlainTextResponse("", status_code=200)
-
-        if turn_processor.backlog_size() >= max(1, settings.queue_busy_threshold):
-            safe_msg = _processing_message(fsm.response_language, pre_state)
-            _send_plain_channel_message(to_number=from_number, body=safe_msg, inbound_sid=inbound_sid)
 
         elapsed_ms = int((time.perf_counter() - started) * 1000)
         LOGGER.info(
@@ -414,23 +572,23 @@ async def telegram_webhook(request: Request):
             elapsed_ms,
         )
         return PlainTextResponse("", status_code=200)
-    except Exception:
-        LOGGER.warning("Falling back to direct Telegram response after queue failure.")
-        reply, post_state = _process_turn(from_number, text)
-        reply = reply[: settings.max_message_chars]
-        if (reply or "").strip():
-            _send_plain_channel_message(to_number=from_number, body=reply, inbound_sid=inbound_sid)
-        else:
-            LOGGER.info("Telegram fallback reply suppressed sid=%s from=%s (empty/silent response).", inbound_sid or "-", from_number)
-        elapsed_ms = int((time.perf_counter() - started) * 1000)
-        LOGGER.info(
-            "Telegram fallback reply generated in %dms sid=%s from=%s state=%s->%s chars=%d",
-            elapsed_ms,
+    except Exception as exc:
+        if acquired:
+            _user_processing_guard.release(from_number)
+        buffered = _user_turn_buffer.push(
+            TurnTask(
+                from_number=from_number,
+                body=text,
+                inbound_sid=inbound_sid,
+                pre_state=pre_state,
+            )
+        )
+        LOGGER.warning(
+            "ACK-first Telegram fallback buffered sid=%s from=%s pending=%d error=%s",
             inbound_sid or "-",
             from_number,
-            pre_state,
-            post_state,
-            len(reply),
+            buffered.pending_count,
+            exc,
         )
         return PlainTextResponse("", status_code=200)
 
@@ -471,25 +629,18 @@ async def twilio_status_callback(request: Request):
     return PlainTextResponse("", status_code=200)
 
 
-def _process_turn(from_number: str, body: str) -> Tuple[str, str]:
+def _process_turn(from_number: str, body: str) -> Tuple[str, str, object]:
     user_lock = _get_user_lock(from_number)
     with user_lock:
         fsm = session_manager.get_or_create(from_number)
+        identity = _get_user_bot_identity(from_number)
+        if identity:
+            fsm.bot_whatsapp_number = identity
         with _ollama_semaphore:  # serialize Ollama calls — only 1 inference at a time
             reply = fsm.handle(body)
         reply = reply[: settings.max_message_chars]
-        session_manager.save(from_number)
-        return reply, fsm.state
-
-
-def _process_turn_with_timeout(from_number: str, body: str) -> Tuple[str, str]:
-    timeout_seconds = max(0.5, float(settings.processing_timeout_seconds))
-    future = _process_executor.submit(_process_turn, from_number, body)
-    try:
-        return future.result(timeout=timeout_seconds)
-    except FutureTimeoutError as exc:
-        future.cancel()
-        raise TimeoutError(f"Turn processing timeout after {timeout_seconds:.1f}s") from exc
+        session_manager.save(from_number, fsm)
+        return reply, fsm.state, fsm
 
 
 def _timeout_message(language: str, state: str) -> str:
@@ -501,6 +652,8 @@ def _timeout_message(language: str, state: str) -> str:
 
 
 def _handle_turn_timeout(task: TurnTask, exc: Exception) -> None:
+    # Clean up overflow map entry so it does not leak on timeout.
+    _pop_overflow_queue_id(task)
     try:
         fsm = session_manager.get_or_create(task.from_number)
         timeout_msg = _timeout_message(fsm.response_language, task.pre_state)
@@ -538,6 +691,8 @@ def _get_overflow_queue_id(task: TurnTask) -> int:
 
 
 def _on_turn_success(task: TurnTask) -> None:
+    _user_processing_guard.release(task.from_number)
+    _submit_next_buffered_turn(task.from_number)
     queue_id = _pop_overflow_queue_id(task)
     if queue_id and conversation_repository:
         try:
@@ -547,6 +702,9 @@ def _on_turn_success(task: TurnTask) -> None:
 
 
 def _on_turn_failure(task: TurnTask, exc: Exception, will_retry: bool, backoff_seconds: float) -> None:
+    if not will_retry:
+        _user_processing_guard.release(task.from_number)
+        _submit_next_buffered_turn(task.from_number)
     queue_id = _get_overflow_queue_id(task)
     if not queue_id or not conversation_repository:
         return
@@ -566,28 +724,42 @@ def _on_turn_failure(task: TurnTask, exc: Exception, will_retry: bool, backoff_s
         LOGGER.exception("Failed to update overflow retry state sid=%s queue_id=%s", task.inbound_sid or "-", queue_id)
 
 
-def _enqueue_overflow_turn(task: TurnTask) -> None:
-    if not conversation_repository:
-        _schedule_overflow_requeue(task)
+def _submit_next_buffered_turn(from_number: str) -> None:
+    next_task = _user_turn_buffer.pop_next(from_number)
+    if not next_task:
         return
-    try:
-        conversation_repository.enqueue_overflow_turn(
-            inbound_sid=task.inbound_sid,
-            from_number=task.from_number,
-            body=task.body,
-            pre_state=task.pre_state,
-        )
-    except Exception as exc:
-        LOGGER.warning("Overflow DB enqueue failed sid=%s error=%s; falling back to in-memory requeue.", task.inbound_sid or "-", exc)
-        _schedule_overflow_requeue(task)
+    acquired = _user_processing_guard.acquire(from_number)
+    if not acquired:
+        _user_turn_buffer.push_front(next_task)
+        return
+    if turn_processor.submit(next_task):
+        return
+    _user_processing_guard.release(from_number)
+    _user_turn_buffer.push_front(next_task)
 
 
 def _overflow_turn_poll_loop() -> None:
     if not conversation_repository:
         return
     claim_size = max(1, settings.queue_worker_count)
+    sid_retention_days = max(1, int(os.getenv("INBOUND_SID_RETENTION_DAYS", "30")))
+    sid_purge_interval_seconds = max(60, int(os.getenv("INBOUND_SID_PURGE_INTERVAL_SECONDS", "3600")))
+    next_sid_purge_at = 0.0
     while not _overflow_poll_stop.is_set():
         try:
+            now_monotonic = time.monotonic()
+            if now_monotonic >= next_sid_purge_at:
+                try:
+                    deleted = conversation_repository.purge_old_message_sids(retention_days=sid_retention_days)
+                    if deleted:
+                        LOGGER.info(
+                            "Purged old inbound_message_sids rows=%d retention_days=%d",
+                            deleted,
+                            sid_retention_days,
+                        )
+                except Exception:
+                    LOGGER.exception("Failed to purge inbound_message_sids")
+                next_sid_purge_at = now_monotonic + sid_purge_interval_seconds
             rows = conversation_repository.claim_overflow_turns(limit=claim_size, worker_id=_overflow_worker_id)
             if not rows:
                 _overflow_poll_stop.wait(0.8)
@@ -608,46 +780,48 @@ def _overflow_turn_poll_loop() -> None:
                     reason="Runtime queue still full",
                     backoff_seconds=max(1, int(settings.queue_overflow_requeue_backoff_seconds)),
                 )
+
         except Exception as exc:
             LOGGER.warning("Overflow queue poll failed error=%s", exc)
             _overflow_poll_stop.wait(1.0)
 
 
+def _doctor_cache_invalidation_loop() -> None:
+    if not scheduling_repository:
+        return
+    claim_size = max(1, min(100, settings.queue_worker_count * 10))
+    while not _cache_inv_stop.is_set():
+        try:
+            events = scheduling_repository.claim_cache_invalidation_events(
+                limit=claim_size,
+                worker_id=_cache_inv_worker_id,
+            )
+            if not events:
+                _cache_inv_stop.wait(0.8)
+                continue
+            for event in events:
+                try:
+                    scheduling_repository.process_cache_invalidation_event(event)
+                    scheduling_repository.mark_cache_invalidation_done(event.queue_id)
+                except Exception:
+                    LOGGER.exception(
+                        "Doctor cache invalidation failed queue_id=%s entity=%s doctor=%s clinic=%s",
+                        event.queue_id,
+                        event.entity_type,
+                        event.doctor_id,
+                        event.clinic_id,
+                    )
+                    scheduling_repository.release_cache_invalidation(event.queue_id)
+        except Exception as exc:
+            LOGGER.warning("Doctor cache invalidation poll failed error=%s", exc)
+            _cache_inv_stop.wait(1.0)
+
+
 def _get_user_lock(user_id: str) -> Lock:
-    with _user_locks_guard:
-        lock = _user_locks.get(user_id)
-        if lock is None:
-            lock = Lock()
-            _user_locks[user_id] = lock
-        return lock
-
-
-def _processing_message(language: str, state: str) -> str:
-    if language == "hi":
-        if state == "INIT":
-            return "कृपया प्रतीक्षा करें, मैं आपका अनुरोध जाँच रहा हूँ।"
-        if state == "CONFIRM":
-            return "कृपया प्रतीक्षा करें, मैं आपकी पुष्टि अपडेट कर रहा हूँ।"
-        return "कृपया प्रतीक्षा करें, मैं आपकी जानकारी अपडेट कर रहा हूँ।"
-    if language == "hinglish":
-        if state == "INIT":
-            return "Please wait, main aapka request check kar raha hoon."
-        if state == "CONFIRM":
-            return "Please wait, main aapki confirmation update kar raha hoon."
-        return "Please wait, main aapki details update kar raha hoon."
-    if state == "INIT":
-        return "Please wait, I am checking your request."
-    if state == "CONFIRM":
-        return "Please wait, I am updating your confirmation."
-    return "Please wait, I am updating your details."
-
-
-def _busy_message(language: str, state: str) -> str:
-    if language == "hi":
-        return "इस समय सभी सहायक व्यस्त हैं। कृपया कुछ देर बाद पुनः प्रयास करें।"
-    if language == "hinglish":
-        return "Is waqt sab assistants busy hain. Please thodi der baad try kariye."
-    return "All assistants are busy right now. Please try again shortly."
+    uid = (user_id or "").strip()
+    if not uid:
+        return _user_lock_stripes[0]
+    return _user_lock_stripes[hash(uid) % _user_lock_stripes_count]
 
 
 def _send_channel_response(to_number: str, reply_text: str, fsm_state: str, fsm, inbound_sid: str = "") -> None:
@@ -729,6 +903,12 @@ def _send_plain_channel_document(to_number: str, file_path: str, caption: str = 
         return
     # Twilio WhatsApp media requires a publicly reachable media URL.
     # For local scheduler exports, keep a safe fallback text notification.
+    LOGGER.warning(
+        "WhatsApp document send degraded to text (Twilio requires a public media URL). "
+        "to=%s file=%s — configure a media hosting endpoint to enable file delivery.",
+        to_number,
+        os.path.basename(file_path),
+    )
     msg = caption.strip() if caption else "Doctor reminder report generated."
     msg = f"{msg}\nReport file: {os.path.basename(file_path)}"
     _send_plain_channel_message(to_number=to_number, body=msg, inbound_sid=inbound_sid)
@@ -870,41 +1050,10 @@ def _send_with_retries(kwargs: dict) -> str:
             LOGGER.warning("Twilio send attempt failed attempt=%d/%d error=%s", attempt, total_attempts, exc)
             if attempt == total_attempts:
                 raise
-            time.sleep(0.8 * attempt)
+            continue
     if last_exc:
         raise last_exc
     return "-"
-
-
-def _schedule_overflow_requeue(task: TurnTask) -> None:
-    max_attempts = max(1, settings.queue_overflow_requeue_attempts)
-    base_backoff = max(0.2, settings.queue_overflow_requeue_backoff_seconds)
-
-    def _runner() -> None:
-        for attempt in range(1, max_attempts + 1):
-            if turn_processor.submit(task):
-                LOGGER.info(
-                    "Overflow task requeued sid=%s from=%s attempt=%d/%d",
-                    task.inbound_sid or "-",
-                    task.from_number,
-                    attempt,
-                    max_attempts,
-                )
-                return
-            sleep_for = min(8.0, base_backoff * attempt)
-            time.sleep(sleep_for)
-        LOGGER.error(
-            "Overflow task dropped after requeue attempts sid=%s from=%s attempts=%d",
-            task.inbound_sid or "-",
-            task.from_number,
-            max_attempts,
-        )
-
-    threading.Thread(
-        target=_runner,
-        name=f"overflow-requeue-{task.inbound_sid or 'na'}",
-        daemon=True,
-    ).start()
 
 
 def _template_for_state(state: str) -> str:
@@ -923,9 +1072,9 @@ def _template_for_state(state: str) -> str:
 def _content_variables_for_state(state: str, fsm) -> dict:
     if state == "ASK_DATE":
         dates = fsm._date_options()
-        if not dates:
+        if len(dates) < 3:
             return {}
-        d1, d2, d3 = dates
+        d1, d2, d3 = dates[:3]
         return {"1": d1, "2": d2, "3": d3}
     if state == "ASK_TIME":
         slots = fsm._suggested_slots()

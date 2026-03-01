@@ -17,12 +17,9 @@ from src.messages.templates import get_message
 from src.nlu.extractors import (
     extract_appointment_mode,
     capture_prefill_entities,
-    extract_age,
     extract_date,
     extract_doctor_name,
-    extract_gender,
     extract_name,
-    extract_patient_type,
     extract_phone,
     extract_time,
     is_booking_intent,
@@ -127,6 +124,7 @@ class AppointmentFSM:
     def handle(self, user_text: str) -> str:
         text = (user_text or "").strip()
         lower = text.lower()
+        text, lower = self._normalize_option_input_for_state(text, lower)
 
         if self.context.abuse_blocked:
             return ""
@@ -154,6 +152,12 @@ class AppointmentFSM:
         self._update_response_language(lower)
         capture_prefill_entities(self.context, text)
 
+        # Ensure actor IDs and known-patient name are hydrated every turn so that
+        # multi-turn sessions (where FSM is reconstructed from snapshot) always have
+        # the correct known_patient_name before any state handler checks it.
+        self._ensure_actor_defaults()
+        self._hydrate_known_patient_name()
+
         if is_restart_intent(lower):
             self._reset_all(cancelled=False)
             self.state = "ASK_NAME"
@@ -166,6 +170,23 @@ class AppointmentFSM:
                 if existing_reply:
                     return self._respond(existing_reply, allow_polish=False)
                 return self._respond(self._welcome_greeting() + "\n" + self._msg("clarify_intent"), allow_polish=False)
+
+            # Direct menu selection — patient pressed 1 or 2 from the options we showed.
+            if lower.strip() == "1":
+                self.init_unclear_count = 0
+                existing_reply = self._existing_booking_entry_response()
+                if existing_reply:
+                    return self._respond(existing_reply, allow_polish=False)
+                self.state = "ASK_BOOKING_FOR"
+                return self._respond(
+                    self._msg("intent_ack") + "\n" + self._with_back(self._msg("ask_booking_for"), option_count=2),
+                    allow_polish=False,
+                )
+            if lower.strip() == "2":
+                self.init_unclear_count = 0
+                self.state = "ASK_AVAILABILITY_DETAILS"
+                return self._respond(self._msg("availability_intro"), allow_polish=False)
+
             if self.init_unclear_count >= 3:
                 if is_yes(lower) or is_booking_intent(lower):
                     self.init_unclear_count = 0
@@ -218,25 +239,16 @@ class AppointmentFSM:
                     return self._respond(self._availability_reply(availability_date), allow_polish=False)
                 return self._respond(self._msg("availability_intro"), allow_polish=False)
             if routed == "GREETING":
-                # Greeting is treated as a soft-init turn so that next unclear turn can move to disambiguation.
-                self.init_unclear_count = 1
+                self.init_unclear_count = 0
                 existing_reply = self._existing_booking_entry_response()
                 if existing_reply:
                     return self._respond(existing_reply, allow_polish=False)
-                return self._respond(self._welcome_greeting(), allow_polish=False)
-            if routed == "GENERAL_QUERY":
-                self.init_unclear_count += 1
-                if self.init_unclear_count == 2:
-                    return self._respond(self._msg("clarify_intent"), allow_polish=False)
-                if self.init_unclear_count >= 3:
-                    return self._respond(self._msg("final_booking_check"), allow_polish=False)
-                return self._respond(self._msg("general_help"), allow_polish=False)
+                return self._respond(self._welcome_greeting() + "\n" + self._msg("clarify_intent"), allow_polish=False)
+            # GENERAL_QUERY, unknown intent — always show the menu so patient can pick.
             self.init_unclear_count += 1
-            if self.init_unclear_count == 2:
-                return self._respond(self._msg("clarify_intent"), allow_polish=False)
             if self.init_unclear_count >= 3:
                 return self._respond(self._msg("final_booking_check"), allow_polish=False)
-            return self._respond(self._msg("no_intent"), allow_polish=False)
+            return self._respond(self._msg("clarify_intent"), allow_polish=False)
 
         if self.state == "CANCELLED":
             if is_booking_intent(lower) or is_restart_intent(lower):
@@ -277,6 +289,19 @@ class AppointmentFSM:
                             + self._clinic_prompt()
                         )
                     self.state = "ASK_CLINIC"
+                    telegram_phone = None
+                    if self.booking_repository:
+                        try:
+                            raw_chat = (self.chat_phone_number or "").strip()
+                            telegram_phone = self.booking_repository.find_patient_phone_by_chat_user_id(
+                                chat_user_id=raw_chat,
+                                admin_id=self.admin_id,
+                                doctor_id=self.doctor_id,
+                            )
+                        except Exception:
+                            telegram_phone = None
+                    if telegram_phone:
+                        self.context.phone_number = telegram_phone
                     return self._respond(
                         self._msg("booking_for_self_ack")
                         + "\n"
@@ -525,63 +550,11 @@ class AppointmentFSM:
                 return self._respond(self._msg("availability_ask"))
             return self._respond(self._msg("availability_ask_date"))
 
-        if self.state == "ASK_PATIENT_TYPE":
-            patient_type = extract_patient_type(lower)
-            if not patient_type:
-                patient_type = llm_extract(
-                    llm_client=self.llm_client,
-                    enable_llm_polish=self.enable_llm_polish,
-                    field_name="patient_type",
-                    text=text,
-                )
-            if not patient_type:
-                return self._respond(self._msg("invalid_patient_type"))
-            self.context.patient_type = patient_type
-            if self.in_edit_flow:
-                self.in_edit_flow = False
-                self.state = "CONFIRM"
-                return self._respond(self._msg("change_ack", step="ASK_PATIENT_TYPE") + "\n" + self._msg("confirm_summary", **self._display_context()))
-            self.state = "ASK_AGE"
-            return self._respond(self._msg("patient_type_ack", patient_type=patient_type) + "\n" + self._msg("ask_age"))
-
-        if self.state == "ASK_AGE":
-            age = extract_age(lower)
-            if age is None:
-                llm_age = llm_extract(
-                    llm_client=self.llm_client,
-                    enable_llm_polish=self.enable_llm_polish,
-                    field_name="age",
-                    text=text,
-                )
-                age = int(llm_age) if llm_age and str(llm_age).isdigit() else None
-            if age is None:
-                return self._respond(self._msg("invalid_age"))
-            self.context.age = age
-            if self.in_edit_flow:
-                self.in_edit_flow = False
-                self.state = "CONFIRM"
-                return self._respond(self._msg("change_ack", step="ASK_AGE") + "\n" + self._msg("confirm_summary", **self._display_context()))
-            self.state = "ASK_GENDER"
-            return self._respond(self._msg("age_ack", age=age) + "\n" + self._msg("ask_gender"))
-
-        if self.state == "ASK_GENDER":
-            gender = extract_gender(lower)
-            if not gender:
-                gender = llm_extract(
-                    llm_client=self.llm_client,
-                    enable_llm_polish=self.enable_llm_polish,
-                    field_name="gender",
-                    text=text,
-                )
-            if not gender:
-                return self._respond(self._msg("invalid_gender"))
-            self.context.gender = gender
-            if self.in_edit_flow:
-                self.in_edit_flow = False
-                self.state = "CONFIRM"
-                return self._respond(self._msg("change_ack", step="ASK_GENDER") + "\n" + self._msg("confirm_summary", **self._display_context()))
+        # Legacy compatibility: older sessions may still carry removed states.
+        # Route them to active runtime states instead of keeping dead branches.
+        if self.state in {"ASK_PATIENT_TYPE", "ASK_AGE", "ASK_GENDER"}:
             self.state = "ASK_PHONE"
-            return self._respond(self._msg("gender_ack", gender=gender) + "\n" + self._msg("ask_phone"))
+            return self._respond(self._with_back(self._ask_phone_prompt()))
 
         if self.state == "ASK_PHONE":
             chat_phone = self._normalize_phone(self.chat_phone_number or "")
@@ -629,14 +602,8 @@ class AppointmentFSM:
             phone = extract_phone(text)
             if not phone and normalized in different_number_markers:
                 return self._respond(self._with_back(self._msg("invalid_phone")))
-            if not phone:
-                llm_phone = llm_extract(
-                    llm_client=self.llm_client,
-                    enable_llm_polish=self.enable_llm_polish,
-                    field_name="phone",
-                    text=text,
-                )
-                phone = self._normalize_phone(str(llm_phone)) if llm_phone else None
+            # No LLM fallback here — phone must be rule-extractable (10 digits).
+            # LLM adds 30-40s latency and cannot reliably fix genuinely invalid numbers.
             if not phone:
                 return self._respond(self._with_back(self._msg("invalid_phone")))
             self.context.phone_number = phone
@@ -678,7 +645,7 @@ class AppointmentFSM:
             date_options = self._date_options()
             if not date_options:
                 self.state = "ASK_CLINIC"
-                return self._respond(self._msg("no_date_available") + "\n" + self._clinic_prompt())
+                return self._respond(self._msg("no_date_available", clinic_name=self.context.clinic_name or "this clinic") + "\n" + self._clinic_prompt())
             self.state = "ASK_DATE"
             return self._respond(self._date_options_prompt(date_options))
 
@@ -687,7 +654,7 @@ class AppointmentFSM:
             date_options = self._date_options()
             if not date_options:
                 self.state = "ASK_CLINIC"
-                return self._respond(self._msg("no_date_available") + "\n" + self._clinic_prompt())
+                return self._respond(self._msg("no_date_available", clinic_name=self.context.clinic_name or "this clinic") + "\n" + self._clinic_prompt())
             if normalized.isdigit():
                 index = int(normalized)
                 if 1 <= index <= len(date_options):
@@ -912,7 +879,7 @@ class AppointmentFSM:
                 confirmed = self._msg("confirmed", **self._display_context())
                 persist_note = self._persist_confirmed_appointment()
                 if persist_note:
-                    confirmed = confirmed + "\n" + persist_note
+                    confirmed = persist_note + "\n\n" + confirmed
                 return self._respond(confirmed)
             if confirm_intent == "back":
                 back_text = self._handle_go_back()
@@ -981,6 +948,75 @@ class AppointmentFSM:
         self._reset_all(cancelled=False)
         self.state = "ASK_NAME"
         return self._respond(self._msg("ask_name"))
+
+    def _normalize_option_input_for_state(self, text: str, lower: str) -> tuple[str, str]:
+        option_states = {
+            "ASK_BOOKING_FOR",
+            "ASK_EXISTING_BOOKING_ACTION",
+            "ASK_MAX_ACTIVE_BOOKINGS_ACTION",
+            "ASK_EXISTING_BOOKING_PICK",
+            "ASK_APPOINTMENT_MODE",
+            "ASK_CLINIC",
+            "ASK_DATE",
+            "ASK_TIME",
+            "ASK_REASON",
+            "CONFIRM_RESCHEDULE",
+            "CONFIRM",
+            "ASK_CHANGE_FIELD",
+        }
+        if self.state not in option_states:
+            return text, lower
+
+        normalized = re.sub(r"\s+", " ", (lower or "").strip())
+        if not normalized:
+            return text, lower
+
+        number_map = {
+            "0": "0",
+            "zero": "0",
+            "०": "0",
+            "1": "1",
+            "one": "1",
+            "won": "1",
+            "ek": "1",
+            "एक": "1",
+            "१": "1",
+            "2": "2",
+            "two": "2",
+            "too": "2",
+            "to": "2",
+            "do": "2",
+            "दो": "2",
+            "२": "2",
+            "3": "3",
+            "three": "3",
+            "tree": "3",
+            "teen": "3",
+            "तीन": "3",
+            "३": "3",
+            "4": "4",
+            "four": "4",
+            "for": "4",
+            "char": "4",
+            "चार": "4",
+            "४": "4",
+            "5": "5",
+            "five": "5",
+            "paanch": "5",
+            "पांच": "5",
+            "५": "5",
+        }
+        if normalized in number_map:
+            mapped = number_map[normalized]
+            return mapped, mapped
+
+        prefixed = re.fullmatch(r"(?:option|number|choice|no\.?)\s+(.+)", normalized)
+        if prefixed:
+            token = prefixed.group(1).strip()
+            if token in number_map:
+                mapped = number_map[token]
+                return mapped, mapped
+        return text, lower
 
     def _respond(self, base_text: str, allow_polish: bool = True) -> str:
         return base_text
@@ -1106,7 +1142,7 @@ class AppointmentFSM:
             self.state = "ASK_DATE"
             dates = self._date_options()
             if not dates:
-                return self._with_back(self._msg("no_date_available"))
+                return self._with_back(self._msg("no_date_available", clinic_name=self.context.clinic_name or "this clinic"))
             return self._date_options_prompt(dates)
         if self.state == "ASK_CHANGE_FIELD":
             self.state = "CONFIRM"
@@ -1117,10 +1153,11 @@ class AppointmentFSM:
         return None
 
     def _welcome_greeting(self) -> str:
+        # known_patient_name is already hydrated by _hydrate_known_patient_name()
+        # which is called unconditionally at the top of handle() every turn.
+        # We only need to fetch the doctor display name here.
         self._ensure_actor_defaults()
         doctor_name = "Doctor"
-        patient_name: Optional[str] = None
-        self.known_patient_name = None
         if self.booking_repository:
             try:
                 doctor_from_db = self.booking_repository.get_doctor_display_name(
@@ -1130,7 +1167,6 @@ class AppointmentFSM:
                 if doctor_from_db:
                     doctor_name = doctor_from_db
                 elif self.doctor_id is not None:
-                    # Fallback without admin filter when doctor linkage exists but admin context differs.
                     doctor_from_db = self.booking_repository.get_doctor_display_name(
                         doctor_id=self.doctor_id,
                         admin_id=None,
@@ -1139,31 +1175,11 @@ class AppointmentFSM:
                         doctor_name = doctor_from_db
             except Exception:
                 pass
-            try:
-                if self._is_telegram_channel():
-                    raw_chat = (self.chat_phone_number or "").strip()
-                    if raw_chat:
-                        patient_name = self.booking_repository.find_patient_name_by_chat_user_id(
-                            chat_user_id=raw_chat,
-                            admin_id=self.admin_id,
-                            doctor_id=self.doctor_id,
-                        )
-                else:
-                    chat_phone = self._normalize_phone(self.chat_phone_number or "")
-                    if chat_phone:
-                        patient_name = self.booking_repository.find_patient_name_by_phone_number(
-                            phone_number=chat_phone,
-                            admin_id=self.admin_id,
-                            doctor_id=self.doctor_id,
-                        )
-            except Exception:
-                patient_name = None
-        if patient_name:
-            self.known_patient_name = patient_name
+        if self.known_patient_name:
             return self._msg(
                 "welcome_known_patient",
                 doctor_name=doctor_name,
-                patient_name=patient_name,
+                patient_name=self.known_patient_name,
             )
         return self._msg("welcome_new_patient", doctor_name=doctor_name)
 
@@ -1488,7 +1504,7 @@ class AppointmentFSM:
     def _time_slot_prompt(self) -> str:
         if not self.time_slot_options_cache:
             return self._msg("no_time_available")
-        lines = ["Please choose one-hour slot:"]
+        lines = [self._msg("choose_slot_header")]
         if self.time_window_labels_cache:
             for idx, label in enumerate(self.time_window_labels_cache, start=1):
                 lines.append(f"{idx}. {label}")
@@ -1503,7 +1519,7 @@ class AppointmentFSM:
         if not self.context.appointment_date:
             dates = self._date_options()
             if not dates:
-                return self._msg("no_date_available")
+                return self._msg("no_date_available", clinic_name=self.context.clinic_name or "this clinic")
             self.state = "ASK_DATE"
             return self._date_options_prompt(dates)
         if not self._load_time_options(limit=60):
@@ -1843,7 +1859,7 @@ class AppointmentFSM:
             date_options = self._date_options()
             if not date_options:
                 self.state = "ASK_CLINIC"
-                return self._msg("no_date_available") + "\n" + self._clinic_prompt()
+                return self._msg("no_date_available", clinic_name=self.context.clinic_name or "this clinic") + "\n" + self._clinic_prompt()
             self.state = "ASK_DATE"
             return self._date_options_prompt(date_options)
 
@@ -1923,7 +1939,7 @@ class AppointmentFSM:
         date_options = self._date_options()
         if not date_options:
             self.state = "ASK_CLINIC"
-            return self._msg("no_date_available") + "\n" + self._clinic_prompt()
+            return self._msg("no_date_available", clinic_name=self.context.clinic_name or "this clinic") + "\n" + self._clinic_prompt()
         self.state = "ASK_DATE"
         return self._date_options_prompt(date_options)
 
@@ -1935,7 +1951,7 @@ class AppointmentFSM:
 
     def _date_options_prompt(self, date_options: list[str]) -> str:
         if not date_options:
-            return self._msg("no_date_available")
+            return self._msg("no_date_available", clinic_name=self.context.clinic_name or "this clinic")
         today_iso = date.today().isoformat()
         tomorrow_iso = (date.today() + timedelta(days=1)).isoformat()
         def label(d: str) -> str:

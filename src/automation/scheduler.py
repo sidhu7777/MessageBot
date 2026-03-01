@@ -5,6 +5,7 @@ import threading
 import time
 import uuid
 from datetime import datetime
+from zoneinfo import ZoneInfo
 from typing import Callable, Optional
 
 from openpyxl import Workbook
@@ -14,6 +15,7 @@ from src.repositories.booking_repository import BookingRepository
 
 
 LOGGER = logging.getLogger(__name__)
+IST = ZoneInfo("Asia/Kolkata")
 
 
 class _PersistentKeyStore:
@@ -123,6 +125,12 @@ class AutomationScheduler:
             path=os.path.join("data", "doctor_reminder_keys.jsonl"),
             max_entries=200000,
         )
+        self._report_retention_days = max(1, int(os.getenv("REPORT_RETENTION_DAYS", "14")))
+        self._report_max_files = max(50, int(os.getenv("REPORT_MAX_FILES", "5000")))
+        self._report_cleanup_interval_seconds = max(
+            300, int(os.getenv("REPORT_CLEANUP_INTERVAL_SECONDS", "3600"))
+        )
+        self._next_report_cleanup_at = 0.0
 
     def start(self) -> None:
         if not self._enabled or self._threads:
@@ -169,7 +177,7 @@ class AutomationScheduler:
 
         sent = 0
         skipped = 0
-        now = datetime.now()
+        now = datetime.now(IST)
 
         # ── Loop over each configured lead time (e.g. 60 min and 10 min) ─────
         for lead_minutes in self._doctor_reminder_lead_minutes_list:
@@ -196,7 +204,7 @@ class AutomationScheduler:
                     window_start = datetime.strptime(
                         f"{row.slot_date} {row.schedule_start_time}",
                         "%Y-%m-%d %H:%M",
-                    )
+                    ).replace(tzinfo=IST)
                 except Exception:
                     skipped += 1
                     continue
@@ -252,8 +260,12 @@ class AutomationScheduler:
                             self._reminder_keys.add(dedup_key)  # sync flat file
                             skipped += 1
                             continue
+                        doctor_id = getattr(rows_sorted[0], "doctor_id", None)
+                        if doctor_id is None:
+                            skipped += 1
+                            continue
                         queue_id = self._booking_repository.insert_or_get_reminder_queue(
-                            doctor_id=int(rows_sorted[0].appointment_id),
+                            doctor_id=int(doctor_id),
                             schedule_id=schedule_id,
                             slot_date=slot_date,
                             schedule_start_time=start_time,
@@ -322,6 +334,17 @@ class AutomationScheduler:
             skipped,
             self._doctor_reminder_lead_minutes_list,
         )
+        now_monotonic = time.monotonic()
+        if now_monotonic >= self._next_report_cleanup_at:
+            removed = self._cleanup_report_files()
+            if removed:
+                LOGGER.info(
+                    "Cleaned report files removed=%d retention_days=%d max_files=%d",
+                    removed,
+                    self._report_retention_days,
+                    self._report_max_files,
+                )
+            self._next_report_cleanup_at = now_monotonic + self._report_cleanup_interval_seconds
         self._run_event_notifications_once()
 
     def _run_event_notifications_once(self) -> None:
@@ -504,6 +527,40 @@ class AutomationScheduler:
 
         workbook.save(path)
         return path
+
+    def _cleanup_report_files(self) -> int:
+        reports_dir = os.path.join("data", "reports")
+        if not os.path.isdir(reports_dir):
+            return 0
+        now_ts = time.time()
+        cutoff_ts = now_ts - (self._report_retention_days * 86400)
+        files: list[tuple[str, float]] = []
+        for name in os.listdir(reports_dir):
+            full_path = os.path.join(reports_dir, name)
+            if not os.path.isfile(full_path):
+                continue
+            try:
+                mtime = os.path.getmtime(full_path)
+            except OSError:
+                continue
+            files.append((full_path, float(mtime)))
+
+        to_remove: set[str] = {path for path, mtime in files if mtime < cutoff_ts}
+        remaining = [(path, mtime) for path, mtime in files if path not in to_remove]
+        if len(remaining) > self._report_max_files:
+            overflow = len(remaining) - self._report_max_files
+            remaining.sort(key=lambda item: item[1])  # oldest first
+            for path, _ in remaining[:overflow]:
+                to_remove.add(path)
+
+        removed = 0
+        for path in to_remove:
+            try:
+                os.remove(path)
+                removed += 1
+            except OSError:
+                continue
+        return removed
 
     def _inc_metric(self, name: str, value: int) -> None:
         with self._metrics_lock:

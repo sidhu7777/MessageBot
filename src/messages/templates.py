@@ -1,9 +1,8 @@
-﻿def get_message(response_language: str, key: str, **kwargs: object) -> str:
+def get_message(response_language: str, key: str, **kwargs: object) -> str:
     en = {
         "greeting": "Hello, I am your medical appointment assistant. I can help with booking and doctor availability.",
         "welcome_known_patient": "Welcome to Dr. {doctor_name} clinic, {patient_name}. How can I help you today?",
         "welcome_new_patient": "Welcome to Dr. {doctor_name} clinic. How can I help you today?",
-        "general_help": "I can help with appointment booking or doctor availability. Tell me what you need.",
         "intent_ack": "Sure, I can help you book an appointment.",
         "availability_intro": "Sure, I can help check doctor availability. Please share preferred date (YYYY-MM-DD or 'today'/'tomorrow'). Doctor name is optional.",
         "availability_ask": "Please share preferred date (YYYY-MM-DD or 'today'/'tomorrow') to check availability.",
@@ -161,10 +160,11 @@
         ),
         "ask_date_manual": "Please choose a valid option number, or press \"0\" to go back.",
         "invalid_date": "Invalid date. Please send a future date in YYYY-MM-DD format.",
-        "no_date_available": "No available dates for this clinic right now. Please choose another clinic or try later.",
+        "no_date_available": "No available slots for {clinic_name}. Please choose another clinic.",
         "date_ack": "Date noted: {appointment_date}.",
         "ask_time": "Please share preferred time (e.g., 10 am or 14:30).",
         "ask_time_hour_options": "Which hour is nearest for you to book?",
+        "choose_slot_header": "Please choose a slot:",
         "invalid_time_hour": "Please reply with a valid option number, or type an exact time.",
         "ask_time_nearest_slots": "Okay, for around {preferred_hour}, please choose an exact slot:",
         "ask_time_slots": (
@@ -208,7 +208,6 @@
             "No problem. Let's update that detail."
         ),
         "confirmed": (
-            "Appointment request confirmed.\n"
             "Name: {patient_name}\n"
             "Contact: {phone_number}\n"
             "Clinic: {clinic_name}\n"
@@ -228,7 +227,6 @@
 
     hi = {
         "greeting": "नमस्ते, मैं आपका मेडिकल अपॉइंटमेंट असिस्टेंट हूँ। मैं बुकिंग और डॉक्टर उपलब्धता में मदद कर सकता हूँ।",
-        "general_help": "मैं अपॉइंटमेंट बुकिंग या डॉक्टर उपलब्धता में मदद कर सकता हूँ। कृपया अपनी आवश्यकता बताएं।",
         "intent_ack": "ठीक है, मैं आपकी अपॉइंटमेंट बुक करने में मदद कर सकता हूँ।",
         "availability_intro": "ठीक है, मैं डॉक्टर की उपलब्धता देखने में मदद कर सकता हूँ। कृपया डॉक्टर का नाम और पसंदीदा तारीख बताएं।",
         "availability_ask": "उपलब्धता देखने के लिए कृपया डॉक्टर का नाम और तारीख भेजें (YYYY-MM-DD या 'tomorrow').",
@@ -245,17 +243,10 @@
         "clarify_intent": (
             "कृपया एक विकल्प चुनें:\n"
             "1. अपॉइंटमेंट बुक करें\n"
-            "2. डॉक्टर उपलब्धता देखें\n"
-            "1 या 2 reply करें।"
+            "2. डॉक्टर उपलब्धता जांचें\n"
+            "1 या 2 से जवाब दें।"
         ),
-        "final_booking_check": "क्या आप अभी मेडिकल अपॉइंटमेंट बुक करना चाहते हैं? कृपया YES या NO में जवाब दें।",
-        "non_scope_final": (
-            "माफ़ कीजिए, मैं मेडिकल अपॉइंटमेंट असिस्टेंट हूँ और केवल बुकिंग या डॉक्टर उपलब्धता में मदद कर सकता हूँ।\n"
-            "शुरू करने के लिए कभी भी 'book appointment' भेजें।"
-        ),
-        "ask_name": "कृपया मरीज़ का पूरा नाम बताएं।",
         "existing_booking_found": (
-            "आपकी एक अपॉइंटमेंट पहले से बुक है:\n"
             "Booking Number: {appointment_id}\n"
             "क्लिनिक: {clinic_name}\n"
             "तारीख: {appointment_date}\n"
@@ -354,9 +345,10 @@
         ),
         "ask_date_manual": "कृपया सही विकल्प संख्या चुनें, या वापस जाने के लिए 0 भेजें।",
         "invalid_date": "तारीख अमान्य है। कृपया भविष्य की तारीख YYYY-MM-DD फ़ॉर्मेट में भेजें।",
-        "no_date_available": "इस क्लिनिक में फिलहाल कोई उपलब्ध तारीख नहीं है। कृपया दूसरा क्लिनिक चुनें या बाद में कोशिश करें।",
+        "no_date_available": "{clinic_name} में फिलहाल कोई स्लॉट उपलब्ध नहीं है। कृपया दूसरा क्लिनिक चुनें।",
         "date_ack": "तारीख नोट की गई: {appointment_date}।",
         "ask_time": "कृपया पसंदीदा समय भेजें (जैसे 10 am या 14:30)।",
+        "choose_slot_header": "कृपया एक स्लॉट चुनें:",
         "ask_time_slots": (
             "कृपया स्लॉट चुनें:\n"
             "1. {slot_1}\n"
@@ -405,7 +397,6 @@
         "invalid_change_field": "Please choose a valid option (1-10 or 0).",
         "change_ack": "ठीक है। हम वह विवरण अपडेट करते हैं।",
         "confirmed": (
-            "अपॉइंटमेंट अनुरोध पुष्टि हो गया है।\n"
             "नाम: {patient_name}\n"
             "मरीज़ का प्रकार: {patient_type}\n"
             "आयु: {age}\n"
@@ -438,7 +429,6 @@
         "go_back_hint": "Press \"0\" to go back.",
         "welcome_known_patient": "Welcome to Dr. {doctor_name} clinic, {patient_name}. How can I help you today?.",
         "welcome_new_patient": "Welcome to Dr. {doctor_name} clinic. How can I help you today?",
-        "general_help": "Main appointment booking ya doctor availability mein help kar sakta hoon. Aapko kya chahiye?",
         "intent_ack": "Theek hai, main aapki appointment booking mein help kar sakta hoon.",
         "availability_intro": "Theek hai, main doctor availability check karne mein help kar sakta hoon. Preferred date share kariye (YYYY-MM-DD ya 'today'/'tomorrow'). Doctor name optional hai.",
         "availability_ask": "Availability check ke liye preferred date bhejiye (YYYY-MM-DD ya 'today'/'tomorrow').",
@@ -454,18 +444,11 @@
         "no_intent": "Start karne ke liye please likhiye: 'I need to book an appointment'.",
         "clarify_intent": (
             "Please ek option choose kariye:\n"
-            "1. Book appointment\n"
-            "2. Check doctor availability\n"
-            "Reply with 1 or 2."
+            "1. Appointment book kariye\n"
+            "2. Doctor availability check kariye\n"
+            "1 ya 2 se reply kariye."
         ),
-        "final_booking_check": "Kya aap abhi medical appointment book karna chahte hain? YES ya NO mein reply kariye.",
-        "non_scope_final": (
-            "Sorry, main medical appointment assistant hoon aur sirf booking ya doctor availability mein help kar sakta hoon.\n"
-            "Start karne ke liye kabhi bhi 'book appointment' bhejiye."
-        ),
-        "ask_name": "Please patient ka full name share kariye.",
         "existing_booking_found": (
-            "Aapka ek booked appointment already hai:\n"
             "Booking Number: {appointment_id}\n"
             "Clinic: {clinic_name}\n"
             "Date: {appointment_date}\n"
@@ -575,9 +558,10 @@
         ),
         "ask_date_manual": "Please valid option number choose kariye, ya \"0\" to go back press kariye.",
         "invalid_date": "Invalid date. Please future date YYYY-MM-DD format mein bhejiye.",
-        "no_date_available": "Is clinic ke liye abhi koi date available nahi hai. Please doosra clinic choose kariye ya baad mein try kariye.",
+        "no_date_available": "{clinic_name} ke liye abhi koi slot available nahi hai. Please doosra clinic choose kariye.",
         "date_ack": "Date noted: {appointment_date}.",
         "ask_time": "Please preferred time share kariye (e.g., 10 am ya 14:30).",
+        "choose_slot_header": "Please ek slot choose kariye:",
         "ask_time_slots": (
             "Please time slot choose kariye:\n"
             "1. {slot_1}\n"
@@ -617,7 +601,6 @@
         "invalid_change_field": "Please valid option choose kariye (1-5 ya 0).",
         "change_ack": "No problem. Chaliye woh detail update karte hain.",
         "confirmed": (
-            "Appointment request confirm ho gaya.\n"
             "Name: {patient_name}\n"
             "Contact: {phone_number}\n"
             "Clinic: {clinic_name}\n"

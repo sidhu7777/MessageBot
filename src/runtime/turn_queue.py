@@ -2,8 +2,9 @@ import logging
 import queue
 import threading
 import time
-from dataclasses import dataclass
-from typing import Callable, Optional, Tuple
+import inspect
+from dataclasses import dataclass, field
+from typing import Any, Callable, Optional, Tuple
 
 
 LOGGER = logging.getLogger(__name__)
@@ -16,6 +17,7 @@ class TurnTask:
     inbound_sid: str
     pre_state: str
     attempt: int = 0
+    enqueue_ts: float = field(default_factory=time.time)
 
 
 class TurnQueueProcessor:
@@ -24,17 +26,23 @@ class TurnQueueProcessor:
         *,
         worker_count: int,
         max_queue_size: int,
-        process_fn: Callable[[str, str], Tuple[str, str]],
-        send_fn: Callable[[str, str, str, str], None],
+        process_fn: Callable[[str, str], Tuple[Any, ...]],
+        send_fn: Callable[..., None],
         retry_attempts: int = 1,
+        processing_timeout_seconds: float = 0.0,
         timeout_fn: Optional[Callable[[TurnTask, Exception], None]] = None,
         on_success: Optional[Callable[[TurnTask], None]] = None,
         on_failure: Optional[Callable[[TurnTask, Exception, bool, float], None]] = None,
     ) -> None:
         self.worker_count = worker_count
         self.retry_attempts = max(0, retry_attempts)
+        self._processing_timeout_seconds = max(0.0, float(processing_timeout_seconds))
         self._process_fn = process_fn
         self._send_fn = send_fn
+        try:
+            self._send_fn_accepts_fsm = len(inspect.signature(send_fn).parameters) >= 5
+        except Exception:
+            self._send_fn_accepts_fsm = False
         self._timeout_fn = timeout_fn
         self._on_success = on_success
         self._on_failure = on_failure
@@ -93,6 +101,7 @@ class TurnQueueProcessor:
                 "retried": self._retried,
                 "failed": self._failed,
                 "retry_attempts": self.retry_attempts,
+                "processing_timeout_seconds": self._processing_timeout_seconds,
             }
 
     def _worker_loop(self) -> None:
@@ -106,9 +115,37 @@ class TurnQueueProcessor:
                 self._queue.task_done()
 
     def _run_task(self, task: TurnTask) -> None:
+        done_event = threading.Event()
+        if self._timeout_fn and self._processing_timeout_seconds > 0:
+            timeout_seconds = self._processing_timeout_seconds
+
+            def _timeout_watchdog() -> None:
+                if done_event.wait(timeout=timeout_seconds):
+                    return
+                try:
+                    self._timeout_fn(
+                        task,
+                        TimeoutError(f"Turn processing timeout after {timeout_seconds:.1f}s"),
+                    )
+                except Exception:
+                    LOGGER.exception("Failed to send timeout-safe message sid=%s", task.inbound_sid or "-")
+
+            threading.Thread(
+                target=_timeout_watchdog,
+                name=f"turn-timeout-{task.inbound_sid or 'nosid'}",
+                daemon=True,
+            ).start()
         try:
-            reply, post_state = self._process_fn(task.from_number, task.body)
-            self._send_fn(task.from_number, reply, post_state, task.inbound_sid)
+            result = self._process_fn(task.from_number, task.body)
+            fsm = None
+            if isinstance(result, tuple) and len(result) == 3:
+                reply, post_state, fsm = result
+            else:
+                reply, post_state = result
+            if self._send_fn_accepts_fsm:
+                self._send_fn(task.from_number, reply, post_state, task.inbound_sid, fsm)
+            else:
+                self._send_fn(task.from_number, reply, post_state, task.inbound_sid)
             with self._metrics_lock:
                 self._processed += 1
             LOGGER.info(
@@ -143,12 +180,12 @@ class TurnQueueProcessor:
                     backoff_seconds,
                     exc,
                 )
-                time.sleep(backoff_seconds)
                 task.attempt += 1
                 with self._metrics_lock:
                     self._retried += 1
-                if not self.submit(task):
-                    LOGGER.error("Queue full while retrying sid=%s from=%s", task.inbound_sid or "-", task.from_number)
+                retry_timer = threading.Timer(backoff_seconds, self._submit_retry_task, args=(task,))
+                retry_timer.daemon = True
+                retry_timer.start()
             else:
                 # Send "busy" message only once — on final failure
                 if is_timeout and self._timeout_fn:
@@ -166,3 +203,17 @@ class TurnQueueProcessor:
                     task.from_number,
                     task.attempt + 1,
                 )
+        finally:
+            done_event.set()
+
+    def _submit_retry_task(self, task: TurnTask) -> None:
+        if self._stop.is_set():
+            return
+        if self.submit(task):
+            return
+        err = RuntimeError("Queue full while retrying")
+        LOGGER.error("%s sid=%s from=%s", err, task.inbound_sid or "-", task.from_number)
+        if self._on_failure:
+            self._on_failure(task, err, False, 0.0)
+        with self._metrics_lock:
+            self._failed += 1

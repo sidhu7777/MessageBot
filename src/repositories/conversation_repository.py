@@ -21,6 +21,7 @@ class SessionSnapshot:
     doctor_id: Optional[int]
     admin_id: Optional[int]
     updated_at: datetime
+    fsm_extra_json: Optional[str] = None
 
 
 @dataclass
@@ -76,6 +77,21 @@ class ConversationRepository:
             )
             cur.execute(
                 """
+                SELECT COUNT(*) AS c
+                FROM INFORMATION_SCHEMA.STATISTICS
+                WHERE TABLE_SCHEMA = DATABASE()
+                  AND TABLE_NAME = 'inbound_message_sids'
+                  AND INDEX_NAME = 'idx_inbound_message_received'
+                """
+            )
+            row = cur.fetchone()
+            has_received_index = int(row[0] if row else 0) > 0
+            if not has_received_index:
+                cur.execute(
+                    "ALTER TABLE inbound_message_sids ADD INDEX idx_inbound_message_received (received_at)"
+                )
+            cur.execute(
+                """
                 CREATE TABLE IF NOT EXISTS inbound_turn_queue (
                     queue_id BIGINT NOT NULL AUTO_INCREMENT,
                     inbound_sid VARCHAR(96) NOT NULL,
@@ -99,6 +115,24 @@ class ConversationRepository:
                 ) ENGINE=InnoDB
                 """
             )
+            # Live migration: add fsm_extra_json column if the table was created before
+            # this column existed. Safe to run every startup (no-op when column is present).
+            cur.execute(
+                """
+                SELECT COUNT(*) AS c
+                FROM INFORMATION_SCHEMA.COLUMNS
+                WHERE TABLE_SCHEMA = DATABASE()
+                  AND TABLE_NAME = 'conversation_sessions'
+                  AND COLUMN_NAME = 'fsm_extra_json'
+                """
+            )
+            col_row = cur.fetchone()
+            has_fsm_extra_col = int(col_row[0] if col_row else 0) > 0
+            if not has_fsm_extra_col:
+                cur.execute(
+                    "ALTER TABLE conversation_sessions "
+                    "ADD COLUMN fsm_extra_json TEXT NULL DEFAULT NULL"
+                )
             conn.commit()
             self._schema_ready = True
         finally:
@@ -140,6 +174,33 @@ class ConversationRepository:
             cur.close()
             conn.close()
 
+    def purge_old_message_sids(self, *, retention_days: int = 30, batch_size: int = 5000) -> int:
+        self.ensure_schema()
+        safe_days = max(1, int(retention_days))
+        safe_batch = max(100, min(50000, int(batch_size)))
+        total_deleted = 0
+        conn = self._connect()
+        cur = conn.cursor()
+        try:
+            while True:
+                cur.execute(
+                    """
+                    DELETE FROM inbound_message_sids
+                    WHERE received_at < DATE_SUB(UTC_TIMESTAMP(), INTERVAL %s DAY)
+                    LIMIT %s
+                    """,
+                    (safe_days, safe_batch),
+                )
+                deleted = int(cur.rowcount or 0)
+                conn.commit()
+                total_deleted += deleted
+                if deleted < safe_batch:
+                    break
+        finally:
+            cur.close()
+            conn.close()
+        return total_deleted
+
     def load_session(self, user_id: str, ttl_minutes: int) -> Optional[SessionSnapshot]:
         self.ensure_schema()
         conn = self._connect()
@@ -158,7 +219,8 @@ class ConversationRepository:
                     in_edit_flow,
                     doctor_id,
                     admin_id,
-                    updated_at
+                    updated_at,
+                    fsm_extra_json
                 FROM conversation_sessions
                 WHERE user_id = %s
                   AND updated_at >= (NOW() - INTERVAL %s MINUTE)
@@ -181,6 +243,7 @@ class ConversationRepository:
                 doctor_id=int(row["doctor_id"]) if row["doctor_id"] is not None else None,
                 admin_id=int(row["admin_id"]) if row["admin_id"] is not None else None,
                 updated_at=row["updated_at"],
+                fsm_extra_json=row.get("fsm_extra_json") or None,
             )
         finally:
             cur.close()
@@ -199,6 +262,7 @@ class ConversationRepository:
         in_edit_flow: bool,
         doctor_id: Optional[int],
         admin_id: Optional[int],
+        fsm_extra_json: Optional[str] = None,
     ) -> None:
         self.ensure_schema()
         conn = self._connect()
@@ -209,8 +273,8 @@ class ConversationRepository:
                 INSERT INTO conversation_sessions (
                     user_id, state, context_json, response_language,
                     language_locked, language_turn_count, init_unclear_count,
-                    in_edit_flow, doctor_id, admin_id
-                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    in_edit_flow, doctor_id, admin_id, fsm_extra_json
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 ON DUPLICATE KEY UPDATE
                     state = VALUES(state),
                     context_json = VALUES(context_json),
@@ -221,6 +285,7 @@ class ConversationRepository:
                     in_edit_flow = VALUES(in_edit_flow),
                     doctor_id = VALUES(doctor_id),
                     admin_id = VALUES(admin_id),
+                    fsm_extra_json = VALUES(fsm_extra_json),
                     updated_at = CURRENT_TIMESTAMP
                 """,
                 (
@@ -234,6 +299,7 @@ class ConversationRepository:
                     1 if in_edit_flow else 0,
                     doctor_id,
                     admin_id,
+                    fsm_extra_json,
                 ),
             )
             conn.commit()
@@ -395,11 +461,11 @@ class ConversationRepository:
                 UPDATE inbound_turn_queue
                 SET
                     attempt_count = attempt_count + 1,
-                    status = CASE WHEN (attempt_count + 1) >= %s THEN 'DEAD' ELSE 'RETRY' END,
-                    next_retry_at = CASE WHEN (attempt_count + 1) >= %s THEN next_retry_at ELSE DATE_ADD(UTC_TIMESTAMP(), INTERVAL %s SECOND) END,
+                    status = CASE WHEN attempt_count >= %s THEN 'DEAD' ELSE 'RETRY' END,
+                    next_retry_at = CASE WHEN attempt_count >= %s THEN next_retry_at ELSE DATE_ADD(UTC_TIMESTAMP(), INTERVAL %s SECOND) END,
                     last_error = %s,
-                    dead_at = CASE WHEN (attempt_count + 1) >= %s THEN UTC_TIMESTAMP() ELSE dead_at END,
-                    dead_reason = CASE WHEN (attempt_count + 1) >= %s THEN %s ELSE dead_reason END,
+                    dead_at = CASE WHEN attempt_count >= %s THEN UTC_TIMESTAMP() ELSE dead_at END,
+                    dead_reason = CASE WHEN attempt_count >= %s THEN %s ELSE dead_reason END,
                     locked_at = NULL,
                     lock_owner = NULL
                 WHERE queue_id = %s

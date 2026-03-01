@@ -1,6 +1,10 @@
 from dataclasses import dataclass
 from datetime import datetime, timedelta, date, time
+import threading
 from typing import Optional
+from zoneinfo import ZoneInfo
+
+_IST = ZoneInfo("Asia/Kolkata")
 
 from src.db.connection import MySQLConfig, connect_mysql
 
@@ -16,6 +20,7 @@ class BookingResult:
 @dataclass
 class DoctorReminder:
     appointment_id: int
+    doctor_id: int
     doctor_whatsapp: str
     doctor_telegram_chat_id: str
     patient_name: str
@@ -52,11 +57,36 @@ class NotificationEvent:
 class BookingRepository:
     def __init__(self, config: MySQLConfig) -> None:
         self._config = config
+        self._meta_cache_lock = threading.Lock()
+        self._table_exists_cache: dict[str, bool] = {}
+        self._table_columns_cache: dict[str, set[str]] = {}
+        self._appointment_table_cache: Optional[str] = None
+        self._use_appointment_mode_cache: Optional[bool] = None
 
     def _connect(self):
         return connect_mysql(self._config)
 
+    def _ensure_meta_cache(self) -> None:
+        if not hasattr(self, "_meta_cache_lock"):
+            self._meta_cache_lock = threading.Lock()
+        if not hasattr(self, "_table_exists_cache"):
+            self._table_exists_cache = {}
+        if not hasattr(self, "_table_columns_cache"):
+            self._table_columns_cache = {}
+        if not hasattr(self, "_appointment_table_cache"):
+            self._appointment_table_cache = None
+        if not hasattr(self, "_use_appointment_mode_cache"):
+            self._use_appointment_mode_cache = None
+
     def _table_exists(self, table_name: str) -> bool:
+        self._ensure_meta_cache()
+        normalized_name = (table_name or "").strip().lower()
+        if not normalized_name:
+            return False
+        with self._meta_cache_lock:
+            cached = self._table_exists_cache.get(normalized_name)
+        if cached is not None:
+            return bool(cached)
         conn = self._connect()
         cur = conn.cursor()
         try:
@@ -68,18 +98,102 @@ class BookingRepository:
                   AND TABLE_NAME = %s
                 LIMIT 1
                 """,
-                (table_name,),
+                (normalized_name,),
             )
-            return cur.fetchone() is not None
+            exists = cur.fetchone() is not None
+            with self._meta_cache_lock:
+                self._table_exists_cache[normalized_name] = bool(exists)
+            return bool(exists)
         finally:
             cur.close()
             conn.close()
 
     def _appointment_table(self) -> str:
-        return "appointment" if self._table_exists("appointment") else "appointments"
+        self._ensure_meta_cache()
+        with self._meta_cache_lock:
+            if self._appointment_table_cache:
+                return self._appointment_table_cache
+        table_name = "appointment" if self._table_exists("appointment") else "appointments"
+        with self._meta_cache_lock:
+            self._appointment_table_cache = table_name
+        return table_name
 
     def _use_appointment_mode(self) -> bool:
-        return self._table_exists("appointment") and not self._table_exists("slots")
+        self._ensure_meta_cache()
+        with self._meta_cache_lock:
+            if self._use_appointment_mode_cache is not None:
+                return bool(self._use_appointment_mode_cache)
+        mode = self._table_exists("appointment") and not self._table_exists("slots")
+        with self._meta_cache_lock:
+            self._use_appointment_mode_cache = bool(mode)
+        return bool(mode)
+
+    def _table_columns(self, table_name: str) -> set[str]:
+        self._ensure_meta_cache()
+        normalized_name = (table_name or "").strip().lower()
+        if not normalized_name:
+            return set()
+        with self._meta_cache_lock:
+            cached = self._table_columns_cache.get(normalized_name)
+            if cached is not None:
+                return set(cached)
+        conn = self._connect()
+        cur = conn.cursor()
+        try:
+            cur.execute(
+                """
+                SELECT COLUMN_NAME
+                FROM INFORMATION_SCHEMA.COLUMNS
+                WHERE TABLE_SCHEMA = DATABASE()
+                  AND TABLE_NAME = %s
+                """,
+                (normalized_name,),
+            )
+            cols: set[str] = set()
+            for row in cur.fetchall():
+                if isinstance(row, dict):
+                    name = row.get("COLUMN_NAME")
+                elif isinstance(row, (list, tuple)) and row:
+                    name = row[0]
+                else:
+                    name = None
+                text = str(name or "").strip().lower()
+                if text:
+                    cols.add(text)
+            with self._meta_cache_lock:
+                self._table_columns_cache[normalized_name] = set(cols)
+            return cols
+        finally:
+            cur.close()
+            conn.close()
+
+    def _column_exists(self, table_name: str, column_name: str) -> bool:
+        normalized_column = (column_name or "").strip().lower()
+        if not normalized_column:
+            return False
+        return normalized_column in self._table_columns(table_name)
+
+    def _first_existing_column(self, table_name: str, candidates: tuple[str, ...]) -> Optional[str]:
+        cols = self._table_columns(table_name)
+        for candidate in candidates:
+            normalized = (candidate or "").strip().lower()
+            if normalized and normalized in cols:
+                return normalized
+        return None
+
+    def _invalidate_table_columns_cache(self, *table_names: str) -> None:
+        self._ensure_meta_cache()
+        with self._meta_cache_lock:
+            for table_name in table_names:
+                normalized = (table_name or "").strip().lower()
+                if normalized:
+                    self._table_columns_cache.pop(normalized, None)
+
+    @staticmethod
+    def _normalized_phone_sql_expr(column_expr: str) -> str:
+        return (
+            f"REPLACE(REPLACE(REPLACE(REPLACE(LOWER(COALESCE({column_expr}, '')), 'whatsapp:', ''), '+', ''), '-', ''), ' ', '')"
+        )
 
     def ensure_notification_schema(self) -> None:
         conn = self._connect()
@@ -208,6 +322,14 @@ class BookingRepository:
                     )
 
             conn.commit()
+            self._invalidate_table_columns_cache(
+                appointment_table,
+                "appointment_notification_log",
+                "message_delivery_status",
+                "doctor_remainder_queue",
+                "patients",
+                "doctors",
+            )
         finally:
             cur.close()
             conn.close()
@@ -233,7 +355,7 @@ class BookingRepository:
                 """
                 INSERT INTO appointment_notification_log
                 (appointment_id, event_type, channel, destination, status, error_text, meta_json, admin_id, sent_at, attempt_count, next_retry_at)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, CASE WHEN %s = 'SENT' THEN DATE_ADD(UTC_TIMESTAMP(), INTERVAL 330 MINUTE) ELSE NULL END, 0, UTC_TIMESTAMP())
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, CASE WHEN %s = 'SENT' THEN CONVERT_TZ(UTC_TIMESTAMP(), '+00:00', '+05:30') ELSE NULL END, 0, NULL)
                 """,
                 (
                     appointment_id,
@@ -285,17 +407,7 @@ class BookingRepository:
         try:
             safe_limit = max(1, min(1000, int(limit)))
             appointment_table = self._appointment_table()
-
-            cur.execute(
-                """
-                SELECT COLUMN_NAME
-                FROM INFORMATION_SCHEMA.COLUMNS
-                WHERE TABLE_SCHEMA = DATABASE()
-                  AND TABLE_NAME = 'patients'
-                """
-            )
-            patient_cols = {str(r["COLUMN_NAME"]).lower() for r in cur.fetchall()}
-            chat_col = next((c for c in ("telegram_chat_id", "telegram_user_id", "user_id") if c in patient_cols), None)
+            chat_col = self._first_existing_column("patients", ("telegram_chat_id", "telegram_user_id", "user_id"))
             chat_select = f"COALESCE(p.{chat_col}, '')" if chat_col else "''"
 
             params: list[object] = []
@@ -329,7 +441,7 @@ class BookingRepository:
                     LEFT JOIN clinics c ON c.clinic_id = a.clinic_id
                     WHERE l.status = 'PENDING'
                       AND l.dead_at IS NULL
-                      AND (l.next_retry_at IS NULL OR l.next_retry_at <= UTC_TIMESTAMP())
+                      AND (l.next_retry_at IS NULL OR l.next_retry_at <= CONVERT_TZ(UTC_TIMESTAMP(), '+00:00', '+05:30'))
                       AND l.event_type IN ('CANCELLED', 'RESCHEDULED', 'DOCTOR_DELAYED')
                       {admin_sql}
                     ORDER BY l.notification_id
@@ -363,7 +475,7 @@ class BookingRepository:
                     LEFT JOIN clinics c ON c.clinic_id = a.clinic_id
                     WHERE l.status = 'PENDING'
                       AND l.dead_at IS NULL
-                      AND (l.next_retry_at IS NULL OR l.next_retry_at <= UTC_TIMESTAMP())
+                      AND (l.next_retry_at IS NULL OR l.next_retry_at <= CONVERT_TZ(UTC_TIMESTAMP(), '+00:00', '+05:30'))
                       AND l.event_type IN ('CANCELLED', 'RESCHEDULED', 'DOCTOR_DELAYED')
                       {admin_sql}
                     ORDER BY l.notification_id
@@ -419,7 +531,7 @@ class BookingRepository:
                 SET status = %s,
                     error_text = %s,
                     provider_message_sid = CASE WHEN %s = 'SENT' AND %s <> '' THEN %s ELSE provider_message_sid END,
-                    sent_at = CASE WHEN %s = 'SENT' THEN DATE_ADD(UTC_TIMESTAMP(), INTERVAL 330 MINUTE) ELSE sent_at END,
+                    sent_at = CASE WHEN %s = 'SENT' THEN CONVERT_TZ(UTC_TIMESTAMP(), '+00:00', '+05:30') ELSE sent_at END,
                     locked_at = NULL,
                     lock_owner = NULL
                 WHERE notification_id = %s
@@ -464,8 +576,8 @@ class BookingRepository:
                     FROM appointment_notification_log l
                     WHERE l.status IN ('PENDING', 'FAILED')
                       AND l.dead_at IS NULL
-                      AND (l.next_retry_at IS NULL OR l.next_retry_at <= UTC_TIMESTAMP())
-                      AND (l.locked_at IS NULL OR l.locked_at < DATE_SUB(UTC_TIMESTAMP(), INTERVAL 5 MINUTE))
+                      AND (l.next_retry_at IS NULL OR l.next_retry_at <= CONVERT_TZ(UTC_TIMESTAMP(), '+00:00', '+05:30'))
+                      AND (l.locked_at IS NULL OR l.locked_at < DATE_SUB(CONVERT_TZ(UTC_TIMESTAMP(), '+00:00', '+05:30'), INTERVAL 5 MINUTE))
                       {admin_sql}
                     ORDER BY l.notification_id
                     LIMIT %s
@@ -480,8 +592,8 @@ class BookingRepository:
                     FROM appointment_notification_log l
                     WHERE l.status IN ('PENDING', 'FAILED')
                       AND l.dead_at IS NULL
-                      AND (l.next_retry_at IS NULL OR l.next_retry_at <= UTC_TIMESTAMP())
-                      AND (l.locked_at IS NULL OR l.locked_at < DATE_SUB(UTC_TIMESTAMP(), INTERVAL 5 MINUTE))
+                      AND (l.next_retry_at IS NULL OR l.next_retry_at <= CONVERT_TZ(UTC_TIMESTAMP(), '+00:00', '+05:30'))
+                      AND (l.locked_at IS NULL OR l.locked_at < DATE_SUB(CONVERT_TZ(UTC_TIMESTAMP(), '+00:00', '+05:30'), INTERVAL 5 MINUTE))
                       {admin_sql}
                     ORDER BY l.notification_id
                     LIMIT %s
@@ -500,35 +612,18 @@ class BookingRepository:
                 f"""
                 UPDATE appointment_notification_log
                 SET status = 'PROCESSING',
-                    locked_at = UTC_TIMESTAMP(),
+                    attempt_count = attempt_count + 1,
+                    locked_at = CONVERT_TZ(UTC_TIMESTAMP(), '+00:00', '+05:30'),
                     lock_owner = %s
                 WHERE notification_id IN ({placeholders})
                 """,
                 tuple([worker_id] + ids),
             )
-            conn.commit()
-        finally:
-            cur.close()
-            conn.close()
 
-        # Re-use the existing joined loader with explicit IDs.
-        conn = self._connect()
-        cur = conn.cursor(dictionary=True)
-        try:
             appointment_table = self._appointment_table()
-            cur.execute(
-                """
-                SELECT COLUMN_NAME
-                FROM INFORMATION_SCHEMA.COLUMNS
-                WHERE TABLE_SCHEMA = DATABASE()
-                  AND TABLE_NAME = 'patients'
-                """
-            )
-            patient_cols = {str(r["COLUMN_NAME"]).lower() for r in cur.fetchall()}
-            chat_col = next((c for c in ("telegram_chat_id", "telegram_user_id", "user_id") if c in patient_cols), None)
+            chat_col = self._first_existing_column("patients", ("telegram_chat_id", "telegram_user_id", "user_id"))
             chat_select = f"COALESCE(p.{chat_col}, '')" if chat_col else "''"
 
-            placeholders = ", ".join(["%s"] * len(ids))
             if self._use_appointment_mode():
                 cur.execute(
                     f"""
@@ -587,26 +682,36 @@ class BookingRepository:
                     tuple(ids),
                 )
             rows = cur.fetchall()
-            return [
-                NotificationEvent(
-                    notification_id=int(row["notification_id"]),
-                    appointment_id=int(row["appointment_id"]),
-                    event_type=str(row.get("event_type") or "").strip().upper(),
-                    channel=str(row.get("channel") or "").strip().lower(),
-                    destination=str(row.get("destination") or "").strip(),
-                    status=str(row.get("status") or "PENDING").strip().upper(),
-                    patient_name=str(row.get("patient_name") or ""),
-                    clinic_name=str(row.get("clinic_name") or ""),
-                    slot_date=str(row.get("slot_date") or ""),
-                    slot_time=str(row.get("slot_time") or ""),
-                    patient_phone=str(row.get("patient_phone") or ""),
-                    patient_telegram_chat_id=str(row.get("patient_telegram_chat_id") or ""),
-                    meta_json=str(row.get("meta_json") or ""),
-                    admin_id=int(row["admin_id"]) if row.get("admin_id") is not None else None,
-                    attempt_count=int(row.get("attempt_count") or 0),
+            events: list[NotificationEvent] = []
+            for row in rows:
+                notification_id = row.get("notification_id")
+                appointment_id = row.get("appointment_id")
+                if notification_id is None or appointment_id is None:
+                    continue
+                events.append(
+                    NotificationEvent(
+                        notification_id=int(notification_id),
+                        appointment_id=int(appointment_id),
+                        event_type=str(row.get("event_type") or "").strip().upper(),
+                        channel=str(row.get("channel") or "").strip().lower(),
+                        destination=str(row.get("destination") or "").strip(),
+                        status=str(row.get("status") or "PENDING").strip().upper(),
+                        patient_name=str(row.get("patient_name") or ""),
+                        clinic_name=str(row.get("clinic_name") or ""),
+                        slot_date=str(row.get("slot_date") or ""),
+                        slot_time=str(row.get("slot_time") or ""),
+                        patient_phone=str(row.get("patient_phone") or ""),
+                        patient_telegram_chat_id=str(row.get("patient_telegram_chat_id") or ""),
+                        meta_json=str(row.get("meta_json") or ""),
+                        admin_id=int(row["admin_id"]) if row.get("admin_id") is not None else None,
+                        attempt_count=int(row.get("attempt_count") or 0),
+                    )
                 )
-                for row in rows
-            ]
+            conn.commit()
+            return events
+        except Exception:
+            conn.rollback()
+            raise
         finally:
             cur.close()
             conn.close()
@@ -630,12 +735,11 @@ class BookingRepository:
                 """
                 UPDATE appointment_notification_log
                 SET
-                    attempt_count = attempt_count + 1,
-                    status = CASE WHEN (attempt_count + 1) >= %s THEN 'DEAD' ELSE 'FAILED' END,
+                    status = CASE WHEN attempt_count >= %s THEN 'DEAD' ELSE 'FAILED' END,
                     error_text = %s,
-                    next_retry_at = CASE WHEN (attempt_count + 1) >= %s THEN next_retry_at ELSE DATE_ADD(UTC_TIMESTAMP(), INTERVAL %s SECOND) END,
-                    dead_at = CASE WHEN (attempt_count + 1) >= %s THEN UTC_TIMESTAMP() ELSE dead_at END,
-                    dead_reason = CASE WHEN (attempt_count + 1) >= %s THEN %s ELSE dead_reason END,
+                    next_retry_at = CASE WHEN attempt_count >= %s THEN next_retry_at ELSE DATE_ADD(CONVERT_TZ(UTC_TIMESTAMP(), '+00:00', '+05:30'), INTERVAL %s SECOND) END,
+                    dead_at = CASE WHEN attempt_count >= %s THEN CONVERT_TZ(UTC_TIMESTAMP(), '+00:00', '+05:30') ELSE dead_at END,
+                    dead_reason = CASE WHEN attempt_count >= %s THEN %s ELSE dead_reason END,
                     locked_at = NULL,
                     lock_owner = NULL
                 WHERE notification_id = %s
@@ -687,7 +791,7 @@ class BookingRepository:
                     error_code = VALUES(error_code),
                     error_message = VALUES(error_message),
                     payload_json = VALUES(payload_json),
-                    updated_at = CURRENT_TIMESTAMP
+                    updated_at = CONVERT_TZ(UTC_TIMESTAMP(), '+00:00', '+05:30')
                 """,
                 (
                     (provider or "").strip().lower() or "unknown",
@@ -705,7 +809,7 @@ class BookingRepository:
                 """
                 UPDATE appointment_notification_log
                 SET delivery_status = %s,
-                    delivery_updated_at = UTC_TIMESTAMP()
+                    delivery_updated_at = CONVERT_TZ(UTC_TIMESTAMP(), '+00:00', '+05:30')
                 WHERE provider_message_sid = %s
                 """,
                 (
@@ -768,6 +872,29 @@ class BookingRepository:
         if raw.startswith("whatsapp:"):
             raw = raw[len("whatsapp:") :]
         return "".join(ch for ch in raw if ch.isdigit())
+
+    @staticmethod
+    def _is_actionable_booking_row(slot_date_raw: object, slot_time_raw: object) -> bool:
+        """Treat past bookings as non-active for conversational existing-booking checks."""
+        slot_date_text = str(slot_date_raw or "").strip()
+        if not slot_date_text:
+            return True
+        try:
+            slot_date_val = datetime.strptime(slot_date_text, "%Y-%m-%d").date()
+        except ValueError:
+            return True
+
+        today = datetime.now(_IST).date()
+        if slot_date_val > today:
+            return True
+        if slot_date_val < today:
+            return False
+
+        slot_time_val = BookingRepository._parse_time_value(slot_time_raw)
+        if slot_time_val is None:
+            return True
+        now_time = datetime.now(_IST).time().replace(second=0, microsecond=0)
+        return slot_time_val >= now_time
 
     def default_admin_id(self) -> Optional[int]:
         conn = self._connect()
@@ -940,27 +1067,82 @@ class BookingRepository:
                 doctor_join = "LEFT JOIN doctors d ON d.doctor_id = p.doctor_id"
                 doctor_sql = "AND (p.doctor_id = %s OR d.doctor_id = %s)"
                 params.extend([doctor_id, doctor_id])
+
+            phone_candidates: list[str] = []
+
+            def _add_candidate(raw_value: str) -> None:
+                value = (raw_value or "").strip()
+                if not value:
+                    return
+                if value not in phone_candidates:
+                    phone_candidates.append(value)
+
+            _add_candidate(target)
+            _add_candidate(f"+{target}")
+            _add_candidate(f"whatsapp:+{target}")
+            if len(target) == 10:
+                _add_candidate(f"91{target}")
+                _add_candidate(f"+91{target}")
+                _add_candidate(f"whatsapp:+91{target}")
+            if len(target) == 12 and target.startswith("91"):
+                local10 = target[-10:]
+                _add_candidate(local10)
+                _add_candidate(f"+{target}")
+                _add_candidate(f"+91{local10}")
+                _add_candidate(f"whatsapp:+{target}")
+                _add_candidate(f"whatsapp:+91{local10}")
+
+            if phone_candidates:
+                placeholders = ", ".join(["%s"] * len(phone_candidates))
+                cur.execute(
+                    f"""
+                    SELECT p.full_name
+                    FROM patients p
+                    {doctor_join}
+                    WHERE p.admin_id = %s
+                      {doctor_sql}
+                      AND COALESCE(p.phone, '') IN ({placeholders})
+                    ORDER BY p.patient_id DESC
+                    LIMIT 1
+                    """,
+                    tuple(params + phone_candidates),
+                )
+                row = cur.fetchone()
+                if row:
+                    return str(row.get("full_name") or "").strip() or None
+
+            last10 = target[-10:] if len(target) >= 10 else ""
+            if not last10:
+                return None
             cur.execute(
                 f"""
-                SELECT p.full_name, COALESCE(p.phone, '') AS patient_phone
+                SELECT p.full_name
                 FROM patients p
                 {doctor_join}
                 WHERE p.admin_id = %s
                   {doctor_sql}
+                  AND RIGHT(
+                        REPLACE(
+                            REPLACE(
+                                REPLACE(
+                                    REPLACE(LOWER(COALESCE(p.phone, '')), 'whatsapp:', ''),
+                                    '+', ''
+                                ),
+                                '-', ''
+                            ),
+                            ' ', ''
+                        ),
+                        10
+                  ) = %s
                 ORDER BY p.patient_id DESC
+                LIMIT 1
                 """,
-                tuple(params),
+                tuple(params + [last10]),
             )
-            rows = cur.fetchall()
-            for row in rows:
-                patient_phone = self._normalize_phone(str(row.get("patient_phone") or ""))
-                if not patient_phone:
-                    continue
-                if patient_phone == target:
-                    return str(row.get("full_name") or "").strip() or None
-                if len(target) >= 10 and len(patient_phone) >= 10 and patient_phone[-10:] == target[-10:]:
-                    return str(row.get("full_name") or "").strip() or None
-            return None
+            row = cur.fetchone()
+            if not row:
+                return None
+            return str(row.get("full_name") or "").strip() or None
         finally:
             cur.close()
             conn.close()
@@ -981,18 +1163,7 @@ class BookingRepository:
             actual_admin_id = admin_id or self.default_admin_id()
             if not actual_admin_id:
                 return None
-            # Detect which column holds Telegram chat id in the patients table.
-            cur.execute(
-                """
-                SELECT COLUMN_NAME
-                FROM INFORMATION_SCHEMA.COLUMNS
-                WHERE TABLE_SCHEMA = DATABASE()
-                  AND TABLE_NAME = 'patients'
-                """
-            )
-            cols = {str(r["COLUMN_NAME"]).lower() for r in cur.fetchall()}
-            candidate_cols = ["telegram_chat_id", "telegram_user_id", "user_id"]
-            chat_col = next((c for c in candidate_cols if c in cols), None)
+            chat_col = self._first_existing_column("patients", ("telegram_chat_id", "telegram_user_id", "user_id"))
             if not chat_col:
                 return None
             params: list[object] = [actual_admin_id, target]
@@ -1015,6 +1186,50 @@ class BookingRepository:
             row = cur.fetchone()
             if row:
                 return str(row.get("full_name") or "").strip() or None
+            return None
+        finally:
+            cur.close()
+            conn.close()
+
+    def find_patient_phone_by_chat_user_id(
+        self,
+        chat_user_id: str,
+        admin_id: Optional[int] = None,
+        doctor_id: Optional[int] = None,
+    ) -> Optional[str]:
+        """Return the phone number stored in patients table for a known Telegram patient."""
+        target = self._normalize_chat_user_id(chat_user_id)
+        if not target:
+            return None
+        conn = self._connect()
+        cur = conn.cursor(dictionary=True)
+        try:
+            actual_admin_id = admin_id or self.default_admin_id()
+            if not actual_admin_id:
+                return None
+            chat_col = self._first_existing_column("patients", ("telegram_chat_id", "telegram_user_id", "user_id"))
+            if not chat_col:
+                return None
+            params: list[object] = [actual_admin_id, target]
+            doctor_sql = ""
+            if doctor_id is not None:
+                doctor_sql = "AND p.doctor_id = %s"
+                params.append(doctor_id)
+            cur.execute(
+                f"""
+                SELECT p.phone
+                FROM patients p
+                WHERE p.admin_id = %s
+                  AND TRIM(COALESCE(p.{chat_col}, '')) = %s
+                  {doctor_sql}
+                ORDER BY p.patient_id DESC
+                LIMIT 1
+                """,
+                tuple(params),
+            )
+            row = cur.fetchone()
+            if row:
+                return self._normalize_phone(str(row.get("phone") or "").strip()) or None
             return None
         finally:
             cur.close()
@@ -1112,12 +1327,20 @@ class BookingRepository:
             if not actual_admin_id:
                 return None
             appointment_table = self._appointment_table()
+            phone_expr = self._normalized_phone_sql_expr("p.phone")
+            phone_filter_sql = f"AND ({phone_expr} = %s"
+            params_phone: list[object] = [target]
+            if len(target) >= 10:
+                phone_filter_sql += f" OR RIGHT({phone_expr}, 10) = %s"
+                params_phone.append(target[-10:])
+            phone_filter_sql += ")"
             if self._use_appointment_mode():
                 params: list[object] = [actual_admin_id]
                 doctor_sql = ""
                 if doctor_id is not None:
                     doctor_sql = "AND a.doctor_id = %s"
                     params.append(doctor_id)
+                params.extend(params_phone)
                 cur.execute(
                     f"""
                     SELECT
@@ -1135,19 +1358,16 @@ class BookingRepository:
                     WHERE a.admin_id = %s
                       AND a.status IN ('BOOKED', 'PENDING', 'CONFIRMED')
                       {doctor_sql}
+                      {phone_filter_sql}
                     ORDER BY a.appointment_id DESC
                     """,
                     tuple(params),
                 )
                 rows = cur.fetchall()
                 for row in rows:
-                    patient_phone = self._normalize_phone(str(row.get("patient_phone") or ""))
-                    if not patient_phone:
+                    if not self._is_actionable_booking_row(row.get("slot_date"), row.get("slot_time")):
                         continue
-                    if patient_phone == target:
-                        return row
-                    if len(target) >= 10 and len(patient_phone) >= 10 and patient_phone[-10:] == target[-10:]:
-                        return row
+                    return row
                 return None
 
             params: list[object] = [actual_admin_id]
@@ -1155,6 +1375,7 @@ class BookingRepository:
             if doctor_id is not None:
                 doctor_sql = "AND a.doctor_id = %s"
                 params.append(doctor_id)
+            params.extend(params_phone)
             cur.execute(
                 f"""
                 SELECT
@@ -1172,19 +1393,16 @@ class BookingRepository:
                 WHERE a.admin_id = %s
                   AND a.status IN ('BOOKED', 'PENDING', 'CONFIRMED')
                   {doctor_sql}
+                  {phone_filter_sql}
                 ORDER BY a.appointment_id DESC
                 """,
                 tuple(params),
             )
             rows = cur.fetchall()
             for row in rows:
-                patient_phone = self._normalize_phone(str(row.get("patient_phone") or ""))
-                if not patient_phone:
+                if not self._is_actionable_booking_row(row.get("slot_date"), row.get("slot_time")):
                     continue
-                if patient_phone == target:
-                    return row
-                if len(target) >= 10 and len(patient_phone) >= 10 and patient_phone[-10:] == target[-10:]:
-                    return row
+                return row
             return None
         finally:
             cur.close()
@@ -1208,12 +1426,20 @@ class BookingRepository:
             if not actual_admin_id:
                 return []
             appointment_table = self._appointment_table()
+            phone_expr = self._normalized_phone_sql_expr("p.phone")
+            phone_filter_sql = f"AND ({phone_expr} = %s"
+            params_phone: list[object] = [target]
+            if len(target) >= 10:
+                phone_filter_sql += f" OR RIGHT({phone_expr}, 10) = %s"
+                params_phone.append(target[-10:])
+            phone_filter_sql += ")"
             if self._use_appointment_mode():
                 params: list[object] = [actual_admin_id]
                 doctor_sql = ""
                 if doctor_id is not None:
                     doctor_sql = "AND a.doctor_id = %s"
                     params.append(doctor_id)
+                params.extend(params_phone)
                 cur.execute(
                     f"""
                     SELECT
@@ -1230,6 +1456,7 @@ class BookingRepository:
                     WHERE a.admin_id = %s
                       AND a.status IN ('BOOKED', 'PENDING', 'CONFIRMED')
                       {doctor_sql}
+                      {phone_filter_sql}
                     ORDER BY a.appointment_id DESC
                     """,
                     tuple(params),
@@ -1240,6 +1467,7 @@ class BookingRepository:
                 if doctor_id is not None:
                     doctor_sql = "AND a.doctor_id = %s"
                     params.append(doctor_id)
+                params.extend(params_phone)
                 cur.execute(
                     f"""
                     SELECT
@@ -1258,6 +1486,7 @@ class BookingRepository:
                     WHERE a.admin_id = %s
                       AND a.status IN ('BOOKED', 'PENDING', 'CONFIRMED')
                       {doctor_sql}
+                      {phone_filter_sql}
                     ORDER BY a.appointment_id DESC
                     """,
                     tuple(params),
@@ -1265,15 +1494,11 @@ class BookingRepository:
 
             matched: list[dict] = []
             for row in cur.fetchall():
-                patient_phone = self._normalize_phone(str(row.get("patient_phone") or ""))
-                if not patient_phone:
+                if not self._is_actionable_booking_row(row.get("slot_date"), row.get("slot_time")):
                     continue
-                if patient_phone == target or (
-                    len(target) >= 10 and len(patient_phone) >= 10 and patient_phone[-10:] == target[-10:]
-                ):
-                    matched.append(row)
-                    if len(matched) >= max(1, limit):
-                        break
+                matched.append(row)
+                if len(matched) >= max(1, limit):
+                    break
             return matched
         finally:
             cur.close()
@@ -1296,23 +1521,12 @@ class BookingRepository:
             actual_admin_id = admin_id or self.default_admin_id()
             if not actual_admin_id:
                 return []
-
-            cur.execute(
-                """
-                SELECT COLUMN_NAME
-                FROM INFORMATION_SCHEMA.COLUMNS
-                WHERE TABLE_SCHEMA = DATABASE()
-                  AND TABLE_NAME = 'patients'
-                """
-            )
-            cols = {str(r["COLUMN_NAME"]).lower() for r in cur.fetchall()}
-            candidate_cols = ["telegram_chat_id", "telegram_user_id", "user_id"]
-            chat_col = next((c for c in candidate_cols if c in cols), None)
+            chat_col = self._first_existing_column("patients", ("telegram_chat_id", "telegram_user_id", "user_id"))
             if not chat_col:
                 return []
 
             appointment_table = self._appointment_table()
-            params: list[object] = [actual_admin_id]
+            params: list[object] = [actual_admin_id, target]
             doctor_sql = ""
             if doctor_id is not None:
                 doctor_sql = "AND a.doctor_id = %s"
@@ -1334,6 +1548,7 @@ class BookingRepository:
                     JOIN patients p ON p.patient_id = a.patient_id
                     LEFT JOIN clinics c ON c.clinic_id = a.clinic_id
                     WHERE a.admin_id = %s
+                      AND TRIM(COALESCE(p.{chat_col}, '')) = %s
                       AND a.status IN ('BOOKED', 'PENDING', 'CONFIRMED')
                       {doctor_sql}
                     ORDER BY a.appointment_id DESC
@@ -1357,6 +1572,7 @@ class BookingRepository:
                     LEFT JOIN clinics c ON c.clinic_id = a.clinic_id
                     LEFT JOIN slots s ON s.slot_id = a.slot_id
                     WHERE a.admin_id = %s
+                      AND TRIM(COALESCE(p.{chat_col}, '')) = %s
                       AND a.status IN ('BOOKED', 'PENDING', 'CONFIRMED')
                       {doctor_sql}
                     ORDER BY a.appointment_id DESC
@@ -1366,11 +1582,11 @@ class BookingRepository:
 
             matched: list[dict] = []
             for row in cur.fetchall():
-                value = self._normalize_chat_user_id(str(row.get("chat_user_value") or ""))
-                if value and value == target:
-                    matched.append(row)
-                    if len(matched) >= max(1, limit):
-                        break
+                if not self._is_actionable_booking_row(row.get("slot_date"), row.get("slot_time")):
+                    continue
+                matched.append(row)
+                if len(matched) >= max(1, limit):
+                    break
             return matched
         finally:
             cur.close()
@@ -1393,17 +1609,7 @@ class BookingRepository:
                 conn.rollback()
                 return False
             appointment_table = self._appointment_table()
-            cur.execute(
-                """
-                SELECT COLUMN_NAME
-                FROM INFORMATION_SCHEMA.COLUMNS
-                WHERE TABLE_SCHEMA = DATABASE()
-                  AND TABLE_NAME = %s
-                  AND COLUMN_NAME = 'cancelled_by'
-                """,
-                (appointment_table,),
-            )
-            has_cancelled_by = cur.fetchone() is not None
+            has_cancelled_by = self._column_exists(appointment_table, "cancelled_by")
             if self._use_appointment_mode():
                 if has_cancelled_by:
                     cur.execute(
@@ -1518,17 +1724,7 @@ class BookingRepository:
                 conn.rollback()
                 return BookingResult(False, "No admin configured.")
             appointment_table = self._appointment_table()
-            cur.execute(
-                """
-                SELECT COLUMN_NAME
-                FROM INFORMATION_SCHEMA.COLUMNS
-                WHERE TABLE_SCHEMA = DATABASE()
-                  AND TABLE_NAME = %s
-                  AND COLUMN_NAME = 'rescheduled_by'
-                """,
-                (appointment_table,),
-            )
-            has_rescheduled_by = cur.fetchone() is not None
+            has_rescheduled_by = self._column_exists(appointment_table, "rescheduled_by")
 
             if self._use_appointment_mode():
                 cur.execute(
@@ -1660,16 +1856,7 @@ class BookingRepository:
                         """,
                         (new_date, start_time, end_time, target_clinic_id, target_doctor_id, appointment_id, actual_admin_id),
                     )
-                cur.execute(
-                    """
-                    SELECT COLUMN_NAME
-                    FROM INFORMATION_SCHEMA.COLUMNS
-                    WHERE TABLE_SCHEMA = DATABASE()
-                      AND TABLE_NAME = 'patients'
-                      AND COLUMN_NAME = 'booking_id'
-                    """
-                )
-                if cur.fetchone() and requested_slot_number is not None:
+                if self._column_exists("patients", "booking_id") and requested_slot_number is not None:
                     cur.execute(
                         """
                         UPDATE patients
@@ -1810,15 +1997,7 @@ class BookingRepository:
                 return BookingResult(False, "No admin configured.")
 
             # Build patient upsert dynamically so schema changes do not break booking save.
-            cur.execute(
-                """
-                SELECT COLUMN_NAME
-                FROM INFORMATION_SCHEMA.COLUMNS
-                WHERE TABLE_SCHEMA = DATABASE()
-                  AND TABLE_NAME = 'patients'
-                """
-            )
-            patient_columns = {str(row["COLUMN_NAME"]).lower() for row in cur.fetchall()}
+            patient_columns = self._table_columns("patients")
             mode_column: Optional[str] = None
             if "mode" in patient_columns:
                 mode_column = "mode"
@@ -1859,39 +2038,66 @@ class BookingRepository:
             if mode_column:
                 patient_values[mode_column] = mode_value
 
-            # Upsert-like patient lookup by name/admin, and phone when present.
-            lookup_sql = (
-                "SELECT patient_id "
-                "FROM patients "
-                "WHERE full_name = %s AND admin_id = %s"
-            )
-            lookup_params: list[object] = [context.patient_name, actual_admin_id]
-            normalized_phone = self._normalize_phone(str(context.phone_number or ""))
-            if normalized_phone:
-                lookup_sql += " AND REPLACE(REPLACE(REPLACE(COALESCE(phone,''), ' ', ''), '-', ''), '+', '') LIKE %s"
-                lookup_params.append(f"%{normalized_phone[-10:]}")
-            lookup_sql += " ORDER BY patient_id LIMIT 1"
-            cur.execute(lookup_sql, tuple(lookup_params))
-            patient_row = cur.fetchone()
-            if patient_row:
-                patient_id = int(patient_row["patient_id"])
-                update_columns = [
-                    col
-                    for col in ("phone", "age", "gender", "patient_type", "reason", mode_column, chat_column)
-                    if col and col in patient_values
-                ]
-                if update_columns:
-                    assignments = ", ".join(f"{col} = %s" for col in update_columns)
-                    params = [patient_values[col] for col in update_columns]
-                    params.append(patient_id)
-                    cur.execute(
-                        f"""
-                        UPDATE patients
-                        SET {assignments}
-                        WHERE patient_id = %s
-                        """,
-                        tuple(params),
-                    )
+            # Prefer chat-id match for Telegram self-booking to avoid duplicate-key conflicts
+            # on patients.telegram_chat_id when name/phone differ from historical data.
+            patient_id: Optional[int] = None
+            if chat_column and chat_user_id_value and booking_for_self is True:
+                cur.execute(
+                    f"""
+                    SELECT patient_id
+                    FROM patients
+                    WHERE admin_id = %s
+                      AND TRIM(COALESCE({chat_column}, '')) = %s
+                    ORDER BY patient_id DESC
+                    LIMIT 1
+                    """,
+                    (actual_admin_id, chat_user_id_value),
+                )
+                by_chat = cur.fetchone()
+                if by_chat:
+                    patient_id = int(by_chat["patient_id"])
+
+            # Fallback lookup by name/admin, and phone when present.
+            if patient_id is None:
+                lookup_sql = (
+                    "SELECT patient_id "
+                    "FROM patients "
+                    "WHERE full_name = %s AND admin_id = %s"
+                )
+                lookup_params: list[object] = [context.patient_name, actual_admin_id]
+                normalized_phone = self._normalize_phone(str(context.phone_number or ""))
+                if normalized_phone:
+                    lookup_sql += " AND REPLACE(REPLACE(REPLACE(COALESCE(phone,''), ' ', ''), '-', ''), '+', '') LIKE %s"
+                    lookup_params.append(f"%{normalized_phone[-10:]}")
+                lookup_sql += " ORDER BY patient_id LIMIT 1"
+                cur.execute(lookup_sql, tuple(lookup_params))
+                patient_row = cur.fetchone()
+                if patient_row:
+                    patient_id = int(patient_row["patient_id"])
+
+            update_columns = [
+                col
+                for col in ("phone", "age", "gender", "patient_type", "reason", mode_column, chat_column)
+                if col and col in patient_values
+            ]
+
+            def _update_patient_from_values(target_patient_id: int) -> None:
+                if not update_columns:
+                    return
+                assignments = ", ".join(f"{col} = %s" for col in update_columns)
+                update_params = [patient_values[col] for col in update_columns]
+                update_params.append(target_patient_id)
+                cur.execute(
+                    f"""
+                    UPDATE patients
+                    SET {assignments}
+                    WHERE patient_id = %s
+                    """,
+                    tuple(update_params),
+                )
+
+            if patient_id is not None:
+                _update_patient_from_values(patient_id)
             else:
                 insert_columns = [
                     col
@@ -1904,17 +2110,86 @@ class BookingRepository:
                 placeholders = ", ".join(["%s"] * len(insert_columns))
                 col_sql = ", ".join(insert_columns)
                 params = [patient_values[col] for col in insert_columns]
-                cur.execute(
-                    f"""
-                    INSERT INTO patients
-                    ({col_sql})
-                    VALUES ({placeholders})
-                    """,
-                    tuple(params),
-                )
-                patient_id = int(cur.lastrowid)
+                try:
+                    cur.execute(
+                        f"""
+                        INSERT INTO patients
+                        ({col_sql})
+                        VALUES ({placeholders})
+                        """,
+                        tuple(params),
+                    )
+                    patient_id = int(cur.lastrowid)
+                except Exception as _dup_exc:
+                    # If it's NOT a duplicate-key error, re-raise so the outer handler catches it.
+                    if "1062" not in str(_dup_exc) and "Duplicate entry" not in str(_dup_exc):
+                        raise
+                    # Duplicate key on telegram_chat_id (or phone) — recover by fetching existing row.
+                    _recovered = False
+                    admin_col_exists = "admin_id" in patient_columns
+                    select_cols = "patient_id, admin_id" if admin_col_exists else "patient_id"
+                    if chat_column and chat_user_id_value:
+                        # Prefer same-admin chat-id match.
+                        cur.execute(
+                            f"""
+                            SELECT {select_cols} FROM patients
+                            WHERE admin_id = %s
+                              AND TRIM(COALESCE({chat_column}, '')) = %s
+                            ORDER BY patient_id DESC LIMIT 1
+                            """,
+                            (actual_admin_id, chat_user_id_value),
+                        )
+                        _dup_row = cur.fetchone()
+                        if _dup_row:
+                            patient_id = int(_dup_row["patient_id"])
+                            _recovered = True
+
+                    if not _recovered and chat_column and chat_user_id_value:
+                        # Detect conflicting cross-admin ownership instead of silently linking.
+                        cur.execute(
+                            f"""
+                            SELECT {select_cols} FROM patients
+                            WHERE TRIM(COALESCE({chat_column}, '')) = %s
+                            ORDER BY patient_id DESC LIMIT 1
+                            """,
+                            (chat_user_id_value,),
+                        )
+                        _dup_row = cur.fetchone()
+                        if _dup_row:
+                            if admin_col_exists:
+                                row_admin_id = _dup_row.get("admin_id")
+                                if row_admin_id is not None and int(row_admin_id) != int(actual_admin_id):
+                                    conn.rollback()
+                                    return BookingResult(
+                                        False,
+                                        "Telegram chat id is linked to a different admin profile.",
+                                    )
+                            patient_id = int(_dup_row["patient_id"])
+                            _recovered = True
+                    if not _recovered:
+                        # Try fallback by phone
+                        _norm = self._normalize_phone(str(context.phone_number or ""))
+                        if _norm:
+                            cur.execute(
+                                """
+                                SELECT patient_id FROM patients
+                                WHERE admin_id = %s
+                                  AND REPLACE(REPLACE(REPLACE(COALESCE(phone,''),' ',''),'-',''),'+','') LIKE %s
+                                ORDER BY patient_id DESC LIMIT 1
+                                """,
+                                (actual_admin_id, f"%{_norm[-10:]}"),
+                            )
+                            _dup_row = cur.fetchone()
+                            if _dup_row:
+                                patient_id = int(_dup_row["patient_id"])
+                                _recovered = True
+                    if not _recovered:
+                        raise
+                    _update_patient_from_values(int(patient_id))
 
             appointment_table = self._appointment_table()
+            has_notify_chat_col = self._column_exists(appointment_table, "notify_telegram_chat_id")
+
             if self._use_appointment_mode():
                 resolved_doctor_id = int(doctor_id) if doctor_id is not None else None
                 if resolved_doctor_id is None:
@@ -2135,41 +2410,47 @@ class BookingRepository:
                     conn.rollback()
                     return BookingResult(False, "Selected slot is not available.")
 
-                if has_notify_chat_col:
-                    cur.execute(
-                        f"""
-                        INSERT INTO {appointment_table}
-                        (patient_id, doctor_id, clinic_id, admin_id, status, appointment_date, start_time, end_time, notify_telegram_chat_id)
-                        VALUES (%s, %s, %s, %s, 'BOOKED', %s, %s, %s, %s)
-                        """,
-                        (
-                            patient_id,
-                            resolved_doctor_id,
-                            int(context.clinic_id),
-                            actual_admin_id,
-                            context.appointment_date,
-                            requested_start,
-                            requested_end,
-                            chat_user_id_value or None,
-                        ),
-                    )
-                else:
-                    cur.execute(
-                        f"""
-                        INSERT INTO {appointment_table}
-                        (patient_id, doctor_id, clinic_id, admin_id, status, appointment_date, start_time, end_time)
-                        VALUES (%s, %s, %s, %s, 'BOOKED', %s, %s, %s)
-                        """,
-                        (
-                            patient_id,
-                            resolved_doctor_id,
-                            int(context.clinic_id),
-                            actual_admin_id,
-                            context.appointment_date,
-                            requested_start,
-                            requested_end,
-                        ),
-                    )
+                try:
+                    if has_notify_chat_col:
+                        cur.execute(
+                            f"""
+                            INSERT INTO {appointment_table}
+                            (patient_id, doctor_id, clinic_id, admin_id, status, appointment_date, start_time, end_time, notify_telegram_chat_id)
+                            VALUES (%s, %s, %s, %s, 'BOOKED', %s, %s, %s, %s)
+                            """,
+                            (
+                                patient_id,
+                                resolved_doctor_id,
+                                int(context.clinic_id),
+                                actual_admin_id,
+                                context.appointment_date,
+                                requested_start,
+                                requested_end,
+                                chat_user_id_value or None,
+                            ),
+                        )
+                    else:
+                        cur.execute(
+                            f"""
+                            INSERT INTO {appointment_table}
+                            (patient_id, doctor_id, clinic_id, admin_id, status, appointment_date, start_time, end_time)
+                            VALUES (%s, %s, %s, %s, 'BOOKED', %s, %s, %s)
+                            """,
+                            (
+                                patient_id,
+                                resolved_doctor_id,
+                                int(context.clinic_id),
+                                actual_admin_id,
+                                context.appointment_date,
+                                requested_start,
+                                requested_end,
+                            ),
+                        )
+                except Exception as _insert_exc:
+                    if "1062" not in str(_insert_exc) and "Duplicate entry" not in str(_insert_exc):
+                        raise
+                    conn.rollback()
+                    return BookingResult(False, "Selected slot is not available.")
                 appointment_id = int(cur.lastrowid)
                 if "booking_id" in patient_columns and requested_slot_number is not None:
                     cur.execute(
@@ -2387,15 +2668,7 @@ class BookingRepository:
         try:
             horizon_minutes = max(1, int(lookahead_minutes))
             appointment_table = self._appointment_table()
-            cur.execute(
-                """
-                SELECT COLUMN_NAME
-                FROM INFORMATION_SCHEMA.COLUMNS
-                WHERE TABLE_SCHEMA = DATABASE()
-                  AND TABLE_NAME = 'doctors'
-                """
-            )
-            doctor_columns = {str(row.get("COLUMN_NAME") or "").lower() for row in cur.fetchall()}
+            doctor_columns = self._table_columns("doctors")
             whatsapp_col = "whatsapp_number" if "whatsapp_number" in doctor_columns else None
             telegram_col = None
             for candidate in ("telegram_chat_id", "telegram_user_id", "telegram_id", "chat_id", "user_id"):
@@ -2404,6 +2677,7 @@ class BookingRepository:
                     break
             whatsapp_select = f"NULLIF(d.{whatsapp_col}, '')" if whatsapp_col else "NULL"
             telegram_select = f"NULLIF(d.{telegram_col}, '')" if telegram_col else "NULL"
+            ist_now_sql = "CONVERT_TZ(UTC_TIMESTAMP(), '+00:00', '+05:30')"
             if self._use_appointment_mode():
                 params: list[object] = [horizon_minutes]
                 admin_sql = ""
@@ -2414,6 +2688,7 @@ class BookingRepository:
                     f"""
                     SELECT
                         a.appointment_id,
+                        a.doctor_id,
                         {whatsapp_select} AS doctor_whatsapp,
                         {telegram_select} AS doctor_telegram_chat_id,
                         COALESCE(p.full_name, '') AS patient_name,
@@ -2443,8 +2718,8 @@ class BookingRepository:
                      AND dcs.effective_from <= a.appointment_date
                      AND dcs.effective_to >= a.appointment_date
                     WHERE a.status IN ('BOOKED', 'PENDING', 'CONFIRMED')
-                      AND TIMESTAMP(a.appointment_date, a.start_time) >= DATE_ADD(UTC_TIMESTAMP(), INTERVAL 330 MINUTE)
-                      AND TIMESTAMP(a.appointment_date, a.start_time) <= DATE_ADD(DATE_ADD(UTC_TIMESTAMP(), INTERVAL 330 MINUTE), INTERVAL %s MINUTE)
+                      AND TIMESTAMP(a.appointment_date, a.start_time) >= {ist_now_sql}
+                      AND TIMESTAMP(a.appointment_date, a.start_time) <= DATE_ADD({ist_now_sql}, INTERVAL %s MINUTE)
                       {admin_sql}
                     ORDER BY doctor_whatsapp, a.appointment_date, a.start_time, a.appointment_id
                     """,
@@ -2457,12 +2732,16 @@ class BookingRepository:
                     doctor_telegram_chat_id = str(row.get("doctor_telegram_chat_id") or "").strip()
                     if not doctor_whatsapp and not doctor_telegram_chat_id:
                         continue
+                    doctor_id = int(row.get("doctor_id") or 0)
+                    if doctor_id <= 0:
+                        continue
                     schedule_id = int(row.get("schedule_id") or 0)
                     if schedule_id <= 0:
                         continue
                     results.append(
                         DoctorReminder(
                             appointment_id=int(row["appointment_id"]),
+                            doctor_id=doctor_id,
                             doctor_whatsapp=doctor_whatsapp,
                             doctor_telegram_chat_id=doctor_telegram_chat_id,
                             patient_name=str(row.get("patient_name") or ""),
@@ -2488,6 +2767,7 @@ class BookingRepository:
                 f"""
                 SELECT
                     a.appointment_id,
+                    a.doctor_id,
                     {whatsapp_select} AS doctor_whatsapp,
                     {telegram_select} AS doctor_telegram_chat_id,
                     COALESCE(p.full_name, '') AS patient_name,
@@ -2509,8 +2789,8 @@ class BookingRepository:
                 WHERE a.status IN ('BOOKED', 'PENDING', 'CONFIRMED')
                   AND s.slot_status = 'BOOKED'
                   AND s.schedule_id IS NOT NULL
-                  AND TIMESTAMP(s.slot_date, s.slot_time) >= DATE_ADD(UTC_TIMESTAMP(), INTERVAL 330 MINUTE)
-                  AND TIMESTAMP(s.slot_date, s.slot_time) <= DATE_ADD(DATE_ADD(UTC_TIMESTAMP(), INTERVAL 330 MINUTE), INTERVAL %s MINUTE)
+                  AND TIMESTAMP(s.slot_date, s.slot_time) >= {ist_now_sql}
+                  AND TIMESTAMP(s.slot_date, s.slot_time) <= DATE_ADD({ist_now_sql}, INTERVAL %s MINUTE)
                   {admin_sql}
                 ORDER BY doctor_whatsapp, s.slot_date, s.schedule_id, s.slot_time, a.appointment_id
                 """,
@@ -2523,12 +2803,16 @@ class BookingRepository:
                 doctor_telegram_chat_id = str(row.get("doctor_telegram_chat_id") or "").strip()
                 if not doctor_whatsapp and not doctor_telegram_chat_id:
                     continue
+                doctor_id = int(row.get("doctor_id") or 0)
+                if doctor_id <= 0:
+                    continue
                 schedule_id = int(row.get("schedule_id") or 0)
                 if schedule_id <= 0:
                     continue
                 results.append(
                     DoctorReminder(
                         appointment_id=int(row["appointment_id"]),
+                        doctor_id=doctor_id,
                         doctor_whatsapp=doctor_whatsapp,
                         doctor_telegram_chat_id=doctor_telegram_chat_id,
                         patient_name=str(row.get("patient_name") or ""),
@@ -2596,7 +2880,7 @@ class BookingRepository:
                     (doctor_id, schedule_id, slot_date, schedule_start_time,
                      schedule_end_time, channel, destination, lead_minutes,
                      status, dedup_key, updated_at)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, 'PENDING', %s, NOW())
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, 'PENDING', %s, CONVERT_TZ(UTC_TIMESTAMP(), '+00:00', '+05:30'))
                 """,
                 (
                     doctor_id, schedule_id, slot_date,
@@ -2618,7 +2902,8 @@ class BookingRepository:
         try:
             cur.execute(
                 "UPDATE doctor_remainder_queue "
-                "SET status='SENT', sent_at=NOW(), updated_at=NOW() "
+                "SET status='SENT', sent_at=CONVERT_TZ(UTC_TIMESTAMP(), '+00:00', '+05:30'), "
+                "updated_at=CONVERT_TZ(UTC_TIMESTAMP(), '+00:00', '+05:30') "
                 "WHERE queue_id=%s",
                 (queue_id,),
             )
@@ -2635,7 +2920,7 @@ class BookingRepository:
             cur.execute(
                 "UPDATE doctor_remainder_queue "
                 "SET status='FAILED', last_error=%s, "
-                "attempt_count=attempt_count+1, updated_at=NOW() "
+                "attempt_count=attempt_count+1, updated_at=CONVERT_TZ(UTC_TIMESTAMP(), '+00:00', '+05:30') "
                 "WHERE queue_id=%s",
                 (str(error)[:250], queue_id),
             )

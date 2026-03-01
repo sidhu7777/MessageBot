@@ -17,11 +17,8 @@ class LLMClient:
         self.provider = provider.lower()
         self.base_url = base_url.rstrip("/")
         self.timeout_seconds = timeout_seconds
-        self._disabled = False
 
     def generate(self, system_prompt: str, user_prompt: str) -> str:
-        if self._disabled:
-            raise RuntimeError("LLM client is disabled after previous failure")
         if self.provider != "ollama":
             raise RuntimeError(f"Unsupported LLM provider: {self.provider}")
 
@@ -46,7 +43,6 @@ class LLMClient:
             with urllib.request.urlopen(request, timeout=self.timeout_seconds) as response:
                 raw = response.read().decode("utf-8")
         except urllib.error.URLError as exc:
-            self._disabled = True
             raise RuntimeError(f"Failed to call Ollama: {exc}") from exc
 
         data = json.loads(raw)
@@ -54,4 +50,3 @@ class LLMClient:
         if not content:
             raise RuntimeError("LLM returned empty content")
         return content
-
