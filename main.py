@@ -25,6 +25,7 @@ from src.runtime import PersistentMessageSidStore, TurnQueueProcessor, TurnTask
 from src.runtime.user_turn_buffer import UserTurnBuffer
 from src.runtime.user_processing_guard import UserProcessingGuard, build_redis_client_from_env
 from src.session_store import SessionManager
+from src.chat_logger import log_event, extract_chat_id
 
 
 load_dotenv()
@@ -493,6 +494,10 @@ async def telegram_webhook(request: Request):
     if not telegram_user_id:
         return PlainTextResponse("", status_code=200)
     from_number = f"telegram:{telegram_user_id}"
+    try:
+        log_event(telegram_user_id, "WEBHOOK_ARRIVED", sid=inbound_sid, text=text[:100])
+    except Exception:
+        pass
 
     LOGGER.info(
         "Incoming Telegram message sid=%s from=%s body=%s",
@@ -519,6 +524,10 @@ async def telegram_webhook(request: Request):
     acquired = False
     try:
         acquired = _user_processing_guard.acquire(from_number)
+        try:
+            log_event(telegram_user_id, "LOCK_ACQUIRED" if acquired else "LOCK_BUSY")
+        except Exception:
+            pass
         if not acquired:
             buffered = _user_turn_buffer.push(
                 TurnTask(
@@ -563,6 +572,10 @@ async def telegram_webhook(request: Request):
             return PlainTextResponse("", status_code=200)
 
         elapsed_ms = int((time.perf_counter() - started) * 1000)
+        try:
+            log_event(telegram_user_id, "TURN_QUEUED", sid=inbound_sid, state=pre_state, backlog=turn_processor.backlog_size(), ack_ms=elapsed_ms)
+        except Exception:
+            pass
         LOGGER.info(
             "Queued inbound Telegram sid=%s from=%s state=%s backlog=%d ack_ms=%d",
             inbound_sid or "-",
@@ -630,16 +643,36 @@ async def twilio_status_callback(request: Request):
 
 
 def _process_turn(from_number: str, body: str) -> Tuple[str, str, object]:
+    _cid_log = extract_chat_id(from_number)
     user_lock = _get_user_lock(from_number)
     with user_lock:
+        try:
+            log_event(_cid_log, "TURN_START", text=body[:80])
+        except Exception:
+            pass
+        _t_turn = time.perf_counter()
         fsm = session_manager.get_or_create(from_number)
+        _pre_state = fsm.state
         identity = _get_user_bot_identity(from_number)
         if identity:
             fsm.bot_whatsapp_number = identity
+        _t_fsm = time.perf_counter()
         with _ollama_semaphore:  # serialize Ollama calls — only 1 inference at a time
             reply = fsm.handle(body)
+        _fsm_ms = int((time.perf_counter() - _t_fsm) * 1000)
+        try:
+            log_event(_cid_log, "FSM_HANDLED", pre_state=_pre_state, post_state=fsm.state, fsm_ms=_fsm_ms, reply=reply[:80])
+        except Exception:
+            pass
         reply = reply[: settings.max_message_chars]
+        _t_save = time.perf_counter()
         session_manager.save(from_number, fsm)
+        _save_ms = int((time.perf_counter() - _t_save) * 1000)
+        _total_ms = int((time.perf_counter() - _t_turn) * 1000)
+        try:
+            log_event(_cid_log, "TURN_END", total_ms=_total_ms, save_ms=_save_ms, post_state=fsm.state)
+        except Exception:
+            pass
         return reply, fsm.state, fsm
 
 
@@ -880,7 +913,13 @@ def _send_whatsapp_response(to_number: str, reply_text: str, fsm_state: str, fsm
 
 def _send_plain_channel_message(to_number: str, body: str, inbound_sid: str = "") -> str:
     if (to_number or "").strip().lower().startswith("telegram:"):
+        _t_send = time.perf_counter()
         _send_telegram_message(to_number=to_number, body=body, inbound_sid=inbound_sid)
+        _send_ms = int((time.perf_counter() - _t_send) * 1000)
+        try:
+            log_event(extract_chat_id(to_number), "BOT_REPLY_SENT", send_ms=_send_ms, reply=body[:80])
+        except Exception:
+            pass
         return "telegram"
     sid = _send_with_retries(
         {

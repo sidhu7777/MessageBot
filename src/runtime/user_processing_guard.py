@@ -116,8 +116,8 @@ def build_redis_client_from_env() -> Optional[object]:
     port = int(os.getenv("REDIS_PORT", "6379"))
     db = int(os.getenv("REDIS_DB", "0"))
     password = os.getenv("REDIS_PASSWORD", "") or None
-    socket_timeout = max(0.01, float(os.getenv("REDIS_SOCKET_TIMEOUT_MS", "80")) / 1000.0)
-    connect_timeout = max(0.01, float(os.getenv("REDIS_CONNECT_TIMEOUT_MS", "80")) / 1000.0)
+    socket_timeout = max(0.01, float(os.getenv("REDIS_SOCKET_TIMEOUT_MS", "500")) / 1000.0)
+    connect_timeout = max(0.01, float(os.getenv("REDIS_CONNECT_TIMEOUT_MS", "500")) / 1000.0)
 
     try:
         client = redis.Redis(

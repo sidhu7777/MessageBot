@@ -2832,6 +2832,69 @@ class BookingRepository:
             cur.close()
             conn.close()
 
+    def get_extra_doctor_contacts(self, doctor_ids: list[int]) -> dict[int, list[dict]]:
+        """Return additional WhatsApp numbers and Telegram chat IDs from
+        doctor_whatsapp_numbers for the given doctor IDs.
+
+        Returns::
+            {doctor_id: [{"whatsapp": "raw_number", "telegram": "raw_chat_id"}, ...]}
+
+        Returns empty dict if the table does not exist or doctor_ids is empty.
+        Duplicate whatsapp+telegram pairs for the same doctor are collapsed.
+        """
+        if not doctor_ids:
+            return {}
+        # Guard: table may not exist in all deployments
+        try:
+            table_cols = self._table_columns("doctor_whatsapp_numbers")
+        except Exception:
+            return {}
+        if not table_cols:
+            return {}
+
+        whatsapp_col = "whatsapp_number" if "whatsapp_number" in table_cols else None
+        chat_id_col = "chat_id" if "chat_id" in table_cols else None
+        if not whatsapp_col and not chat_id_col:
+            return {}
+
+        wa_select = f"NULLIF({whatsapp_col}, '')" if whatsapp_col else "NULL"
+        tg_select = f"NULLIF({chat_id_col}, '')" if chat_id_col else "NULL"
+
+        # Build IN (...) safely with one placeholder per id
+        placeholders = ", ".join(["%s"] * len(doctor_ids))
+        conn = self._connect()
+        cur = conn.cursor(dictionary=True)
+        try:
+            cur.execute(
+                f"""
+                SELECT doctor_id,
+                       {wa_select}  AS whatsapp_number,
+                       {tg_select}  AS telegram_chat_id
+                FROM doctor_whatsapp_numbers
+                WHERE doctor_id IN ({placeholders})
+                """,
+                tuple(int(d) for d in doctor_ids),
+            )
+            result: dict[int, list[dict]] = {}
+            seen: dict[int, set[tuple]] = {}   # dedup per doctor
+            for row in cur.fetchall():
+                did = int(row.get("doctor_id") or 0)
+                if did <= 0:
+                    continue
+                wa = str(row.get("whatsapp_number") or "").strip()
+                tg = str(row.get("telegram_chat_id") or "").strip()
+                if not wa and not tg:
+                    continue
+                key = (wa, tg)
+                if key in seen.get(did, set()):
+                    continue
+                seen.setdefault(did, set()).add(key)
+                result.setdefault(did, []).append({"whatsapp": wa, "telegram": tg})
+            return result
+        finally:
+            cur.close()
+            conn.close()
+
     # ── doctor_remainder_queue helpers ────────────────────────────────────────
 
     def is_reminder_sent(self, *, dedup_key: str) -> bool:

@@ -175,6 +175,17 @@ class AutomationScheduler:
             lookahead_minutes=max(240, max_lead + 120),
         )
 
+        # ── Bulk-fetch extra contacts from doctor_whatsapp_numbers ────────────
+        _all_doctor_ids = list({r.doctor_id for r in due_rows if r.doctor_id})
+        _extra_contacts: dict[int, list[dict]] = {}
+        if _all_doctor_ids:
+            try:
+                _extra_contacts = self._booking_repository.get_extra_doctor_contacts(
+                    _all_doctor_ids
+                )
+            except Exception as exc:
+                LOGGER.warning("get_extra_doctor_contacts failed: %s", exc)
+
         sent = 0
         skipped = 0
         now = datetime.now(IST)
@@ -197,6 +208,14 @@ class AutomationScheduler:
                     destinations.append(f"telegram:{tg_chat_id}")
                 if self._source_whatsapp_number and wa_number and wa_number == self._source_whatsapp_number:
                     destinations = [d for d in destinations if d != wa_number]
+                # ── Merge extra contacts from doctor_whatsapp_numbers ─────────
+                for _extra in _extra_contacts.get(row.doctor_id, []):
+                    _ewa = self._normalize_whatsapp_number(str(_extra.get("whatsapp") or ""))
+                    _etg = self._normalize_telegram_chat_id(str(_extra.get("telegram") or ""))
+                    if _ewa and _ewa not in destinations and _ewa != self._source_whatsapp_number:
+                        destinations.append(_ewa)
+                    if _etg and f"telegram:{_etg}" not in destinations:
+                        destinations.append(f"telegram:{_etg}")
                 if not destinations:
                     skipped += 1
                     continue

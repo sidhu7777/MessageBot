@@ -1,7 +1,9 @@
 import json
+import time
 from datetime import timedelta
 from typing import Optional
 
+from src.chat_logger import extract_chat_id, log_event
 from src.db_store import BookingRepository
 from src.fsm.appointment_fsm import AppointmentFSM
 from src.llm.client import LLMClient
@@ -66,15 +68,37 @@ class SessionManager:
             chat_phone_number=user_id,
             bot_whatsapp_number=self.bot_whatsapp_number,
         )
+        _cid = extract_chat_id(user_id)
+        _t0 = time.perf_counter()
         redis_snapshot = self._load_redis_snapshot(user_id=user_id)
+        _redis_ms = int((time.perf_counter() - _t0) * 1000)
         if redis_snapshot:
+            try:
+                log_event(_cid, "SESSION_REDIS_HIT", load_ms=_redis_ms)
+            except Exception:
+                pass
             if self._apply_snapshot_to_fsm(fsm=fsm, snapshot=redis_snapshot):
                 return fsm
+        else:
+            try:
+                log_event(_cid, "SESSION_REDIS_MISS", load_ms=_redis_ms)
+            except Exception:
+                pass
         if not self.conversation_repository:
             return fsm
+        _t1 = time.perf_counter()
         snapshot = self.conversation_repository.load_session(user_id=user_id, ttl_minutes=int(self.ttl.total_seconds() // 60))
+        _db_ms = int((time.perf_counter() - _t1) * 1000)
         if not snapshot:
+            try:
+                log_event(_cid, "SESSION_DB_MISS", load_ms=_db_ms)
+            except Exception:
+                pass
             return fsm
+        try:
+            log_event(_cid, "SESSION_DB_HIT", load_ms=_db_ms)
+        except Exception:
+            pass
         try:
             payload = {
                 "state": snapshot.state or "INIT",
@@ -109,8 +133,11 @@ class SessionManager:
             "known_patient_name": fsm.known_patient_name,
             "booking_for_self": fsm.booking_for_self,
             "selected_time_period": fsm.selected_time_period,
+            "time_options_cache": list(fsm.time_options_cache or []),
+            "time_hour_options_cache": list(fsm.time_hour_options_cache or []),
             "time_slot_options_cache": list(fsm.time_slot_options_cache or []),
             "time_window_labels_cache": list(fsm.time_window_labels_cache or []),
+            "availability_date_options_cache": list(fsm.availability_date_options_cache or []),
             # Reschedule-flow fields — must survive every turn so ASK_TIME period
             # selection (turn N) → slot selection (turn N+1) still knows it's a
             # reschedule and routes to CONFIRM_RESCHEDULE, not CONFIRM.
@@ -164,7 +191,13 @@ class SessionManager:
         }
         payload.update(self._fsm_extra_dict(fsm))
         try:
+            _t_save = time.perf_counter()
             self.redis_client.set(self._redis_key(user_id), json.dumps(payload, ensure_ascii=False), ex=self._redis_ttl_seconds)
+            _save_ms = int((time.perf_counter() - _t_save) * 1000)
+            try:
+                log_event(extract_chat_id(user_id), "SESSION_REDIS_SAVED", save_ms=_save_ms)
+            except Exception:
+                pass
         except Exception:
             return
 
@@ -192,10 +225,16 @@ class SessionManager:
             bfs = snapshot.get("booking_for_self")
             fsm.booking_for_self = bool(bfs) if bfs is not None else None
             fsm.selected_time_period = snapshot.get("selected_time_period") or None
+            raw_time_opts = snapshot.get("time_options_cache")
+            fsm.time_options_cache = list(raw_time_opts) if isinstance(raw_time_opts, list) else []
+            raw_time_hour_opts = snapshot.get("time_hour_options_cache")
+            fsm.time_hour_options_cache = list(raw_time_hour_opts) if isinstance(raw_time_hour_opts, list) else []
             raw_slots = snapshot.get("time_slot_options_cache")
             fsm.time_slot_options_cache = list(raw_slots) if isinstance(raw_slots, list) else []
             raw_labels = snapshot.get("time_window_labels_cache")
             fsm.time_window_labels_cache = list(raw_labels) if isinstance(raw_labels, list) else []
+            raw_avail_dates = snapshot.get("availability_date_options_cache")
+            fsm.availability_date_options_cache = list(raw_avail_dates) if isinstance(raw_avail_dates, list) else []
             # Reschedule-flow fields
             fsm.in_reschedule_flow = bool(snapshot.get("in_reschedule_flow"))
             fsm.pending_existing_action = snapshot.get("pending_existing_action") or None

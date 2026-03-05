@@ -356,6 +356,41 @@ class SchedulingRepository:
         if not candidate_times:
             return []
 
+        # ── Doctor leave check ────────────────────────────────────────────────
+        # doctor_leaves rows: start_time/end_time are timedelta (MySQL TIME type).
+        # NULL both → full-day leave.  Both set → partial-day leave window.
+        _lconn = self._connect()
+        _lcur = _lconn.cursor(dictionary=True)
+        try:
+            _lcur.execute(
+                "SELECT start_time, end_time FROM doctor_leaves"
+                " WHERE doctor_id = %s AND leave_date = %s",
+                (int(doctor_id), slot_date),
+            )
+            _leave_rows = _lcur.fetchall()
+        finally:
+            _lcur.close()
+            _lconn.close()
+        if _leave_rows:
+            # Any row with NULL start_time → full-day leave → no slots at all
+            if any(r["start_time"] is None for r in _leave_rows):
+                return []
+            # Partial-day: exclude slots that fall inside a leave window
+            _leave_windows = [
+                (r["start_time"], r["end_time"])
+                for r in _leave_rows
+                if r["start_time"] is not None and r["end_time"] is not None
+            ]
+            if _leave_windows:
+                def _in_leave_window(t: str) -> bool:
+                    h, m = int(t[:2]), int(t[3:5])
+                    td = timedelta(hours=h, minutes=m)
+                    return any(ws <= td < we for ws, we in _leave_windows)
+                candidate_times = [t for t in candidate_times if not _in_leave_window(t)]
+            if not candidate_times:
+                return []
+        # ─────────────────────────────────────────────────────────────────────
+
         conn = self._connect()
         cur = conn.cursor(dictionary=True)
         try:
@@ -966,6 +1001,17 @@ class SchedulingRepository:
             conn.close()
 
     def doctor_accept_days(self, doctor_id: int, admin_id: Optional[int] = None) -> int:
+        # Fast path: reuse availability snapshot cached in Redis.
+        # Keeps ASK_AVAILABILITY_DATE light and avoids a DB round-trip per turn.
+        cached = self._load_cached_availability(doctor_id=doctor_id, admin_id=admin_id)
+        if isinstance(cached, dict):
+            raw_cached = cached.get("accept_days")
+            try:
+                if raw_cached is not None:
+                    return max(0, int(raw_cached))
+            except Exception:
+                pass
+
         conn = self._connect()
         cur = conn.cursor(dictionary=True)
         try:

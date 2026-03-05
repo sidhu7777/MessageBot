@@ -10,3 +10,14 @@ Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:8000/webhook" -Body @{
   Body = "I need to book appointment"
   MessageSid = "SMLOCAL2"
 }
+
+
+
+redis-cli
+
+KEYS *
+
+KEYS msgbot:avail:*
+
+
+ GET msgbot:sess:telegram:8299824956

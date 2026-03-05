@@ -24,6 +24,7 @@ from src.nlu.extractors import (
     extract_time,
     is_booking_intent,
     is_end_intent,
+    is_greeting_intent,
     is_no,
     is_restart_intent,
     is_yes,
@@ -103,6 +104,7 @@ class AppointmentFSM:
     admin_id: Optional[int] = None
     clinic_options_cache: list[dict] = field(default_factory=list)
     date_options_cache: list[str] = field(default_factory=list)
+    availability_date_options_cache: list[str] = field(default_factory=list)
     time_options_cache: list[str] = field(default_factory=list)
     time_hour_options_cache: list[str] = field(default_factory=list)
     time_slot_options_cache: list[str] = field(default_factory=list)
@@ -132,7 +134,7 @@ class AppointmentFSM:
         if not text:
             return self._respond(self._msg("empty_input"))
 
-        if self._is_abusive_message(text, lower, allow_llm=(self.state == "INIT")):
+        if self._is_abusive_message(text, lower, allow_llm=(self.state == "INIT" and not self._is_init_safe_input(lower))):
             self.context.abusive_warning_count = int(self.context.abusive_warning_count or 0) + 1
             if self.context.abusive_warning_count >= 2:
                 self.context.abuse_blocked = True
@@ -184,8 +186,11 @@ class AppointmentFSM:
                 )
             if lower.strip() == "2":
                 self.init_unclear_count = 0
-                self.state = "ASK_AVAILABILITY_DETAILS"
-                return self._respond(self._msg("availability_intro"), allow_polish=False)
+                self.state = "ASK_AVAILABILITY_DATE"
+                self.availability_date_options_cache = []
+                date_opts = self._availability_date_options()
+                self.availability_date_options_cache = date_opts
+                return self._respond(self._availability_date_options_prompt(date_opts), allow_polish=False)
 
             if self.init_unclear_count >= 3:
                 if is_yes(lower) or is_booking_intent(lower):
@@ -222,22 +227,11 @@ class AppointmentFSM:
                 )
             if routed == "CHECK_AVAILABILITY":
                 self.init_unclear_count = 0
-                self.state = "ASK_AVAILABILITY_DETAILS"
-                doctor_name = extract_doctor_name(text)
-                if doctor_name:
-                    self.context.availability_doctor = doctor_name
-                availability_date = extract_date(text)
-                if not availability_date:
-                    availability_date = llm_extract(
-                        llm_client=self.llm_client,
-                        enable_llm_polish=self.enable_llm_polish,
-                        field_name="date",
-                        text=text,
-                    )
-                if availability_date:
-                    self.context.availability_date = availability_date
-                    return self._respond(self._availability_reply(availability_date), allow_polish=False)
-                return self._respond(self._msg("availability_intro"), allow_polish=False)
+                self.state = "ASK_AVAILABILITY_DATE"
+                self.availability_date_options_cache = []
+                date_opts = self._availability_date_options()
+                self.availability_date_options_cache = date_opts
+                return self._respond(self._availability_date_options_prompt(date_opts), allow_polish=False)
             if routed == "GREETING":
                 self.init_unclear_count = 0
                 existing_reply = self._existing_booking_entry_response()
@@ -255,7 +249,12 @@ class AppointmentFSM:
                 self._reset_all(cancelled=False)
                 self.state = "ASK_NAME"
                 return self._respond(self._msg("ask_name"))
-            return self._respond(self._msg("cancelled_hint"))
+            # Greeting or any other input — treat as fresh session: welcome + menu.
+            self._reset_all(cancelled=False)
+            existing_reply = self._existing_booking_entry_response()
+            if existing_reply:
+                return self._respond(existing_reply, allow_polish=False)
+            return self._respond(self._welcome_greeting() + "\n" + self._msg("clarify_intent"), allow_polish=False)
 
         if self.state == "ASK_BOOKING_FOR":
             choice = lower.strip()
@@ -520,8 +519,25 @@ class AppointmentFSM:
                         )
             return self._respond(self._msg("existing_booking_pick_invalid"))
 
+        if self.state == "ASK_AVAILABILITY_DATE":
+            if self._is_go_back(lower):
+                return self._respond(self._handle_go_back())
+            if not self.availability_date_options_cache:
+                self.availability_date_options_cache = self._availability_date_options()
+            date_opts = self.availability_date_options_cache
+            try:
+                choice = int(lower.strip())
+            except (ValueError, AttributeError):
+                choice = None
+            if choice is not None and 1 <= choice <= len(date_opts):
+                selected_date = date_opts[choice - 1]
+                self.context.availability_date = selected_date
+                self.state = "ASK_AVAILABILITY_DETAILS"
+                return self._respond(self._availability_reply(selected_date))
+            return self._respond(self._availability_date_options_prompt(date_opts))
+
         if self.state == "ASK_AVAILABILITY_DETAILS":
-            if is_booking_intent(lower) or is_restart_intent(lower):
+            if is_booking_intent(lower) or is_restart_intent(lower) or lower.strip() == "1":
                 self.context = AppointmentContext()
                 existing_reply = self._existing_booking_entry_response()
                 if existing_reply:
@@ -936,14 +952,15 @@ class AppointmentFSM:
             existing_reply = self._existing_booking_entry_response()
             if existing_reply:
                 return self._respond(existing_reply)
+            # No active booking at this point — _existing_booking_entry_response already
+            # returned None, so no need to call it again below.
             if is_booking_intent(lower) or is_restart_intent(lower):
                 self._reset_all(cancelled=False)
-                existing_reply = self._existing_booking_entry_response()
-                if existing_reply:
-                    return self._respond(existing_reply)
                 self.state = "ASK_BOOKING_FOR"
                 return self._respond(self._with_back(self._msg("ask_booking_for"), option_count=2))
-            return self._respond(self._msg("completed_hint"))
+            # Greeting or any other input — treat as fresh session: welcome + menu.
+            self._reset_all(cancelled=False)
+            return self._respond(self._welcome_greeting() + "\n" + self._msg("clarify_intent"), allow_polish=False)
 
         self._reset_all(cancelled=False)
         self.state = "ASK_NAME"
@@ -956,6 +973,7 @@ class AppointmentFSM:
             "ASK_MAX_ACTIVE_BOOKINGS_ACTION",
             "ASK_EXISTING_BOOKING_PICK",
             "ASK_APPOINTMENT_MODE",
+            "ASK_AVAILABILITY_DATE",
             "ASK_CLINIC",
             "ASK_DATE",
             "ASK_TIME",
@@ -1119,7 +1137,7 @@ class AppointmentFSM:
     def _handle_go_back(self) -> Optional[str]:
         if self.state == "ASK_BOOKING_FOR":
             self.state = "INIT"
-            return self._msg("no_intent")
+            return self._welcome_greeting() + "\n" + self._msg("clarify_intent")
         if self.state == "ASK_NAME":
             self.state = "ASK_BOOKING_FOR"
             return self._with_back(self._msg("ask_booking_for"), option_count=2)
@@ -1144,11 +1162,27 @@ class AppointmentFSM:
             if not dates:
                 return self._with_back(self._msg("no_date_available", clinic_name=self.context.clinic_name or "this clinic"))
             return self._date_options_prompt(dates)
+        if self.state == "ASK_AVAILABILITY_DATE":
+            self.state = "INIT"
+            self.availability_date_options_cache = []
+            return self._welcome_greeting() + "\n" + self._msg("clarify_intent")
+        if self.state == "ASK_AVAILABILITY_DETAILS":
+            self.state = "ASK_AVAILABILITY_DATE"
+            self.context.availability_date = None
+            if not self.availability_date_options_cache:
+                self.availability_date_options_cache = self._availability_date_options()
+            return self._availability_date_options_prompt(self.availability_date_options_cache)
         if self.state == "ASK_CHANGE_FIELD":
             self.state = "CONFIRM"
             return self._msg("confirm_summary", **self._display_context())
         if self.state == "CONFIRM":
             self.state = "ASK_TIME"
+            # time_options_cache / time_hour_options_cache may be empty if the session
+            # was restored from Redis without those fields (e.g. older snapshot) or if
+            # they were never populated.  Re-load from DB so _initial_time_prompt() has
+            # data to work with; only do the DB call when the cache is actually empty.
+            if not self.time_options_cache:
+                self._load_time_options(limit=60)
             return self._with_back(self._initial_time_prompt())
         return None
 
@@ -1182,6 +1216,19 @@ class AppointmentFSM:
                 patient_name=self.known_patient_name,
             )
         return self._msg("welcome_new_patient", doctor_name=doctor_name)
+
+    def _is_init_safe_input(self, lower: str) -> bool:
+        """Return True for INIT-state inputs that are obviously safe and can skip LLM abuse detection.
+        Only exact single-digit menu options and pure short greetings qualify.
+        Multi-word free-text like 'hello fucker' is NOT safe and falls through to LLM."""
+        stripped = lower.strip()
+        # Direct menu digit options — patient pressed 1, 2, or 0
+        if stripped in {"0", "1", "2"}:
+            return True
+        # Pure greeting — one or two words only ("hi", "hello", "hello there")
+        if is_greeting_intent(stripped) and len(stripped.split()) <= 2:
+            return True
+        return False
 
     def _is_abusive_message(self, text: str, lower: str, allow_llm: bool = False) -> bool:
         normalized_latin = re.sub(r"[^a-z0-9]+", " ", lower).strip()
@@ -1968,6 +2015,42 @@ class AppointmentFSM:
         lines.append(self._msg("reply_with_numbers", numbers=f"{numbers}, 0"))
         return "\n".join(lines)
 
+    def _availability_date_options(self) -> list[str]:
+        """Return upcoming dates based on doctor's accept_days (no clinic_id needed)."""
+        self._ensure_actor_defaults()
+        if self.scheduling_repository and self.doctor_id:
+            try:
+                accept_days = self.scheduling_repository.doctor_accept_days(
+                    doctor_id=self.doctor_id,
+                    admin_id=self.admin_id,
+                )
+                limit = max(1, min(14, int(accept_days) + 1))
+                today = date.today()
+                return [(today + timedelta(days=i)).isoformat() for i in range(limit)]
+            except Exception:
+                pass
+        # Fallback: today + tomorrow
+        today = date.today()
+        return [today.isoformat(), (today + timedelta(days=1)).isoformat()]
+
+    def _availability_date_options_prompt(self, date_options: list[str]) -> str:
+        """Numbered menu for the ASK_AVAILABILITY_DATE state."""
+        today_iso = date.today().isoformat()
+        tomorrow_iso = (date.today() + timedelta(days=1)).isoformat()
+
+        def label(d: str) -> str:
+            if d == today_iso:
+                return f"Today ({d})"
+            if d == tomorrow_iso:
+                return f"Tomorrow ({d})"
+            return d
+
+        lines = ["Please choose a date to check availability:"]
+        for idx, d in enumerate(date_options, start=1):
+            lines.append(f"{idx}. {label(d)}")
+        lines.append('Press "0" to go back.')
+        return "\n".join(lines)
+
     def _clinic_availability_line(self, clinic: dict) -> str:
         today_slots = int(clinic.get("today_slots") or 0)
         clinic_id = int(clinic["id"])
@@ -2069,15 +2152,18 @@ class AppointmentFSM:
                     limit=50,
                 )
                 if times:
-                    available_lines.append(
-                        f"- {clinic.clinic_name}: {len(times)} slots ({self._format_time_for_display(times[0])}-{self._format_time_for_display(times[-1])})"
-                    )
+                    count = len(times)
+                    if count == 1:
+                        slot_label = f"1 slot at {self._format_time_for_display(times[0])}"
+                    else:
+                        slot_label = f"{count} slots ({self._format_time_for_display(times[0])} – {self._format_time_for_display(times[-1])})"
+                    available_lines.append(f"- {clinic.clinic_name}: {slot_label}")
 
             if available_lines:
                 return (
                     f"Doctor availability on {slot_date}:\n"
                     + "\n".join(available_lines)
-                    + "\nReply with 'book appointment' to continue booking."
+                    + "\n\n1. Book appointment\n0. Go back"
                 )
 
             next_lines: list[str] = []
@@ -2096,8 +2182,9 @@ class AppointmentFSM:
                     f"No slots available on {slot_date}.\n"
                     "Next available dates:\n"
                     + "\n".join(next_lines)
+                    + "\n\n1. Book appointment\nPress \"0\" to go back."
                 )
-            return f"No slots available on {slot_date}."
+            return f"No slots available on {slot_date}.\n\n1. Book appointment\nPress \"0\" to go back."
         except Exception:
             if self.context.availability_doctor:
                 return self._msg(
