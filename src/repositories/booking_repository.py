@@ -941,26 +941,47 @@ class BookingRepository:
         schedules = cur.fetchall()
         if not schedules:
             return None
-        req_dt = datetime.combine(date.today(), slot_time_parsed)
-        cumulative = 0
+        normalized = self._normalize_schedules(schedules)
+        slot_result = self._session_slot_index(
+            requested_start=slot_time_parsed,
+            schedules=normalized,
+        )
+        if not slot_result:
+            return None
+        _, slot_number = slot_result
+        return slot_number
+
+    @staticmethod
+    def _normalize_schedules(schedules: list[dict]) -> list[tuple[time, time, int]]:
+        normalized: list[tuple[time, time, int]] = []
         for sch in schedules:
-            s = self._parse_time_value(sch.get("start_time"))
-            e = self._parse_time_value(sch.get("end_time"))
+            s = BookingRepository._parse_time_value(sch.get("start_time"))
+            e = BookingRepository._parse_time_value(sch.get("end_time"))
             d = int(sch.get("slot_duration") or 0)
             if not s or not e or d <= 0:
                 continue
+            normalized.append((s, e, d))
+        normalized.sort(key=lambda item: item[0])
+        return normalized
+
+    @staticmethod
+    def _session_slot_index(
+        *,
+        requested_start: time,
+        schedules: list[tuple[time, time, int]],
+    ) -> Optional[tuple[time, int]]:
+        """Return (end_time, slot_number) where slot_number is 1-based within the matched schedule window.
+        This is session-window based (not cumulative across the entire day)."""
+        req_dt = datetime.combine(date.today(), requested_start)
+        for s, e, d in schedules:
             start_dt = datetime.combine(date.today(), s)
             end_dt = datetime.combine(date.today(), e)
-            total_minutes = int((end_dt - start_dt).total_seconds() // 60)
-            slots_in_schedule = total_minutes // d
             if req_dt < start_dt or req_dt >= end_dt:
-                cumulative += slots_in_schedule
                 continue
             diff_minutes = int((req_dt - start_dt).total_seconds() // 60)
             if diff_minutes % d != 0:
-                # Not on a valid slot boundary — fall back to None
                 return None
-            return cumulative + (diff_minutes // d) + 1
+            return (req_dt + timedelta(minutes=d)).time(), (diff_minutes // d) + 1
         return None
 
     def get_daily_queue_number(self, appointment_id: int) -> Optional[int]:
@@ -1785,35 +1806,14 @@ class BookingRepository:
                 valid = False
                 end_time = start_time
                 requested_slot_number: Optional[int] = None
-                normalized_schedules: list[tuple[time, time, int]] = []
-                for sch in schedules:
-                    s = self._parse_time_value(sch.get("start_time"))
-                    e = self._parse_time_value(sch.get("end_time"))
-                    d = int(sch.get("slot_duration") or 0)
-                    if not s or not e or d <= 0:
-                        continue
-                    normalized_schedules.append((s, e, d))
-                normalized_schedules.sort(key=lambda item: item[0])
-                cumulative_slots = 0
-                for s, e, d in normalized_schedules:
-                    start_dt = datetime.combine(date.today(), s)
-                    end_dt = datetime.combine(date.today(), e)
-                    req_dt = datetime.combine(date.today(), start_time)
-                    total_minutes = int((end_dt - start_dt).total_seconds() // 60)
-                    if total_minutes <= 0:
-                        continue
-                    slots_in_schedule = total_minutes // d
-                    if req_dt < start_dt or req_dt >= end_dt:
-                        cumulative_slots += slots_in_schedule
-                        continue
-                    diff_minutes = int((req_dt - start_dt).total_seconds() // 60)
-                    if diff_minutes % d != 0:
-                        cumulative_slots += slots_in_schedule
-                        continue
-                    end_time = (req_dt + timedelta(minutes=d)).time()
-                    requested_slot_number = cumulative_slots + (diff_minutes // d) + 1
+                normalized_schedules = self._normalize_schedules(schedules)
+                slot_result = self._session_slot_index(
+                    requested_start=start_time,
+                    schedules=normalized_schedules,
+                )
+                if slot_result:
+                    end_time, requested_slot_number = slot_result
                     valid = True
-                    break
                 if not valid:
                     conn.rollback()
                     return BookingResult(False, "Requested new slot is not available.")
@@ -2250,37 +2250,14 @@ class BookingRepository:
                 matched = False
                 requested_end = requested_start
                 requested_slot_number: Optional[int] = None
-                normalized_schedules: list[tuple[time, time, int]] = []
-                for sch in schedules:
-                    s = self._parse_time_value(sch.get("start_time"))
-                    e = self._parse_time_value(sch.get("end_time"))
-                    d = int(sch.get("slot_duration") or 0)
-                    if not s or not e or d <= 0:
-                        continue
-                    normalized_schedules.append((s, e, d))
-
-                # Daily slot index: cumulative across same-day schedules (sorted by start time).
-                normalized_schedules.sort(key=lambda item: item[0])
-                cumulative_slots = 0
-                for s, e, d in normalized_schedules:
-                    start_dt = datetime.combine(date.today(), s)
-                    end_dt = datetime.combine(date.today(), e)
-                    req_dt = datetime.combine(date.today(), requested_start)
-                    total_minutes = int((end_dt - start_dt).total_seconds() // 60)
-                    if total_minutes <= 0:
-                        continue
-                    slots_in_schedule = total_minutes // d
-                    if req_dt < start_dt or req_dt >= end_dt:
-                        cumulative_slots += slots_in_schedule
-                        continue
-                    diff_minutes = int((req_dt - start_dt).total_seconds() // 60)
-                    if diff_minutes % d != 0:
-                        cumulative_slots += slots_in_schedule
-                        continue
-                    requested_end = (req_dt + timedelta(minutes=d)).time()
-                    requested_slot_number = cumulative_slots + (diff_minutes // d) + 1
+                normalized_schedules = self._normalize_schedules(schedules)
+                slot_result = self._session_slot_index(
+                    requested_start=requested_start,
+                    schedules=normalized_schedules,
+                )
+                if slot_result:
+                    requested_end, requested_slot_number = slot_result
                     matched = True
-                    break
                 if not matched:
                     conn.rollback()
                     return BookingResult(False, "Selected slot is not available.")

@@ -477,6 +477,10 @@ class SchedulingRepository:
         self._save_cached_availability(doctor_id=doctor_id, admin_id=admin_id, payload=snapshot)
         return snapshot
 
+    def get_availability_snapshot(self, doctor_id: int, admin_id: Optional[int] = None) -> dict:
+        """Return availability snapshot with Redis-first behavior and DB fallback."""
+        return self._get_availability_snapshot(doctor_id=doctor_id, admin_id=admin_id)
+
     def _doctor_ids_for_clinic(self, clinic_id: int, admin_id: Optional[int]) -> list[int]:
         conn = self._connect()
         cur = conn.cursor(dictionary=True)

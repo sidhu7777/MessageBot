@@ -122,6 +122,7 @@ class AppointmentFSM:
     active_booking_options_cache: list[dict] = field(default_factory=list)
     pending_existing_action: Optional[str] = None
     known_patient_name: Optional[str] = None
+    known_patient_phone: Optional[str] = None
 
     def handle(self, user_text: str) -> str:
         text = (user_text or "").strip()
@@ -287,9 +288,9 @@ class AppointmentFSM:
                             + "\n"
                             + self._clinic_prompt()
                         )
-                    self.state = "ASK_CLINIC"
-                    telegram_phone = None
-                    if self.booking_repository:
+                    # Use known_patient_phone if already retrieved, otherwise try to fetch
+                    telegram_phone = self.known_patient_phone
+                    if not telegram_phone and self.booking_repository:
                         try:
                             raw_chat = (self.chat_phone_number or "").strip()
                             telegram_phone = self.booking_repository.find_patient_phone_by_chat_user_id(
@@ -301,12 +302,24 @@ class AppointmentFSM:
                             telegram_phone = None
                     if telegram_phone:
                         self.context.phone_number = telegram_phone
+                        self.state = "ASK_CLINIC"
+                        return self._respond(
+                            self._msg("booking_for_self_ack")
+                            + "\n"
+                            + self._msg("name_ack", name=self.known_patient_name)
+                            + "\n"
+                            + self._msg("phone_ack", phone_number=telegram_phone)
+                            + "\n"
+                            + self._clinic_prompt()
+                        )
+                    # Phone not found in DB - ask for it
+                    self.state = "ASK_PHONE"
                     return self._respond(
                         self._msg("booking_for_self_ack")
                         + "\n"
                         + self._msg("name_ack", name=self.known_patient_name)
                         + "\n"
-                        + self._clinic_prompt()
+                        + self._with_back(self._ask_phone_prompt())
                     )
                 self.state = "ASK_NAME"
                 return self._respond(self._msg("booking_for_self_ack") + "\n" + self._with_back(self._msg("ask_name")))
@@ -1093,6 +1106,7 @@ class AppointmentFSM:
         self.init_unclear_count = 0
         self.in_edit_flow = False
         self.known_patient_name = None
+        self.known_patient_phone = None
         self.clinic_options_cache = []
         self.date_options_cache = []
         self.time_options_cache = []
@@ -1756,6 +1770,14 @@ class AppointmentFSM:
                     admin_id=self.admin_id,
                     doctor_id=self.doctor_id,
                 )
+                # Also retrieve phone number for Telegram patients
+                if patient_name:
+                    patient_phone = self.booking_repository.find_patient_phone_by_chat_user_id(
+                        chat_user_id=raw_chat,
+                        admin_id=self.admin_id,
+                        doctor_id=self.doctor_id,
+                    )
+                    self.known_patient_phone = patient_phone
             else:
                 chat_phone = self._normalize_phone(self.chat_phone_number or "")
                 if not chat_phone:
@@ -2134,30 +2156,42 @@ class AppointmentFSM:
             )
 
         try:
-            clinics = self.scheduling_repository.list_clinics_for_doctor(
+            # Redis-primary path: fetch one snapshot and derive all clinic/date/time output.
+            # Repository keeps DB fallback if cache is missing/invalid.
+            snapshot = self.scheduling_repository.get_availability_snapshot(
                 doctor_id=self.doctor_id,
                 admin_id=self.admin_id,
-                limit=10,
             )
-            if not clinics:
+            clinics_payload = list((snapshot or {}).get("clinics") or [])
+            if not clinics_payload:
                 return self._msg("no_clinic_available")
 
+            dates_by_clinic = dict((snapshot or {}).get("dates_by_clinic") or {})
+            times_by_clinic_date = dict((snapshot or {}).get("times_by_clinic_date") or {})
+
             available_lines: list[str] = []
-            for clinic in clinics:
-                times = self.scheduling_repository.list_available_times(
-                    doctor_id=self.doctor_id,
-                    clinic_id=clinic.clinic_id,
-                    slot_date=slot_date,
-                    admin_id=self.admin_id,
-                    limit=50,
-                )
-                if times:
-                    count = len(times)
-                    if count == 1:
-                        slot_label = f"1 slot at {self._format_time_for_display(times[0])}"
+            next_lines: list[str] = []
+            for row in clinics_payload[:10]:
+                clinic_id = int(row.get("clinic_id") or 0)
+                clinic_name = str(row.get("clinic_name") or "-")
+                clinic_key = str(clinic_id)
+                clinic_dates = list(dates_by_clinic.get(clinic_key) or [])
+                if slot_date in clinic_dates:
+                    times = list(times_by_clinic_date.get(f"{clinic_key}|{slot_date}") or [])
+                    if times:
+                        count = len(times)
+                        if count == 1:
+                            slot_label = f"1 slot at {self._format_time_for_display(times[0])}"
+                        else:
+                            slot_label = (
+                                f"{count} slots ("
+                                f"{self._format_time_for_display(times[0])} - {self._format_time_for_display(times[-1])})"
+                            )
+                        available_lines.append(f"- {clinic_name}: {slot_label}")
                     else:
-                        slot_label = f"{count} slots ({self._format_time_for_display(times[0])} – {self._format_time_for_display(times[-1])})"
-                    available_lines.append(f"- {clinic.clinic_name}: {slot_label}")
+                        available_lines.append(f"- {clinic_name}: Available")
+                elif clinic_dates:
+                    next_lines.append(f"- {clinic_name}: {clinic_dates[0]}")
 
             if available_lines:
                 return (
@@ -2165,17 +2199,6 @@ class AppointmentFSM:
                     + "\n".join(available_lines)
                     + "\n\n1. Book appointment\n0. Go back"
                 )
-
-            next_lines: list[str] = []
-            for clinic in clinics:
-                next_dates = self.scheduling_repository.list_available_dates(
-                    doctor_id=self.doctor_id,
-                    clinic_id=clinic.clinic_id,
-                    admin_id=self.admin_id,
-                    limit=1,
-                )
-                if next_dates:
-                    next_lines.append(f"- {clinic.clinic_name}: {next_dates[0]}")
 
             if next_lines:
                 return (
