@@ -3,6 +3,8 @@ def get_message(response_language: str, key: str, **kwargs: object) -> str:
         "greeting": "Hello, I am your medical appointment assistant. I can help with booking and doctor availability.",
         "welcome_known_patient": "Welcome to Dr. {doctor_name} clinic, {patient_name}. How can I help you today?",
         "welcome_new_patient": "Welcome to Dr. {doctor_name} clinic. How can I help you today?",
+        "welcome_known_patient_booking": "Welcome to Dr. {doctor_name} clinic, {patient_name}.",
+        "welcome_new_patient_booking": "Welcome to Dr. {doctor_name} clinic.",
         "intent_ack": "Sure, I can help you book an appointment.",
         "availability_intro": "Sure, I can help check doctor availability. Please share preferred date (YYYY-MM-DD or 'today'/'tomorrow'). Doctor name is optional.",
         "availability_ask": "Please share preferred date (YYYY-MM-DD or 'today'/'tomorrow') to check availability.",
@@ -96,26 +98,6 @@ def get_message(response_language: str, key: str, **kwargs: object) -> str:
         ),
         "invalid_appointment_mode": "Please reply with 1, 2, or 0.",
         "appointment_mode_ack": "Noted. Appointment type: {appointment_mode}.",
-        "ask_patient_type": (
-            "Is the patient old or new?\n"
-            "1. New\n"
-            "2. Old\n"
-            "Reply with 1, 2, or 0."
-        ),
-        "invalid_patient_type": "Please reply with 1, 2, or 0.",
-        "patient_type_ack": "Noted. Patient type: {patient_type}.",
-        "ask_age": "Please share patient age.",
-        "invalid_age": "Please share a valid age between 1 and 120.",
-        "age_ack": "Age noted: {age}.",
-        "ask_gender": (
-            "Please share patient gender:\n"
-            "1. Male\n"
-            "2. Female\n"
-            "3. Other\n"
-            "Reply with 1, 2, 3, or 0."
-        ),
-        "invalid_gender": "Please reply with 1, 2, 3, or 0.",
-        "gender_ack": "Gender noted: {gender}.",
         "ask_phone": (
             "Is the contact number same as this WhatsApp number?\n"
             "Reply YES or NO.\n"
@@ -136,22 +118,6 @@ def get_message(response_language: str, key: str, **kwargs: object) -> str:
         "no_clinic_available": "No clinics are available for booking right now. Please try again later.",
         "no_clinic_available_restart": "No clinics are available right now. Please try later. Send 'book appointment' to restart.",
         "clinic_ack": "Clinic noted: {clinic_name}, {clinic_address}.",
-        "ask_reason": (
-            "Select reason (you can choose multiple like 1,3):\n"
-            "1. Fever\n"
-            "2. Headache\n"
-            "3. Stomach pain\n"
-            "4. Cold\n"
-            "5. Other (type reason)\n"
-            "Reply with 1, 2, 3, 4, 5, or 0."
-        ),
-        "ask_reason_other": "Please type your reason.",
-        "invalid_reason_option": "Please choose valid reason option(s), or type reason text.",
-        "invalid_reason": "Please share the appointment reason in a few words.",
-        "reason_ack": "Reason noted.",
-        "ask_symptoms": "Please share the symptoms.",
-        "invalid_symptoms": "Please share symptoms in a few words.",
-        "symptoms_ack": "Symptoms noted.",
         "ask_date": "Please share preferred appointment date (YYYY-MM-DD or 'tomorrow').",
         "ask_date_options": (
             "Please choose appointment date:\n"
@@ -291,15 +257,6 @@ def get_message(response_language: str, key: str, **kwargs: object) -> str:
         "existing_booking_cancel_failed": "अभी पुरानी अपॉइंटमेंट cancel नहीं हो पाई। कृपया बाद में फिर कोशिश करें।",
         "invalid_name": "कृपया सही नाम बताएं। उदाहरण: Vineeth Raja Banala",
         "name_ack": "धन्यवाद, {name}।",
-        "ask_patient_type": "मरीज़ पुराना है या नया?\n1. New\n2. Old\nReply with 1, 2, or 0.",
-        "invalid_patient_type": "Reply with 1, 2, or 0.",
-        "patient_type_ack": "नोट किया गया। मरीज़ का प्रकार: {patient_type}।",
-        "ask_age": "कृपया मरीज़ की आयु बताएं।",
-        "invalid_age": "कृपया 1 से 120 के बीच सही आयु बताएं।",
-        "age_ack": "आयु नोट की गई: {age}।",
-        "ask_gender": "कृपया मरीज़ का जेंडर बताएं:\n1. Male\n2. Female\n3. Other\nReply with 1, 2, 3, or 0.",
-        "invalid_gender": "Reply with 1, 2, 3, or 0.",
-        "gender_ack": "जेंडर नोट किया गया: {gender}।",
         "ask_phone": (
             "कृपया संपर्क नंबर की पुष्टि करें:\n"
             "1. यही WhatsApp नंबर उपयोग करें\n"
@@ -320,22 +277,6 @@ def get_message(response_language: str, key: str, **kwargs: object) -> str:
         "no_clinic_available": "फिलहाल बुकिंग के लिए कोई क्लिनिक उपलब्ध नहीं है। कृपया बाद में फिर कोशिश करें।",
         "no_clinic_available_restart": "फिलहाल कोई क्लिनिक उपलब्ध नहीं है। कृपया बाद में कोशिश करें। पुनः शुरू करने के लिए 'book appointment' भेजें।",
         "clinic_ack": "क्लिनिक नोट किया गया: {clinic_name}, {clinic_address}।",
-        "ask_reason": (
-            "कारण चुनें (एक से अधिक चुन सकते हैं, जैसे 1,3):\n"
-            "1. Fever\n"
-            "2. Headache\n"
-            "3. Stomach pain\n"
-            "4. Cold\n"
-            "5. Other (कारण टाइप करें)\n"
-            "Reply with 1, 2, 3, 4, 5, or 0."
-        ),
-        "ask_reason_other": "कृपया कारण टाइप करें।",
-        "invalid_reason_option": "कृपया सही कारण विकल्प चुनें, या कारण टेक्स्ट में लिखें।",
-        "invalid_reason": "कृपया कारण थोड़े स्पष्ट रूप में बताएं।",
-        "reason_ack": "कारण नोट किया गया।",
-        "ask_symptoms": "कृपया लक्षण बताएं।",
-        "invalid_symptoms": "कृपया लक्षण थोड़े स्पष्ट रूप में बताएं।",
-        "symptoms_ack": "लक्षण नोट किए गए।",
         "ask_date": "कृपया पसंदीदा तारीख भेजें (YYYY-MM-DD या 'tomorrow').",
         "ask_date_options": (
             "कृपया अपॉइंटमेंट तारीख चुनें:\n"
@@ -364,13 +305,9 @@ def get_message(response_language: str, key: str, **kwargs: object) -> str:
         "confirm_summary": (
             "कृपया अपॉइंटमेंट विवरण की पुष्टि करें:\n"
             "नाम: {patient_name}\n"
-            "मरीज़ का प्रकार: {patient_type}\n"
-            "आयु: {age}\n"
-            "जेंडर: {gender}\n"
             "संपर्क: {phone_number}\n"
             "क्लिनिक: {clinic_name}\n"
             "क्लिनिक पता: {clinic_address}\n"
-            "कारण: {reason}\n"
             "तारीख: {appointment_date}\n"
             "समय: {appointment_time}\n"
             "1. Confirm\n"
@@ -398,13 +335,9 @@ def get_message(response_language: str, key: str, **kwargs: object) -> str:
         "change_ack": "ठीक है। हम वह विवरण अपडेट करते हैं।",
         "confirmed": (
             "नाम: {patient_name}\n"
-            "मरीज़ का प्रकार: {patient_type}\n"
-            "आयु: {age}\n"
-            "जेंडर: {gender}\n"
             "संपर्क: {phone_number}\n"
             "क्लिनिक: {clinic_name}\n"
             "क्लिनिक पता: {clinic_address}\n"
-            "कारण: {reason}\n"
             "तारीख: {appointment_date}\n"
             "समय: {appointment_time}"
         ),
@@ -429,6 +362,8 @@ def get_message(response_language: str, key: str, **kwargs: object) -> str:
         "go_back_hint": "Press \"0\" to go back.",
         "welcome_known_patient": "Welcome to Dr. {doctor_name} clinic, {patient_name}. How can I help you today?.",
         "welcome_new_patient": "Welcome to Dr. {doctor_name} clinic. How can I help you today?",
+        "welcome_known_patient_booking": "Welcome to Dr. {doctor_name} clinic, {patient_name}.",
+        "welcome_new_patient_booking": "Welcome to Dr. {doctor_name} clinic.",
         "intent_ack": "Theek hai, main aapki appointment booking mein help kar sakta hoon.",
         "availability_intro": "Theek hai, main doctor availability check karne mein help kar sakta hoon. Preferred date share kariye (YYYY-MM-DD ya 'today'/'tomorrow'). Doctor name optional hai.",
         "availability_ask": "Availability check ke liye preferred date bhejiye (YYYY-MM-DD ya 'today'/'tomorrow').",
@@ -504,15 +439,6 @@ def get_message(response_language: str, key: str, **kwargs: object) -> str:
         ),
         "invalid_appointment_mode": "Please 1, 2, ya 0 number mein reply kariye.",
         "appointment_mode_ack": "Noted. Appointment type: {appointment_mode}.",
-        "ask_patient_type": "Patient old hai ya new?\n1. New\n2. Old\nPlease 1, 2, ya 0 reply kariye.",
-        "invalid_patient_type": "Please 1, 2, ya 0 reply kariye.",
-        "patient_type_ack": "Noted. Patient type: {patient_type}.",
-        "ask_age": "Please patient age share kariye.",
-        "invalid_age": "Please 1 se 120 ke beech valid age batayiye.",
-        "age_ack": "Age noted: {age}.",
-        "ask_gender": "Please patient gender share kariye:\n1. Male\n2. Female\n3. Other\nPlease 1, 2, 3, ya 0 reply kariye.",
-        "invalid_gender": "Please 1, 2, 3, ya 0 reply kariye.",
-        "gender_ack": "Gender noted: {gender}.",
         "ask_phone": (
             "Kya contact number yehi WhatsApp number hai?\n"
             "Please YES ya NO mein reply kariye.\n"
@@ -533,22 +459,6 @@ def get_message(response_language: str, key: str, **kwargs: object) -> str:
         "no_clinic_available": "Abhi booking ke liye koi clinic available nahi hai. Please thodi der baad try kariye.",
         "no_clinic_available_restart": "Abhi koi clinic available nahi hai. Please baad mein try kariye. Restart ke liye 'book appointment' bhejiye.",
         "clinic_ack": "Clinic noted: {clinic_name}, {clinic_address}.",
-        "ask_reason": (
-            "Reason select kariye (multiple possible, e.g. 1,3):\n"
-            "1. Fever\n"
-            "2. Headache\n"
-            "3. Stomach pain\n"
-            "4. Cold\n"
-            "5. Other (reason type kariye)\n"
-            "Please 1, 2, 3, 4, 5, ya 0 reply kariye."
-        ),
-        "ask_reason_other": "Please apna reason type kariye.",
-        "invalid_reason_option": "Please valid reason option choose kariye, ya reason text type kariye.",
-        "invalid_reason": "Please appointment reason thoda clearly batayiye.",
-        "reason_ack": "Reason noted.",
-        "ask_symptoms": "Please symptoms share kariye.",
-        "invalid_symptoms": "Please symptoms thoda clearly batayiye.",
-        "symptoms_ack": "Symptoms noted.",
         "ask_date": "Please preferred appointment date bhejiye (YYYY-MM-DD ya 'tomorrow').",
         "ask_date_options": (
             "Please appointment date choose kariye:\n"
@@ -640,26 +550,16 @@ def get_message(response_language: str, key: str, **kwargs: object) -> str:
             prompts = {
                 "ASK_NAME": "Please share the patient full name.",
                 "ASK_APPOINTMENT_MODE": "Please choose appointment type: 1. Online appointment 2. Walk-in appointment.",
-                "ASK_PATIENT_TYPE": "Is the patient old or new?",
-                "ASK_AGE": "Please share patient age.",
-                "ASK_GENDER": "Please share patient gender: male, female, or other.",
                 "ASK_PHONE": "Is this WhatsApp number the contact number? Reply YES or NO. If NO, share a 10-digit number.",
                 "ASK_CLINIC": "Please choose clinic 1, 2, or 3.",
-                "ASK_REASON": "What is the reason for the appointment?",
-                "ASK_SYMPTOMS": "Please share the symptoms.",
                 "ASK_DATE": "Please share preferred appointment date (YYYY-MM-DD or 'tomorrow').",
                 "ASK_TIME": "Please share preferred time (e.g., 10 am or 14:30).",
             }
         elif source is hi:
             prompts = {
                 "ASK_NAME": "कृपया मरीज़ का पूरा नाम बताएं।",
-                "ASK_PATIENT_TYPE": "मरीज़ पुराना है या नया?",
-                "ASK_AGE": "कृपया मरीज़ की आयु बताएं।",
-                "ASK_GENDER": "कृपया मरीज़ का जेंडर बताएं: male, female, या other।",
                 "ASK_PHONE": "कृपया संपर्क नंबर भेजें (10 अंक)।",
                 "ASK_CLINIC": "कृपया क्लिनिक 1, 2 या 3 चुनें।",
-                "ASK_REASON": "अपॉइंटमेंट का कारण क्या है?",
-                "ASK_SYMPTOMS": "कृपया लक्षण बताएं।",
                 "ASK_DATE": "कृपया पसंदीदा तारीख भेजें (YYYY-MM-DD या 'tomorrow').",
                 "ASK_TIME": "कृपया पसंदीदा समय भेजें (जैसे 10 am या 14:30)।",
             }
@@ -667,13 +567,8 @@ def get_message(response_language: str, key: str, **kwargs: object) -> str:
             prompts = {
                 "ASK_NAME": "Please patient ka full name share kariye.",
                 "ASK_APPOINTMENT_MODE": "Please appointment type choose kariye: 1. Online appointment 2. Walk-in appointment.",
-                "ASK_PATIENT_TYPE": "Patient old hai ya new?",
-                "ASK_AGE": "Please patient age share kariye.",
-                "ASK_GENDER": "Please patient gender share kariye: male, female, ya other.",
                 "ASK_PHONE": "Kya yehi WhatsApp number contact number hai? YES ya NO reply kariye. Agar NO, to 10-digit number share kariye.",
                 "ASK_CLINIC": "Please clinic 1, 2, ya 3 choose kariye.",
-                "ASK_REASON": "Appointment ka reason kya hai?",
-                "ASK_SYMPTOMS": "Please symptoms share kariye.",
                 "ASK_DATE": "Please preferred appointment date bhejiye (YYYY-MM-DD ya 'tomorrow').",
                 "ASK_TIME": "Please preferred time share kariye (e.g., 10 am ya 14:30).",
             }

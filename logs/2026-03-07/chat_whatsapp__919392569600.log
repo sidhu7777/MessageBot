@@ -1,0 +1,46 @@
+[13:56:25.938]  SESSION_REDIS_MISS                load_ms=0
+[13:56:26.676]  SESSION_DB_MISS                   load_ms=737
+[13:56:26.849]  TURN_START                        text='heloo'
+[13:56:26.850]  SESSION_REDIS_MISS                load_ms=0
+[13:56:27.322]  SESSION_DB_MISS                   load_ms=472
+[13:56:34.856]  SESSION_REDIS_MISS                load_ms=1
+[13:56:35.429]  SESSION_DB_MISS                   load_ms=573
+[13:56:58.347]  FSM_HANDLED                       pre_state='INIT'  post_state='INIT'  fsm_ms=31024  reply='Please choose one option: 1. Book appointment 2. Check doctor availability Reply'
+[13:56:58.532]  SESSION_REDIS_SAVED               save_ms=138
+[13:56:59.146]  TURN_END                          total_ms=32297  save_ms=753  post_state='INIT'
+[13:57:00.814]  TURN_START                        text='heloo'
+[13:57:00.815]  SESSION_REDIS_HIT                 load_ms=0
+[13:57:08.885]  SESSION_REDIS_HIT                 load_ms=0
+[13:57:34.430]  FSM_HANDLED                       pre_state='INIT'  post_state='INIT'  fsm_ms=33614  reply='Please choose one option: 1. Book appointment 2. Check doctor availability Reply'
+[13:57:34.430]  SESSION_REDIS_SAVED               save_ms=0
+[13:57:35.136]  TURN_END                          total_ms=34322  save_ms=706  post_state='INIT'
+[13:57:37.473]  TURN_START                        text='heloo'
+[13:57:37.474]  SESSION_REDIS_HIT                 load_ms=0
+[13:57:45.766]  SESSION_REDIS_HIT                 load_ms=0
+[13:58:06.780]  FSM_HANDLED                       pre_state='INIT'  post_state='INIT'  fsm_ms=29305  reply='Do you want to book a medical appointment now? Reply YES or NO.'
+[13:58:06.781]  SESSION_REDIS_SAVED               save_ms=0
+[13:58:07.281]  TURN_END                          total_ms=29807  save_ms=501  post_state='INIT'
+[14:23:30.087]  SESSION_REDIS_MISS                load_ms=155
+[14:23:30.443]  SESSION_DB_MISS                   load_ms=356
+[14:23:30.447]  TURN_START                        text='Hello'
+[14:23:30.448]  SESSION_REDIS_MISS                load_ms=0
+[14:23:30.804]  SESSION_DB_MISS                   load_ms=355
+[14:23:33.887]  FSM_HANDLED                       pre_state='INIT'  post_state='INIT'  fsm_ms=3083  reply='Welcome to Dr. Doctor clinic, Ydhrgdgdg. How can I help you today? Please choose'
+[14:23:33.888]  SESSION_REDIS_SAVED               save_ms=0
+[14:23:34.523]  TURN_END                          total_ms=4075  save_ms=635  post_state='INIT'
+[14:23:36.259]  TURN_START                        text='Hello'
+[14:23:36.260]  SESSION_REDIS_HIT                 load_ms=0
+[14:23:38.058]  FSM_HANDLED                       pre_state='INIT'  post_state='INIT'  fsm_ms=1799  reply='Welcome to Dr. Doctor clinic, Ydhrgdgdg. How can I help you today? Please choose'
+[14:23:38.060]  SESSION_REDIS_SAVED               save_ms=0
+[14:23:38.450]  TURN_END                          total_ms=2190  save_ms=390  post_state='INIT'
+[14:23:40.857]  TURN_START                        text='Hello'
+[14:23:40.857]  SESSION_REDIS_HIT                 load_ms=0
+[14:23:42.732]  FSM_HANDLED                       pre_state='INIT'  post_state='INIT'  fsm_ms=1874  reply='Welcome to Dr. Doctor clinic, Ydhrgdgdg. How can I help you today? Please choose'
+[14:23:42.733]  SESSION_REDIS_SAVED               save_ms=0
+[14:23:43.124]  TURN_END                          total_ms=2267  save_ms=392  post_state='INIT'
+[14:28:55.684]  SESSION_REDIS_HIT                 load_ms=0
+[14:28:55.689]  TURN_START                        text='Hello'
+[14:28:55.689]  SESSION_REDIS_HIT                 load_ms=0
+[14:28:57.788]  FSM_HANDLED                       pre_state='INIT'  post_state='INIT'  fsm_ms=2098  reply='Welcome to Dr. Doctor clinic, Ydhrgdgdg. How can I help you today? Please choose'
+[14:28:57.788]  SESSION_REDIS_SAVED               save_ms=0
+[14:28:58.315]  TURN_END                          total_ms=2626  save_ms=527  post_state='INIT'

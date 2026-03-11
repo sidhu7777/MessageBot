@@ -64,9 +64,6 @@ def llm_extract(
             "Return only value. If missing return EMPTY."
         )
         instructions = {
-            "patient_type": "Output exactly one of: New, Old.",
-            "age": "Output integer age only (1-120).",
-            "gender": "Output exactly one of: Male, Female, Other.",
             "phone": "Output digits only (10-15 digits).",
             "date": f"Output date in YYYY-MM-DD. Today is {today_str}.",
             "time": "Output time in HH:MM 24-hour.",
@@ -77,19 +74,6 @@ def llm_extract(
             return None
         cleaned = out.splitlines()[0].strip()
 
-        if field_name == "patient_type":
-            return cleaned.capitalize() if cleaned.lower() in {"new", "old"} else None
-        if field_name == "age":
-            return cleaned if cleaned.isdigit() and 1 <= int(cleaned) <= 120 else None
-        if field_name == "gender":
-            normalized = cleaned.lower()
-            if normalized in {"male", "m"}:
-                return "Male"
-            if normalized in {"female", "f"}:
-                return "Female"
-            if normalized in {"other", "others", "o"}:
-                return "Other"
-            return None
         if field_name == "phone":
             digits = re.sub(r"\D", "", cleaned)
             return digits if 10 <= len(digits) <= 15 else None
@@ -98,73 +82,6 @@ def llm_extract(
         if field_name == "time":
             return cleaned if re.fullmatch(r"\d{2}:\d{2}", cleaned) else None
         return None
-    except Exception:
-        return None
-
-
-def llm_is_booking_intent(llm_client: LLMClient, enable_llm_polish: bool, text: str) -> bool:
-    if not enable_llm_polish:
-        return False
-    try:
-        system = (
-            "Classify if user wants to book a medical appointment. "
-            "Return only BOOK or NONE."
-        )
-        out = llm_client.generate(system, f"Text: {text}").strip().upper()
-        return out.startswith("BOOK")
-    except Exception:
-        return False
-
-
-def llm_is_availability_intent(llm_client: LLMClient, enable_llm_polish: bool, text: str) -> bool:
-    if not enable_llm_polish:
-        return False
-    try:
-        system = (
-            "Classify if user is asking doctor appointment availability/slots. "
-            "Return only AVAIL or NONE."
-        )
-        out = llm_client.generate(system, f"Text: {text}").strip().upper()
-        return out.startswith("AVAIL")
-    except Exception:
-        return False
-
-
-def llm_route_intent(
-    llm_client: LLMClient,
-    enable_llm_polish: bool,
-    text: str,
-    min_confidence: float = 0.70,
-) -> Optional[str]:
-    if not enable_llm_polish:
-        return None
-    try:
-        system = (
-            "Classify initial user intent for a medical appointment assistant. "
-            "User may write in English, Hindi (Devanagari), or Hinglish. "
-            "Return strict JSON only, no markdown, no extra keys: "
-            "{\"intent\":\"BOOK_APPOINTMENT|CHECK_AVAILABILITY|GREETING|GENERAL_QUERY|OTHER\","
-            "\"confidence\":0.0}."
-        )
-        raw = llm_client.generate(system, f"Text: {text}").strip()
-        parsed = parse_first_json_object(raw)
-        if not parsed:
-            return None
-        intent = str(parsed.get("intent", "")).upper()
-        try:
-            confidence = float(parsed.get("confidence", 0))
-        except (TypeError, ValueError):
-            confidence = 0.0
-        if confidence < min_confidence:
-            return None
-        allowed = {
-            "BOOK_APPOINTMENT",
-            "CHECK_AVAILABILITY",
-            "GREETING",
-            "GENERAL_QUERY",
-            "OTHER",
-        }
-        return intent if intent in allowed else None
     except Exception:
         return None
 
@@ -277,20 +194,16 @@ def llm_change_target(
     try:
         system = (
             "Map user requested field to one label only: "
-            "ASK_NAME, ASK_PATIENT_TYPE, ASK_AGE, ASK_GENDER, ASK_PHONE, ASK_REASON, "
-            "ASK_SYMPTOMS, ASK_DATE, ASK_TIME, UNKNOWN."
+            "ASK_NAME, ASK_PHONE, ASK_DATE, ASK_TIME, ASK_CLINIC, ASK_APPOINTMENT_MODE, UNKNOWN."
         )
         out = llm_client.generate(system, f"User: {text}").strip().upper()
         allowed = {
             "ASK_NAME",
-            "ASK_PATIENT_TYPE",
-            "ASK_AGE",
-            "ASK_GENDER",
             "ASK_PHONE",
-            "ASK_REASON",
-            "ASK_SYMPTOMS",
             "ASK_DATE",
             "ASK_TIME",
+            "ASK_CLINIC",
+            "ASK_APPOINTMENT_MODE",
         }
         return out if out in allowed else None
     except Exception:

@@ -351,6 +351,11 @@ class ConversationRepository:
     def claim_overflow_turns(self, *, limit: int, worker_id: str) -> list[QueuedTurn]:
         self.ensure_schema()
         conn = self._connect()
+        try:
+            if getattr(conn, "in_transaction", False):
+                conn.rollback()
+        except Exception:
+            pass
         conn.start_transaction()
         cur = conn.cursor(dictionary=True)
         try:
@@ -537,4 +542,3 @@ class ConversationRepository:
         finally:
             cur.close()
             conn.close()
-

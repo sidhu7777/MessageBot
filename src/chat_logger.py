@@ -1,15 +1,15 @@
-"""
+﻿"""
 Per-chat per-day structured file logger.
 
 Creates:
     logs/
       YYYY-MM-DD/
-        chat_<chat_id>.log    ← one file per user per day
+        chat_<chat_id>.log    â† one file per user per day
 
 Each line format:
     [HH:MM:SS.mmm] EVENT_NAME            key=value | key=value
 
-Thread-safe, line-buffered writes. Never raises — all exceptions silently swallowed
+Thread-safe, line-buffered writes. Never raises â€” all exceptions silently swallowed
 so a logging failure can never crash the bot.
 
 Usage (anywhere in the codebase):
@@ -25,7 +25,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
-# Root log directory — project_root/logs/
+# Root log directory â€” project_root/logs/
 _LOGS_ROOT = Path(__file__).resolve().parent.parent / "logs"
 
 # Open file handles keyed by "YYYY-MM-DD:chat_id".
@@ -37,7 +37,7 @@ _handles_lock = threading.Lock()
 _MAX_OPEN_FILES = 300
 
 
-# ─── Internal helpers ────────────────────────────────────────────────────────
+# â”€â”€â”€ Internal helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 def _safe_chat_id(chat_id: str) -> str:
     """Return a filesystem-safe version of chat_id."""
@@ -76,16 +76,16 @@ def _get_file_handle(chat_id: str):
             return None
 
 
-# ─── Public API ──────────────────────────────────────────────────────────────
+# â”€â”€â”€ Public API â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 def extract_chat_id(from_number: str) -> str:
     """
     Extract the bare chat identifier from a from_number string.
 
     Examples:
-        "telegram:123456789"  →  "123456789"
-        "+919876543210"       →  "+919876543210"
-        ""                    →  "unknown"
+        "telegram:123456789"  â†’  "123456789"
+        "+919876543210"       â†’  "+919876543210"
+        ""                    â†’  "unknown"
     """
     s = (from_number or "").strip()
     if s.lower().startswith("telegram:"):
@@ -129,14 +129,4 @@ def log_event(chat_id: str, event: str, **kwargs) -> None:
             fh.write(line)
     except Exception:
         # Logging must never crash the bot.
-        pass
-
-
-def log_separator(chat_id: str) -> None:
-    """Write a blank separator line — useful to visually separate conversation turns."""
-    try:
-        fh = _get_file_handle(str(chat_id))
-        if fh is not None:
-            fh.write("\n")
-    except Exception:
         pass

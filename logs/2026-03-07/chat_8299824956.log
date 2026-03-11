@@ -1,0 +1,210 @@
+[13:26:00.890]  SESSION_REDIS_MISS                load_ms=0
+[13:26:00.895]  SESSION_DB_MISS                   load_ms=0
+[13:26:00.898]  SESSION_REDIS_MISS                load_ms=0
+[13:26:00.898]  SESSION_DB_HIT                    load_ms=0
+[13:26:00.899]  SESSION_REDIS_MISS                load_ms=0
+[13:26:00.900]  SESSION_DB_HIT                    load_ms=0
+[13:26:00.958]  SESSION_REDIS_MISS                load_ms=0
+[13:26:00.959]  SESSION_DB_MISS                   load_ms=0
+[13:26:00.961]  SESSION_REDIS_MISS                load_ms=0
+[13:26:00.961]  SESSION_DB_HIT                    load_ms=0
+[13:26:00.963]  SESSION_REDIS_MISS                load_ms=0
+[13:26:00.963]  SESSION_DB_HIT                    load_ms=0
+[13:26:00.981]  SESSION_REDIS_MISS                load_ms=0
+[13:26:00.982]  SESSION_DB_MISS                   load_ms=0
+[13:26:00.984]  SESSION_REDIS_MISS                load_ms=0
+[13:26:00.984]  SESSION_DB_HIT                    load_ms=0
+[13:26:00.985]  SESSION_REDIS_MISS                load_ms=0
+[13:26:00.985]  SESSION_DB_HIT                    load_ms=0
+[13:26:00.986]  SESSION_REDIS_MISS                load_ms=0
+[13:26:00.986]  SESSION_DB_HIT                    load_ms=0
+[13:26:01.003]  SESSION_REDIS_MISS                load_ms=0
+[13:26:01.003]  SESSION_DB_MISS                   load_ms=0
+[13:26:01.006]  SESSION_REDIS_MISS                load_ms=0
+[13:26:01.007]  SESSION_DB_HIT                    load_ms=0
+[13:26:01.007]  SESSION_REDIS_MISS                load_ms=0
+[13:26:01.008]  SESSION_DB_HIT                    load_ms=0
+[13:26:01.009]  SESSION_REDIS_MISS                load_ms=0
+[13:26:01.009]  SESSION_DB_HIT                    load_ms=0
+[13:26:01.030]  SESSION_REDIS_MISS                load_ms=0
+[13:26:01.030]  SESSION_DB_MISS                   load_ms=0
+[13:26:01.032]  SESSION_REDIS_MISS                load_ms=0
+[13:26:01.033]  SESSION_DB_HIT                    load_ms=0
+[13:26:01.033]  SESSION_REDIS_MISS                load_ms=0
+[13:26:01.034]  SESSION_DB_HIT                    load_ms=0
+[13:26:01.035]  SESSION_REDIS_MISS                load_ms=0
+[13:26:01.035]  SESSION_DB_HIT                    load_ms=0
+[13:26:01.036]  SESSION_REDIS_MISS                load_ms=0
+[13:26:01.036]  SESSION_DB_HIT                    load_ms=0
+[13:26:01.037]  SESSION_REDIS_MISS                load_ms=0
+[13:26:01.037]  SESSION_DB_HIT                    load_ms=0
+[13:26:01.039]  SESSION_REDIS_MISS                load_ms=0
+[13:26:01.039]  SESSION_DB_HIT                    load_ms=0
+[13:26:01.040]  SESSION_REDIS_MISS                load_ms=0
+[13:26:01.040]  SESSION_DB_HIT                    load_ms=0
+[13:26:01.055]  SESSION_REDIS_MISS                load_ms=0
+[13:26:01.055]  SESSION_DB_MISS                   load_ms=0
+[13:26:01.058]  SESSION_REDIS_MISS                load_ms=0
+[13:26:01.058]  SESSION_DB_HIT                    load_ms=0
+[13:26:01.059]  SESSION_REDIS_MISS                load_ms=0
+[13:26:01.059]  SESSION_DB_HIT                    load_ms=0
+[13:26:01.060]  SESSION_REDIS_MISS                load_ms=0
+[13:26:01.060]  SESSION_DB_HIT                    load_ms=0
+[13:26:01.061]  SESSION_REDIS_MISS                load_ms=0
+[13:26:01.061]  SESSION_DB_HIT                    load_ms=0
+[13:26:01.062]  SESSION_REDIS_MISS                load_ms=0
+[13:26:01.062]  SESSION_DB_HIT                    load_ms=0
+[13:26:01.063]  SESSION_REDIS_MISS                load_ms=0
+[13:26:01.063]  SESSION_DB_HIT                    load_ms=0
+[13:26:01.064]  SESSION_REDIS_MISS                load_ms=0
+[13:26:01.065]  SESSION_DB_HIT                    load_ms=0
+[13:26:01.086]  SESSION_REDIS_MISS                load_ms=0
+[13:26:01.086]  SESSION_DB_MISS                   load_ms=0
+[13:26:01.089]  SESSION_REDIS_MISS                load_ms=0
+[13:26:01.089]  SESSION_DB_HIT                    load_ms=0
+[13:26:01.090]  SESSION_REDIS_MISS                load_ms=0
+[13:26:01.090]  SESSION_DB_HIT                    load_ms=0
+[13:26:01.092]  SESSION_REDIS_MISS                load_ms=0
+[13:26:01.092]  SESSION_DB_HIT                    load_ms=0
+[13:26:01.093]  SESSION_REDIS_MISS                load_ms=0
+[13:26:01.093]  SESSION_DB_HIT                    load_ms=0
+[13:26:01.097]  SESSION_REDIS_MISS                load_ms=0
+[13:26:01.097]  SESSION_DB_HIT                    load_ms=0
+[13:26:01.098]  SESSION_REDIS_MISS                load_ms=0
+[13:26:01.098]  SESSION_DB_HIT                    load_ms=0
+[13:30:42.136]  SESSION_REDIS_MISS                load_ms=0
+[13:30:42.137]  SESSION_DB_MISS                   load_ms=0
+[13:30:42.140]  SESSION_REDIS_MISS                load_ms=0
+[13:30:42.140]  SESSION_DB_HIT                    load_ms=0
+[13:30:42.144]  SESSION_REDIS_MISS                load_ms=0
+[13:30:42.144]  SESSION_DB_HIT                    load_ms=0
+[13:30:42.250]  SESSION_REDIS_MISS                load_ms=0
+[13:30:42.250]  SESSION_DB_MISS                   load_ms=0
+[13:30:42.253]  SESSION_REDIS_MISS                load_ms=0
+[13:30:42.253]  SESSION_DB_HIT                    load_ms=0
+[13:30:42.254]  SESSION_REDIS_MISS                load_ms=0
+[13:30:42.254]  SESSION_DB_HIT                    load_ms=0
+[13:30:42.272]  SESSION_REDIS_MISS                load_ms=0
+[13:30:42.272]  SESSION_DB_MISS                   load_ms=0
+[13:30:42.275]  SESSION_REDIS_MISS                load_ms=0
+[13:30:42.275]  SESSION_DB_HIT                    load_ms=0
+[13:30:42.276]  SESSION_REDIS_MISS                load_ms=0
+[13:30:42.276]  SESSION_DB_HIT                    load_ms=0
+[13:30:42.277]  SESSION_REDIS_MISS                load_ms=0
+[13:30:42.277]  SESSION_DB_HIT                    load_ms=0
+[13:30:42.292]  SESSION_REDIS_MISS                load_ms=0
+[13:30:42.292]  SESSION_DB_MISS                   load_ms=0
+[13:30:42.295]  SESSION_REDIS_MISS                load_ms=0
+[13:30:42.296]  SESSION_DB_HIT                    load_ms=0
+[13:30:42.296]  SESSION_REDIS_MISS                load_ms=0
+[13:30:42.297]  SESSION_DB_HIT                    load_ms=0
+[13:30:42.298]  SESSION_REDIS_MISS                load_ms=0
+[13:30:42.298]  SESSION_DB_HIT                    load_ms=0
+[13:30:42.322]  SESSION_REDIS_MISS                load_ms=0
+[13:30:42.323]  SESSION_DB_MISS                   load_ms=0
+[13:30:42.325]  SESSION_REDIS_MISS                load_ms=0
+[13:30:42.325]  SESSION_DB_HIT                    load_ms=0
+[13:30:42.326]  SESSION_REDIS_MISS                load_ms=0
+[13:30:42.326]  SESSION_DB_HIT                    load_ms=0
+[13:30:42.327]  SESSION_REDIS_MISS                load_ms=0
+[13:30:42.327]  SESSION_DB_HIT                    load_ms=0
+[13:30:42.328]  SESSION_REDIS_MISS                load_ms=0
+[13:30:42.328]  SESSION_DB_HIT                    load_ms=0
+[13:30:42.329]  SESSION_REDIS_MISS                load_ms=0
+[13:30:42.329]  SESSION_DB_HIT                    load_ms=0
+[13:30:42.331]  SESSION_REDIS_MISS                load_ms=0
+[13:30:42.331]  SESSION_DB_HIT                    load_ms=0
+[13:30:42.332]  SESSION_REDIS_MISS                load_ms=0
+[13:30:42.333]  SESSION_DB_HIT                    load_ms=0
+[13:30:42.347]  SESSION_REDIS_MISS                load_ms=0
+[13:30:42.348]  SESSION_DB_MISS                   load_ms=0
+[13:30:42.351]  SESSION_REDIS_MISS                load_ms=0
+[13:30:42.352]  SESSION_DB_HIT                    load_ms=0
+[13:30:42.352]  SESSION_REDIS_MISS                load_ms=0
+[13:30:42.353]  SESSION_DB_HIT                    load_ms=0
+[13:30:42.354]  SESSION_REDIS_MISS                load_ms=0
+[13:30:42.354]  SESSION_DB_HIT                    load_ms=0
+[13:30:42.356]  SESSION_REDIS_MISS                load_ms=0
+[13:30:42.356]  SESSION_DB_HIT                    load_ms=0
+[13:30:42.357]  SESSION_REDIS_MISS                load_ms=0
+[13:30:42.357]  SESSION_DB_HIT                    load_ms=0
+[13:30:42.358]  SESSION_REDIS_MISS                load_ms=0
+[13:30:42.358]  SESSION_DB_HIT                    load_ms=0
+[13:30:42.360]  SESSION_REDIS_MISS                load_ms=0
+[13:30:42.360]  SESSION_DB_HIT                    load_ms=0
+[13:30:42.428]  SESSION_REDIS_MISS                load_ms=0
+[13:30:42.430]  SESSION_DB_MISS                   load_ms=0
+[13:30:42.432]  SESSION_REDIS_MISS                load_ms=0
+[13:30:42.436]  SESSION_DB_HIT                    load_ms=3
+[13:30:42.437]  SESSION_REDIS_MISS                load_ms=0
+[13:30:42.437]  SESSION_DB_HIT                    load_ms=0
+[13:30:42.439]  SESSION_REDIS_MISS                load_ms=0
+[13:30:42.439]  SESSION_DB_HIT                    load_ms=0
+[13:30:42.440]  SESSION_REDIS_MISS                load_ms=0
+[13:30:42.440]  SESSION_DB_HIT                    load_ms=0
+[13:30:42.488]  SESSION_REDIS_MISS                load_ms=0
+[13:30:42.488]  SESSION_DB_HIT                    load_ms=0
+[13:30:42.489]  SESSION_REDIS_MISS                load_ms=0
+[13:30:42.489]  SESSION_DB_HIT                    load_ms=0
+[15:52:43.578]  WEBHOOK_ARRIVED                   sid='1216'  text='Hello'
+[15:52:43.581]  SESSION_REDIS_MISS                load_ms=0
+[15:52:44.091]  SESSION_DB_MISS                   load_ms=510
+[15:52:44.346]  LOCK_ACQUIRED                     
+[15:52:44.346]  TURN_QUEUED                       sid='1216'  state='INIT'  backlog=1  ack_ms=767
+[15:52:44.347]  TURN_START                        text='Hello'
+[15:52:44.347]  SESSION_REDIS_MISS                load_ms=0
+[15:52:44.782]  SESSION_DB_MISS                   load_ms=395
+[15:52:48.347]  FSM_HANDLED                       pre_state='INIT'  post_state='INIT'  fsm_ms=3565  reply='Welcome to Dr. Sanjay Vinayak clinic, Ghrdftufg. How can I help you today? Pleas'
+[15:52:48.348]  SESSION_REDIS_SAVED               save_ms=0
+[15:52:49.266]  TURN_END                          total_ms=4919  save_ms=918  post_state='INIT'
+[15:52:50.059]  BOT_REPLY_SENT                    send_ms=792  reply='Welcome to Dr. Sanjay Vinayak clinic, Ghrdftufg. How can I help you today? Pleas'
+[15:52:53.772]  WEBHOOK_ARRIVED                   sid='1218'  text='1'
+[15:52:53.774]  SESSION_REDIS_HIT                 load_ms=0
+[15:52:53.775]  LOCK_ACQUIRED                     
+[15:52:53.776]  TURN_QUEUED                       sid='1218'  state='INIT'  backlog=1  ack_ms=3
+[15:52:53.778]  TURN_START                        text='1'
+[15:52:53.780]  SESSION_REDIS_HIT                 load_ms=1
+[15:52:54.427]  FSM_HANDLED                       pre_state='INIT'  post_state='ASK_BOOKING_FOR'  fsm_ms=647  reply='Sure, I can help you book an appointment. Who is this appointment for? 1. Self 2'
+[15:52:54.428]  SESSION_REDIS_SAVED               save_ms=0
+[15:52:55.111]  TURN_END                          total_ms=1332  save_ms=683  post_state='ASK_BOOKING_FOR'
+[15:52:55.790]  BOT_REPLY_SENT                    send_ms=679  reply='Sure, I can help you book an appointment. Who is this appointment for? 1. Self 2'
+[15:52:57.934]  WEBHOOK_ARRIVED                   sid='1220'  text='1'
+[15:52:57.936]  SESSION_REDIS_HIT                 load_ms=0
+[15:52:57.937]  LOCK_ACQUIRED                     
+[15:52:57.937]  TURN_QUEUED                       sid='1220'  state='ASK_BOOKING_FOR'  backlog=1  ack_ms=2
+[15:52:57.938]  TURN_START                        text='1'
+[15:52:57.939]  SESSION_REDIS_HIT                 load_ms=0
+[15:53:02.229]  FSM_HANDLED                       pre_state='ASK_BOOKING_FOR'  post_state='ASK_CLINIC'  fsm_ms=4290  reply='Noted. Booking for self. Thank you, Ghrdftufg. Contact number noted: 8976547689.'
+[15:53:02.230]  SESSION_REDIS_SAVED               save_ms=0
+[15:53:02.774]  TURN_END                          total_ms=4836  save_ms=544  post_state='ASK_CLINIC'
+[15:53:03.566]  BOT_REPLY_SENT                    send_ms=791  reply='Noted. Booking for self. Thank you, Ghrdftufg. Contact number noted: 8976547689.'
+[15:53:08.321]  WEBHOOK_ARRIVED                   sid='1222'  text='3'
+[15:53:08.323]  SESSION_REDIS_HIT                 load_ms=0
+[15:53:08.324]  LOCK_ACQUIRED                     
+[15:53:08.325]  TURN_QUEUED                       sid='1222'  state='ASK_CLINIC'  backlog=1  ack_ms=3
+[15:53:08.325]  TURN_START                        text='3'
+[15:53:08.326]  SESSION_REDIS_HIT                 load_ms=0
+[15:53:09.231]  FSM_HANDLED                       pre_state='ASK_CLINIC'  post_state='ASK_CLINIC'  fsm_ms=905  reply='No available slots for Health Plus Clinic. Please choose another clinic. Please '
+[15:53:09.232]  SESSION_REDIS_SAVED               save_ms=0
+[15:53:09.645]  TURN_END                          total_ms=1319  save_ms=413  post_state='ASK_CLINIC'
+[15:53:10.475]  BOT_REPLY_SENT                    send_ms=829  reply='No available slots for Health Plus Clinic. Please choose another clinic. Please '
+[15:53:14.277]  WEBHOOK_ARRIVED                   sid='1224'  text='2'
+[15:53:14.279]  SESSION_REDIS_HIT                 load_ms=0
+[15:53:14.280]  LOCK_ACQUIRED                     
+[15:53:14.280]  TURN_QUEUED                       sid='1224'  state='ASK_CLINIC'  backlog=1  ack_ms=3
+[15:53:14.281]  TURN_START                        text='2'
+[15:53:14.282]  SESSION_REDIS_HIT                 load_ms=0
+[15:53:15.273]  FSM_HANDLED                       pre_state='ASK_CLINIC'  post_state='ASK_CLINIC'  fsm_ms=991  reply='No available slots for City Care Clinic. Please choose another clinic. Please ch'
+[15:53:15.274]  SESSION_REDIS_SAVED               save_ms=0
+[15:53:15.670]  TURN_END                          total_ms=1389  save_ms=396  post_state='ASK_CLINIC'
+[15:53:16.607]  BOT_REPLY_SENT                    send_ms=936  reply='No available slots for City Care Clinic. Please choose another clinic. Please ch'
+[15:53:18.701]  WEBHOOK_ARRIVED                   sid='1226'  text='1'
+[15:53:18.703]  SESSION_REDIS_HIT                 load_ms=0
+[15:53:18.703]  LOCK_ACQUIRED                     
+[15:53:18.704]  TURN_QUEUED                       sid='1226'  state='ASK_CLINIC'  backlog=1  ack_ms=2
+[15:53:18.705]  TURN_START                        text='1'
+[15:53:18.706]  SESSION_REDIS_HIT                 load_ms=1
+[15:53:19.690]  FSM_HANDLED                       pre_state='ASK_CLINIC'  post_state='ASK_CLINIC'  fsm_ms=984  reply='No available slots for Aditya. Please choose another clinic. Please choose clini'
+[15:53:19.691]  SESSION_REDIS_SAVED               save_ms=0
+[15:53:20.071]  TURN_END                          total_ms=1366  save_ms=381  post_state='ASK_CLINIC'
+[15:53:21.033]  BOT_REPLY_SENT                    send_ms=961  reply='No available slots for Aditya. Please choose another clinic. Please choose clini'

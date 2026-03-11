@@ -31,8 +31,18 @@ _pools: dict = {}
 _pools_lock = Lock()
 
 
+def _pool_key(config: MySQLConfig) -> tuple[str, int, str, str]:
+    return (config.host, config.port, config.database, config.user)
+
+
+def _drop_pool(config: MySQLConfig) -> None:
+    key = _pool_key(config)
+    with _pools_lock:
+        _pools.pop(key, None)
+
+
 def _get_pool(config: MySQLConfig) -> MySQLConnectionPool:
-    key = (config.host, config.port, config.database, config.user)
+    key = _pool_key(config)
     with _pools_lock:
         if key not in _pools:
             _pools[key] = MySQLConnectionPool(
@@ -49,5 +59,20 @@ def _get_pool(config: MySQLConfig) -> MySQLConnectionPool:
 
 
 def connect_mysql(config: MySQLConfig):
-    """Return a pooled connection. Calling .close() returns it to the pool."""
+    """Return a healthy pooled connection. Calling .close() returns it to the pool."""
+    last_exc: Exception | None = None
+    for _ in range(2):
+        try:
+            conn = _get_pool(config).get_connection()
+            try:
+                conn.ping(reconnect=True, attempts=1, delay=0)
+            except TypeError:
+                conn.ping(reconnect=True)
+            return conn
+        except mysql.connector.Error as exc:
+            last_exc = exc
+            _drop_pool(config)
+            continue
+    if last_exc:
+        raise last_exc
     return _get_pool(config).get_connection()

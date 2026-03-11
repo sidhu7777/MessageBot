@@ -697,6 +697,11 @@ class SchedulingRepository:
 
     def claim_cache_invalidation_events(self, *, limit: int, worker_id: str) -> list[CacheInvalidationEvent]:
         conn = self._connect()
+        try:
+            if getattr(conn, "in_transaction", False):
+                conn.rollback()
+        except Exception:
+            pass
         conn.start_transaction()
         cur = conn.cursor(dictionary=True)
         try:
@@ -1125,6 +1130,16 @@ class SchedulingRepository:
         admin_id: Optional[int] = None,
         limit: int = 3,
     ) -> list[str]:
+        today_iso = datetime.now(_IST).date().isoformat()
+        if slot_date == today_iso:
+            db_times = self._db_list_available_times_for_date(
+                doctor_id=doctor_id,
+                clinic_id=clinic_id,
+                slot_date=slot_date,
+                admin_id=admin_id,
+            )
+            return db_times[: max(1, int(limit))]
+
         snapshot = self._get_availability_snapshot(doctor_id=doctor_id, admin_id=admin_id)
         times_map = snapshot.get("times_by_clinic_date") or {}
         cache_key = f"{int(clinic_id)}|{slot_date}"

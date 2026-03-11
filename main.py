@@ -4,28 +4,39 @@ import os
 import time
 import threading
 import uuid
+import html as html_escape
+import asyncio
 from contextlib import asynccontextmanager
-from urllib import error as urlerror
-from urllib import request as urlrequest
 from threading import Lock
 from typing import Dict, Optional, Tuple
 
-from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import PlainTextResponse
+from fastapi import FastAPI, Request
+from fastapi.concurrency import run_in_threadpool
+from fastapi.responses import HTMLResponse, JSONResponse
 from twilio.rest import Client
 from twilio.request_validator import RequestValidator
 from dotenv import load_dotenv
 
 from src.automation import AutomationScheduler
+from src.api.webhooks import register_webhook_routes
 from src.config import load_settings
 from src.db_store import conversation_repository_from_env, repositories_from_env
 from src.llm.client import LLMClient
 from src.ollama_runtime import OllamaStartupError, ensure_ollama_ready
 from src.runtime import PersistentMessageSidStore, TurnQueueProcessor, TurnTask
+from src.runtime.background_workers import (
+    run_doctor_cache_invalidation_loop,
+    run_overflow_turn_poll_loop,
+)
+from src.runtime.kafka_notification_bridge import KafkaNotificationBridge
+from src.runtime.kafka_turn_bridge import KafkaTurnBridge
 from src.runtime.user_turn_buffer import UserTurnBuffer
 from src.runtime.user_processing_guard import UserProcessingGuard, build_redis_client_from_env
+from src.runtime.channel_delivery import ChannelDelivery
 from src.session_store import SessionManager
 from src.chat_logger import log_event, extract_chat_id
+from src.qr import QrCheckinService
+from src.repositories.notification_repository import NotificationEvent
 
 
 load_dotenv()
@@ -46,6 +57,11 @@ llm_client = LLMClient(
 )
 booking_repository, scheduling_repository = repositories_from_env()
 conversation_repository = conversation_repository_from_env()
+qr_checkin_service = (
+    QrCheckinService(booking_repository=booking_repository, scheduling_repository=scheduling_repository)
+    if booking_repository and scheduling_repository
+    else None
+)
 
 session_manager = SessionManager(
     llm_client=llm_client,
@@ -64,6 +80,13 @@ twilio_client = (
     if settings.twilio_account_sid and settings.twilio_auth_token
     else None
 )
+channel_delivery = ChannelDelivery(
+    settings=settings,
+    twilio_client=twilio_client,
+    logger=LOGGER,
+    log_event_fn=log_event,
+    extract_chat_id_fn=extract_chat_id,
+)
 # Use striped locks (fixed-size pool) to avoid unbounded per-user lock growth.
 _user_lock_stripes_count = max(64, int(os.getenv("USER_LOCK_STRIPES", "4096")))
 _user_lock_stripes = [Lock() for _ in range(_user_lock_stripes_count)]
@@ -80,11 +103,10 @@ _overflow_turn_map: dict[str, int] = {}
 _overflow_turn_map_lock = Lock()
 _user_bot_identity: Dict[str, str] = {}
 _user_bot_identity_lock = Lock()
-_user_turn_generation: Dict[str, int] = {}
-_user_turn_generation_lock = Lock()
 # Maximum number of per-user entries kept in the identity/generation dicts.
 # Protects against unbounded memory growth with many unique users.
 _PER_USER_DICT_MAX = max(5000, int(os.getenv("PER_USER_DICT_MAX", "20000")))
+_qr_page_lookup_timeout_seconds = max(0.2, float(os.getenv("QR_PAGE_LOOKUP_TIMEOUT_SECONDS", "2.0")))
 
 
 def _evict_dict_if_needed(d: dict, lock: Lock) -> None:
@@ -137,26 +159,7 @@ def _get_user_bot_identity(user_id: str) -> str:
     with _user_bot_identity_lock:
         return str(_user_bot_identity.get(uid) or "")
 
-
-def _next_user_turn_generation(user_id: str) -> int:
-    uid = (user_id or "").strip()
-    if not uid:
-        return 0
-    with _user_turn_generation_lock:
-        next_value = int(_user_turn_generation.get(uid, 0)) + 1
-        _user_turn_generation[uid] = next_value
-    _evict_dict_if_needed(_user_turn_generation, _user_turn_generation_lock)
-    return next_value
-
-
-def _is_user_turn_generation_current(user_id: str, generation: int) -> bool:
-    uid = (user_id or "").strip()
-    if not uid:
-        return True
-    with _user_turn_generation_lock:
-        return int(_user_turn_generation.get(uid, 0)) == int(generation)
-
-turn_processor = TurnQueueProcessor(
+_base_turn_processor = TurnQueueProcessor(
     worker_count=max(1, settings.queue_worker_count),
     max_queue_size=max(1, settings.queue_max_size),
     process_fn=lambda from_number, body: _process_turn(from_number, body),
@@ -172,6 +175,11 @@ turn_processor = TurnQueueProcessor(
     timeout_fn=lambda task, exc: _handle_turn_timeout(task, exc),
     on_success=lambda task: _on_turn_success(task),
     on_failure=lambda task, exc, will_retry, backoff: _on_turn_failure(task, exc, will_retry, backoff),
+)
+turn_processor = KafkaTurnBridge(
+    settings=settings,
+    logger=LOGGER,
+    turn_processor=_base_turn_processor,
 )
 _doctor_reminder_lead_minutes_list: Optional[list] = None
 _raw_lead_list = os.getenv("DOCTOR_REMINDER_LEAD_MINUTES_LIST", "").strip()
@@ -201,6 +209,12 @@ automation_scheduler = AutomationScheduler(
     doctor_reminder_window_seconds=settings.doctor_reminder_window_seconds,
     doctor_reminder_lead_minutes_list=_doctor_reminder_lead_minutes_list,
 )
+automation_scheduler._notification_bridge = KafkaNotificationBridge(
+    settings=settings,
+    logger=LOGGER,
+    process_event_fn=automation_scheduler._process_notification_event,
+    event_cls=NotificationEvent,
+)
 
 @asynccontextmanager
 async def _app_lifespan(_app: FastAPI):
@@ -226,6 +240,11 @@ async def startup_validation() -> None:
             conversation_repository.ensure_schema()
         except Exception as exc:
             LOGGER.warning("Conversation schema ensure failed: %s", exc)
+    if qr_checkin_service:
+        try:
+            qr_checkin_service.ensure_schema()
+        except Exception as exc:
+            LOGGER.warning("QR schema ensure failed: %s", exc)
     turn_processor.start()
     if scheduling_repository:
         try:
@@ -334,312 +353,376 @@ async def health_queue() -> dict:
     }
 
 
-@app.post("/webhook")
-async def webhook(request: Request):
-    started = time.perf_counter()
-    form = await request.form()
-    inbound_sid = (form.get("MessageSid") or form.get("SmsMessageSid") or "").strip()
-    button_payload = (form.get("ButtonPayload") or "").strip()
-    button_text = (form.get("ButtonText") or "").strip()
-    body = (
-        button_payload
-        or button_text
-        or (form.get("Body") or "").strip()
-    )
-    from_number = form.get("From") or "unknown"
-    to_number = (form.get("To") or settings.twilio_whatsapp_from or "").strip()
+def _qr_page_html(*, doctor_id: int, clinic_id: int, doctor_name: str, clinic_name: str) -> str:
+    doctor_name_safe = html_escape.escape(doctor_name or "Doctor")
+    clinic_name_safe = html_escape.escape(clinic_name or "Clinic")
+    return f"""<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Clinic QR Check-in</title>
+  <style>
+    :root {{
+      --bg: linear-gradient(140deg, #f6f7f2 0%, #e5efe0 60%, #d7e7dc 100%);
+      --card: #ffffff;
+      --ink: #1d2a23;
+      --muted: #5b6e62;
+      --accent: #0f766e;
+      --accent-soft: #d3f2ee;
+      --ok: #0a7a4f;
+      --warn: #a85810;
+      --danger: #9f2d2d;
+    }}
+    * {{ box-sizing: border-box; }}
+    body {{
+      margin: 0;
+      font-family: "Segoe UI", Tahoma, sans-serif;
+      color: var(--ink);
+      background: var(--bg);
+      min-height: 100vh;
+      display: grid;
+      place-items: center;
+      padding: 18px;
+    }}
+    .card {{
+      width: min(760px, 100%);
+      background: var(--card);
+      border-radius: 20px;
+      box-shadow: 0 20px 50px rgba(8, 38, 34, 0.14);
+      overflow: hidden;
+      border: 1px solid #e4efe8;
+    }}
+    .hero {{
+      padding: 28px 24px 12px 24px;
+      background:
+        radial-gradient(circle at 85% 15%, #c5f3ea 0, rgba(197,243,234,0) 46%),
+        radial-gradient(circle at 20% 0%, #ebf9f4 0, rgba(235,249,244,0) 52%);
+    }}
+    .kicker {{
+      display: inline-block;
+      background: var(--accent-soft);
+      color: #0d645d;
+      border-radius: 999px;
+      padding: 6px 12px;
+      font-size: 12px;
+      font-weight: 600;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+    }}
+    h1 {{
+      margin: 12px 0 8px 0;
+      font-size: 28px;
+      line-height: 1.2;
+    }}
+    .subtitle {{
+      margin: 0;
+      color: var(--muted);
+      font-size: 15px;
+    }}
+    .form-wrap {{
+      padding: 20px 24px 24px 24px;
+      display: grid;
+      gap: 14px;
+    }}
+    label {{
+      display: grid;
+      gap: 6px;
+      font-weight: 600;
+      font-size: 14px;
+    }}
+    select, input {{
+      width: 100%;
+      border: 1px solid #ceded5;
+      border-radius: 12px;
+      padding: 12px 12px;
+      font-size: 15px;
+      outline: none;
+      transition: border-color .2s, box-shadow .2s;
+    }}
+    select:focus, input:focus {{
+      border-color: var(--accent);
+      box-shadow: 0 0 0 3px rgba(15,118,110,0.13);
+    }}
+    .grid {{
+      display: grid;
+      gap: 12px;
+    }}
+    @media (min-width: 640px) {{
+      .grid {{ grid-template-columns: 1fr 1fr; }}
+    }}
+    button {{
+      margin-top: 4px;
+      border: 0;
+      border-radius: 12px;
+      padding: 12px 16px;
+      color: white;
+      background: linear-gradient(135deg, #0f766e, #0b5a53);
+      font-size: 15px;
+      font-weight: 700;
+      cursor: pointer;
+    }}
+    button:disabled {{
+      opacity: .7;
+      cursor: not-allowed;
+    }}
+    .result {{
+      border: 1px solid #dce9e2;
+      background: #f8fcfa;
+      border-radius: 12px;
+      padding: 12px;
+      min-height: 50px;
+      font-size: 14px;
+      white-space: pre-wrap;
+    }}
+    .ok {{ color: var(--ok); }}
+    .warn {{ color: var(--warn); }}
+    .err {{ color: var(--danger); }}
+  </style>
+</head>
+<body>
+  <section class="card">
+    <div class="hero">
+      <span class="kicker" id="kicker">QR Check-in</span>
+      <h1 id="title">Welcome to Dr. {doctor_name_safe} clinic</h1>
+      <p class="subtitle" id="subtitle">Clinic: {clinic_name_safe}</p>
+    </div>
+    <form class="form-wrap" id="checkinForm">
+      <label>
+        <span id="langLabel">Select language</span>
+        <select id="language">
+          <option value="en">English</option>
+          <option value="hi">हिंदी</option>
+          <option value="hinglish">Hinglish</option>
+        </select>
+      </label>
+      <div class="grid">
+        <label>
+          <span id="nameLabel">Full Name</span>
+          <input id="patientName" maxlength="120" required />
+        </label>
+        <label>
+          <span id="phoneLabel">Phone Number</span>
+          <input id="phoneNumber" maxlength="20" required />
+        </label>
+      </div>
+      <button id="submitBtn" type="submit">Submit</button>
+      <div id="result" class="result"></div>
+      <input type="hidden" id="doctorId" value="{doctor_id}" />
+      <input type="hidden" id="clinicId" value="{clinic_id}" />
+    </form>
+  </section>
 
-    if settings.enable_twilio_signature_validation:
-        signature = request.headers.get("X-Twilio-Signature", "")
-        valid = request_validator.validate(str(request.url), dict(form), signature)
-        if not valid:
-            LOGGER.warning("Rejected webhook due to invalid Twilio signature")
-            raise HTTPException(status_code=403, detail="Invalid Twilio signature")
+  <script>
+    const t = {{
+      en: {{
+        title: "Welcome to Dr. {doctor_name_safe} clinic",
+        subtitle: "Clinic: {clinic_name_safe}",
+        langLabel: "Select language",
+        nameLabel: "Full Name",
+        phoneLabel: "Phone Number",
+        submit: "Submit",
+      }},
+      hi: {{
+        title: "Dr. {doctor_name_safe} क्लिनिक में आपका स्वागत है",
+        subtitle: "क्लिनिक: {clinic_name_safe}",
+        langLabel: "भाषा चुनें",
+        nameLabel: "पूरा नाम",
+        phoneLabel: "फोन नंबर",
+        submit: "जमा करें",
+      }},
+      hinglish: {{
+        title: "Dr. {doctor_name_safe} clinic mein aapka swagat hai",
+        subtitle: "Clinic: {clinic_name_safe}",
+        langLabel: "Language select kariye",
+        nameLabel: "Full Name",
+        phoneLabel: "Phone Number",
+        submit: "Submit kariye",
+      }},
+    }};
 
-    LOGGER.info(
-        "Incoming WhatsApp message sid=%s from=%s body=%s button_payload=%s button_text=%s",
-        inbound_sid or "-",
-        from_number,
-        body,
-        button_payload or "-",
-        button_text or "-",
-    )
+    function applyLanguage(lang) {{
+      const d = t[lang] || t.en;
+      document.getElementById("title").textContent = d.title;
+      document.getElementById("subtitle").textContent = d.subtitle;
+      document.getElementById("langLabel").textContent = d.langLabel;
+      document.getElementById("nameLabel").textContent = d.nameLabel;
+      document.getElementById("phoneLabel").textContent = d.phoneLabel;
+      document.getElementById("submitBtn").textContent = d.submit;
+    }}
 
-    if inbound_sid:
-        # Keep webhook path ultra-light: fast local dedup only.
-        duplicate = sid_store.seen_or_add(inbound_sid)
-        if duplicate:
-            LOGGER.info("Duplicate inbound MessageSid ignored sid=%s from=%s", inbound_sid, from_number)
-            return PlainTextResponse("", status_code=200)
-    _set_user_bot_identity(from_number, to_number)
+    document.getElementById("language").addEventListener("change", (e) => applyLanguage(e.target.value));
+    applyLanguage("en");
+
+    document.getElementById("checkinForm").addEventListener("submit", async (e) => {{
+      e.preventDefault();
+      const result = document.getElementById("result");
+      const btn = document.getElementById("submitBtn");
+      btn.disabled = true;
+      result.className = "result";
+      result.textContent = "Submitting...";
+      try {{
+        const payload = {{
+          doctor_id: Number(document.getElementById("doctorId").value),
+          clinic_id: Number(document.getElementById("clinicId").value),
+          patient_name: document.getElementById("patientName").value,
+          phone_number: document.getElementById("phoneNumber").value,
+          language: document.getElementById("language").value,
+        }};
+        const resp = await fetch("/qr/checkin/submit", {{
+          method: "POST",
+          headers: {{ "Content-Type": "application/json" }},
+          body: JSON.stringify(payload),
+        }});
+        const data = await resp.json();
+        if (!resp.ok) {{
+          result.classList.add("err");
+          result.textContent = data.detail || "Request failed.";
+      }} else {{
+          const status = data.status || "";
+          if (status === "booked") result.classList.add("ok");
+          else if (status === "overflow" || status === "active_booking") result.classList.add("warn");
+          else result.classList.add("err");
+          result.textContent = data.message || "Done.";
+        }}
+      }} catch (_err) {{
+        result.classList.add("err");
+        result.textContent = "Unable to submit right now. Please try again.";
+      }} finally {{
+        btn.disabled = false;
+      }}
+    }});
+  </script>
+</body>
+</html>"""
+
+
+@app.get("/qr/checkin", response_class=HTMLResponse)
+async def qr_checkin_page(doctor_id: int, clinic_id: int):
+    if not qr_checkin_service:
+        return HTMLResponse("<h3>QR check-in is not configured.</h3>", status_code=503)
+    doctor_name, clinic_name = "Doctor", "Clinic"
     try:
-        pre_state = session_manager.get_or_create(from_number).state
-    except Exception:
-        pre_state = "INIT"
-
-    if settings.twilio_use_rest_responses and twilio_client and settings.twilio_whatsapp_from:
-        acquired = False
-        try:
-            acquired = _user_processing_guard.acquire(from_number)
-            if not acquired:
-                buffered = _user_turn_buffer.push(
-                    TurnTask(
-                        from_number=from_number,
-                        body=body,
-                        inbound_sid=inbound_sid,
-                        pre_state=pre_state,
-                    )
-                )
-                LOGGER.info(
-                    "Buffered inbound while processing sid=%s from=%s pending=%d collapsed=%s dropped_oldest=%s",
-                    inbound_sid or "-",
-                    from_number,
-                    buffered.pending_count,
-                    buffered.collapsed,
-                    buffered.dropped_oldest,
-                )
-                return PlainTextResponse("", status_code=200)
-
-            task = TurnTask(
-                from_number=from_number,
-                body=body,
-                inbound_sid=inbound_sid,
-                pre_state=pre_state,
-            )
-            # Record this dispatch so rapid duplicate messages sent while this
-            # turn is processing are collapsed instead of queued.
-            _user_turn_buffer.record_dispatch(from_number, body)
-            enqueued = turn_processor.submit(task)
-            if not enqueued:
-                _user_processing_guard.release(from_number)
-                buffered = _user_turn_buffer.push(task)
-                LOGGER.warning(
-                    "Queue full. Buffered inbound sid=%s from=%s backlog=%d pending=%d collapsed=%s dropped_oldest=%s",
-                    inbound_sid or "-",
-                    from_number,
-                    turn_processor.backlog_size(),
-                    buffered.pending_count,
-                    buffered.collapsed,
-                    buffered.dropped_oldest,
-                )
-                return PlainTextResponse("", status_code=200)
-
-            elapsed_ms = int((time.perf_counter() - started) * 1000)
-            LOGGER.info(
-                "Queued inbound sid=%s from=%s state=%s backlog=%d ack_ms=%d",
-                inbound_sid or "-",
-                from_number,
-                pre_state,
-                turn_processor.backlog_size(),
-                elapsed_ms,
-            )
-            return PlainTextResponse("", status_code=200)
-        except Exception as exc:
-            if acquired:
-                _user_processing_guard.release(from_number)
-            buffered = _user_turn_buffer.push(
-                TurnTask(
-                    from_number=from_number,
-                    body=body,
-                    inbound_sid=inbound_sid,
-                    pre_state=pre_state,
-                )
-            )
-            LOGGER.warning(
-                "ACK-first fallback buffered sid=%s from=%s pending=%d error=%s",
-                inbound_sid or "-",
-                from_number,
-                buffered.pending_count,
-                exc,
-            )
-            return PlainTextResponse("", status_code=200)
-
-    # TwiML/direct mode also stays ACK-first by buffering for async worker processing.
-    buffered = _user_turn_buffer.push(
-        TurnTask(
-            from_number=from_number,
-            body=body,
-            inbound_sid=inbound_sid,
-            pre_state=pre_state,
+        doctor_name, clinic_name = await asyncio.wait_for(
+            run_in_threadpool(
+                qr_checkin_service.resolve_doctor_and_clinic,
+                doctor_id=doctor_id,
+                clinic_id=clinic_id,
+            ),
+            timeout=_qr_page_lookup_timeout_seconds,
         )
-    )
-    LOGGER.info(
-        "ACK-first buffered inbound sid=%s from=%s pending=%d collapsed=%s dropped_oldest=%s",
-        inbound_sid or "-",
-        from_number,
-        buffered.pending_count,
-        buffered.collapsed,
-        buffered.dropped_oldest,
-    )
-    _submit_next_buffered_turn(from_number)
-    return PlainTextResponse("", status_code=200)
-
-
-@app.post("/telegram/webhook")
-async def telegram_webhook(request: Request):
-    if settings.telegram_webhook_secret:
-        secret = request.headers.get("X-Telegram-Bot-Api-Secret-Token", "")
-        if secret != settings.telegram_webhook_secret:
-            LOGGER.warning("Rejected Telegram webhook due to invalid secret token")
-            raise HTTPException(status_code=403, detail="Invalid Telegram webhook secret")
-
-    started = time.perf_counter()
-    payload = await request.json()
-    message = payload.get("message") or payload.get("edited_message") or {}
-    text = str(message.get("text") or "").strip()
-    from_user = message.get("from") or {}
-    chat = message.get("chat") or {}
-    telegram_user_id = str(from_user.get("id") or chat.get("id") or "").strip()
-    inbound_sid = str(message.get("message_id") or "").strip()
-    if not telegram_user_id:
-        return PlainTextResponse("", status_code=200)
-    from_number = f"telegram:{telegram_user_id}"
-    try:
-        log_event(telegram_user_id, "WEBHOOK_ARRIVED", sid=inbound_sid, text=text[:100])
-    except Exception:
-        pass
-
-    LOGGER.info(
-        "Incoming Telegram message sid=%s from=%s body=%s",
-        inbound_sid or "-",
-        from_number,
-        text,
-    )
-
-    if inbound_sid:
-        dedup_sid = f"TG{telegram_user_id}:{inbound_sid}"
-        # Keep Telegram webhook ack path fast to avoid Telegram read timeouts.
-        # Use local/file dedup here; DB dedup can block webhook response under load.
-        duplicate = sid_store.seen_or_add(dedup_sid)
-        if duplicate:
-            LOGGER.info("Duplicate inbound Telegram message ignored sid=%s from=%s", dedup_sid, from_number)
-            return PlainTextResponse("", status_code=200)
-
-    bot_identity = f"telegram_username:{_telegram_bot_username_runtime}" if _telegram_bot_username_runtime else ""
-    _set_user_bot_identity(from_number, bot_identity)
-    try:
-        pre_state = session_manager.get_or_create(from_number).state
-    except Exception:
-        pre_state = "INIT"
-    acquired = False
-    try:
-        acquired = _user_processing_guard.acquire(from_number)
-        try:
-            log_event(telegram_user_id, "LOCK_ACQUIRED" if acquired else "LOCK_BUSY")
-        except Exception:
-            pass
-        if not acquired:
-            buffered = _user_turn_buffer.push(
-                TurnTask(
-                    from_number=from_number,
-                    body=text,
-                    inbound_sid=inbound_sid,
-                    pre_state=pre_state,
-                )
-            )
-            LOGGER.info(
-                "Buffered inbound Telegram while processing sid=%s from=%s pending=%d collapsed=%s dropped_oldest=%s",
-                inbound_sid or "-",
-                from_number,
-                buffered.pending_count,
-                buffered.collapsed,
-                buffered.dropped_oldest,
-            )
-            return PlainTextResponse("", status_code=200)
-
-        task = TurnTask(
-            from_number=from_number,
-            body=text,
-            inbound_sid=inbound_sid,
-            pre_state=pre_state,
-        )
-        # Record this dispatch so rapid duplicate messages sent while this
-        # turn is processing are collapsed instead of queued.
-        _user_turn_buffer.record_dispatch(from_number, text)
-        enqueued = turn_processor.submit(task)
-        if not enqueued:
-            _user_processing_guard.release(from_number)
-            buffered = _user_turn_buffer.push(task)
-            LOGGER.warning(
-                "Queue full. Buffered inbound sid=%s from=%s backlog=%d pending=%d collapsed=%s dropped_oldest=%s",
-                inbound_sid or "-",
-                from_number,
-                turn_processor.backlog_size(),
-                buffered.pending_count,
-                buffered.collapsed,
-                buffered.dropped_oldest,
-            )
-            return PlainTextResponse("", status_code=200)
-
-        elapsed_ms = int((time.perf_counter() - started) * 1000)
-        try:
-            log_event(telegram_user_id, "TURN_QUEUED", sid=inbound_sid, state=pre_state, backlog=turn_processor.backlog_size(), ack_ms=elapsed_ms)
-        except Exception:
-            pass
-        LOGGER.info(
-            "Queued inbound Telegram sid=%s from=%s state=%s backlog=%d ack_ms=%d",
-            inbound_sid or "-",
-            from_number,
-            pre_state,
-            turn_processor.backlog_size(),
-            elapsed_ms,
-        )
-        return PlainTextResponse("", status_code=200)
     except Exception as exc:
-        if acquired:
-            _user_processing_guard.release(from_number)
-        buffered = _user_turn_buffer.push(
-            TurnTask(
-                from_number=from_number,
-                body=text,
-                inbound_sid=inbound_sid,
-                pre_state=pre_state,
-            )
-        )
         LOGGER.warning(
-            "ACK-first Telegram fallback buffered sid=%s from=%s pending=%d error=%s",
-            inbound_sid or "-",
-            from_number,
-            buffered.pending_count,
+            "QR page name lookup fallback doctor_id=%s clinic_id=%s error=%s",
+            doctor_id,
+            clinic_id,
             exc,
         )
-        return PlainTextResponse("", status_code=200)
-
-
-@app.post("/twilio/status")
-async def twilio_status_callback(request: Request):
-    form = await request.form()
-    msg_sid = form.get("MessageSid") or form.get("SmsSid") or "-"
-    msg_status = form.get("MessageStatus") or form.get("SmsStatus") or "-"
-    err_code = form.get("ErrorCode") or "-"
-    err_msg = form.get("ErrorMessage") or "-"
-    to_number = form.get("To") or "-"
-    from_number = form.get("From") or "-"
-    LOGGER.info(
-        "Twilio status sid=%s status=%s to=%s from=%s error_code=%s error_message=%s",
-        msg_sid,
-        msg_status,
-        to_number,
-        from_number,
-        err_code,
-        err_msg,
+    return HTMLResponse(
+        _qr_page_html(
+            doctor_id=doctor_id,
+            clinic_id=clinic_id,
+            doctor_name=doctor_name,
+            clinic_name=clinic_name,
+        )
     )
-    if booking_repository:
-        try:
-            booking_repository.upsert_delivery_status(
-                provider="twilio",
-                provider_message_sid=str(msg_sid),
-                channel="whatsapp",
-                message_status=str(msg_status),
-                to_number=str(to_number),
-                from_number=str(from_number),
-                error_code=str(err_code),
-                error_message=str(err_msg),
-                payload_json=json.dumps(dict(form), ensure_ascii=False),
-            )
-        except Exception as exc:
-            LOGGER.warning("Failed to persist Twilio callback sid=%s error=%s", msg_sid, exc)
-    return PlainTextResponse("", status_code=200)
+
+
+@app.post("/qr/checkin/submit")
+async def qr_checkin_submit(request: Request):
+    if not qr_checkin_service:
+        return JSONResponse({"detail": "QR check-in is not configured."}, status_code=503)
+    try:
+        payload = await request.json()
+    except Exception:
+        return JSONResponse({"detail": "Invalid QR check-in request payload."}, status_code=400)
+
+    patient_name = str(payload.get("patient_name") or "").strip()
+    phone_number = str(payload.get("phone_number") or "").strip()
+    qr_chat_id = f"qr_{''.join(ch for ch in phone_number if ch.isdigit()) or 'unknown'}"
+    log_event(
+        qr_chat_id,
+        "QR_SUBMIT_RECEIVED",
+        doctor_id=payload.get("doctor_id"),
+        clinic_id=payload.get("clinic_id"),
+        patient_name=patient_name[:80],
+        phone=phone_number,
+    )
+    try:
+        doctor_id = int(payload.get("doctor_id"))
+        clinic_id = int(payload.get("clinic_id"))
+    except Exception:
+        log_event(
+            qr_chat_id,
+            "QR_SUBMIT_REJECTED",
+            reason="invalid_doctor_or_clinic_id",
+            doctor_id=payload.get("doctor_id"),
+            clinic_id=payload.get("clinic_id"),
+        )
+        return JSONResponse({"detail": "Invalid doctor_id/clinic_id."}, status_code=400)
+
+    result = await run_in_threadpool(
+        qr_checkin_service.process_checkin,
+        doctor_id=doctor_id,
+        clinic_id=clinic_id,
+        patient_name=patient_name,
+        phone=phone_number,
+    )
+    status_code = 200 if result.status in {"booked", "overflow", "active_booking"} else 400
+    event_name = "QR_SUBMIT_SUCCEEDED" if status_code == 200 else "QR_SUBMIT_FAILED"
+    log_event(
+        qr_chat_id,
+        event_name,
+        status=result.status,
+        message=result.message[:120],
+        booking_id=result.booking_id,
+        appointment_date=result.appointment_date,
+        appointment_time=result.appointment_time,
+        clinic_name=result.clinic_name,
+        doctor_name=result.doctor_name,
+    )
+    if status_code != 200:
+        LOGGER.warning(
+            "QR submit failed doctor_id=%s clinic_id=%s phone=%s status=%s message=%s",
+            doctor_id,
+            clinic_id,
+            phone_number,
+            result.status,
+            result.message,
+        )
+    return JSONResponse(
+        {
+            "status": result.status,
+            "message": result.message,
+            "detail": result.message,
+            "booking_id": result.booking_id,
+            "appointment_date": result.appointment_date,
+            "appointment_time": result.appointment_time,
+            "queue_position": result.queue_position,
+            "estimated_time": result.estimated_time,
+            "clinic_name": result.clinic_name,
+            "doctor_name": result.doctor_name,
+        },
+        status_code=status_code,
+    )
+
+
+register_webhook_routes(
+    app,
+    settings=settings,
+    logger=LOGGER,
+    request_validator=lambda: request_validator,
+    sid_store=lambda: sid_store,
+    session_manager=lambda: session_manager,
+    twilio_client=lambda: twilio_client,
+    turn_processor=lambda: turn_processor,
+    booking_repository=lambda: booking_repository,
+    user_processing_guard=lambda: _user_processing_guard,
+    user_turn_buffer=lambda: _user_turn_buffer,
+    set_user_bot_identity=_set_user_bot_identity,
+    submit_next_buffered_turn=lambda from_number: _submit_next_buffered_turn(from_number),
+    get_telegram_bot_username=lambda: _telegram_bot_username_runtime,
+)
 
 
 def _process_turn(from_number: str, body: str) -> Tuple[str, str, object]:
@@ -772,82 +855,27 @@ def _submit_next_buffered_turn(from_number: str) -> None:
 
 
 def _overflow_turn_poll_loop() -> None:
-    if not conversation_repository:
-        return
-    claim_size = max(1, settings.queue_worker_count)
-    sid_retention_days = max(1, int(os.getenv("INBOUND_SID_RETENTION_DAYS", "30")))
-    sid_purge_interval_seconds = max(60, int(os.getenv("INBOUND_SID_PURGE_INTERVAL_SECONDS", "3600")))
-    next_sid_purge_at = 0.0
-    while not _overflow_poll_stop.is_set():
-        try:
-            now_monotonic = time.monotonic()
-            if now_monotonic >= next_sid_purge_at:
-                try:
-                    deleted = conversation_repository.purge_old_message_sids(retention_days=sid_retention_days)
-                    if deleted:
-                        LOGGER.info(
-                            "Purged old inbound_message_sids rows=%d retention_days=%d",
-                            deleted,
-                            sid_retention_days,
-                        )
-                except Exception:
-                    LOGGER.exception("Failed to purge inbound_message_sids")
-                next_sid_purge_at = now_monotonic + sid_purge_interval_seconds
-            rows = conversation_repository.claim_overflow_turns(limit=claim_size, worker_id=_overflow_worker_id)
-            if not rows:
-                _overflow_poll_stop.wait(0.8)
-                continue
-            for row in rows:
-                task = TurnTask(
-                    from_number=row.from_number,
-                    body=row.body,
-                    inbound_sid=row.inbound_sid,
-                    pre_state=row.pre_state,
-                    attempt=max(0, int(row.attempt_count)),
-                )
-                if turn_processor.submit(task):
-                    _track_overflow_task(task, row.queue_id)
-                    continue
-                conversation_repository.release_overflow_turn(
-                    queue_id=row.queue_id,
-                    reason="Runtime queue still full",
-                    backoff_seconds=max(1, int(settings.queue_overflow_requeue_backoff_seconds)),
-                )
-
-        except Exception as exc:
-            LOGGER.warning("Overflow queue poll failed error=%s", exc)
-            _overflow_poll_stop.wait(1.0)
+    run_overflow_turn_poll_loop(
+        conversation_repository=conversation_repository,
+        turn_processor=turn_processor,
+        overflow_poll_stop=_overflow_poll_stop,
+        settings=settings,
+        overflow_worker_id=_overflow_worker_id,
+        logger=LOGGER,
+        sid_retention_days=max(1, int(os.getenv("INBOUND_SID_RETENTION_DAYS", "30"))),
+        sid_purge_interval_seconds=max(60, int(os.getenv("INBOUND_SID_PURGE_INTERVAL_SECONDS", "3600"))),
+        track_overflow_task=_track_overflow_task,
+    )
 
 
 def _doctor_cache_invalidation_loop() -> None:
-    if not scheduling_repository:
-        return
-    claim_size = max(1, min(100, settings.queue_worker_count * 10))
-    while not _cache_inv_stop.is_set():
-        try:
-            events = scheduling_repository.claim_cache_invalidation_events(
-                limit=claim_size,
-                worker_id=_cache_inv_worker_id,
-            )
-            if not events:
-                _cache_inv_stop.wait(0.8)
-                continue
-            for event in events:
-                try:
-                    scheduling_repository.process_cache_invalidation_event(event)
-                    scheduling_repository.mark_cache_invalidation_done(event.queue_id)
-                except Exception:
-                    LOGGER.exception(
-                        "Doctor cache invalidation failed queue_id=%s entity=%s doctor=%s clinic=%s",
-                        event.queue_id,
-                        event.entity_type,
-                        event.doctor_id,
-                        event.clinic_id,
-                    )
-                    scheduling_repository.release_cache_invalidation(event.queue_id)
-        except Exception as exc:
-            LOGGER.warning("Doctor cache invalidation poll failed error=%s", exc)
-            _cache_inv_stop.wait(1.0)
+    run_doctor_cache_invalidation_loop(
+        scheduling_repository=scheduling_repository,
+        cache_inv_stop=_cache_inv_stop,
+        settings=settings,
+        cache_inv_worker_id=_cache_inv_worker_id,
+        logger=LOGGER,
+    )
 
 
 def _get_user_lock(user_id: str) -> Lock:
@@ -858,266 +886,31 @@ def _get_user_lock(user_id: str) -> Lock:
 
 
 def _send_channel_response(to_number: str, reply_text: str, fsm_state: str, fsm, inbound_sid: str = "") -> None:
-    if not (reply_text or "").strip():
-        LOGGER.info("Reply suppressed for sid=%s to=%s (empty/silent response).", inbound_sid or "-", to_number)
-        return
-    if (to_number or "").strip().lower().startswith("telegram:"):
-        _send_plain_channel_message(to_number=to_number, body=reply_text, inbound_sid=inbound_sid)
-        return
-    _send_whatsapp_response(to_number=to_number, reply_text=reply_text, fsm_state=fsm_state, fsm=fsm, inbound_sid=inbound_sid)
-
-
-def _send_whatsapp_response(to_number: str, reply_text: str, fsm_state: str, fsm, inbound_sid: str = "") -> None:
-    if not twilio_client:
-        return
-
-    template_sid = _template_for_state(fsm_state)
-    content_variables = _content_variables_for_state(fsm_state, fsm)
-
-    try:
-        if template_sid:
-            kwargs = {
-                "from_": settings.twilio_whatsapp_from,
-                "to": to_number,
-                "content_sid": template_sid,
-            }
-            if content_variables:
-                kwargs["content_variables"] = json.dumps(content_variables, ensure_ascii=False)
-            sid = _send_with_retries(kwargs)
-            LOGGER.info(
-                "Sent template response sid=%s inbound_sid=%s state=%s template_sid=%s",
-                sid,
-                inbound_sid or "-",
-                fsm_state,
-                template_sid,
-            )
-            return
-
-        sid = _send_with_retries(
-            {
-                "from_": settings.twilio_whatsapp_from,
-                "to": to_number,
-                "body": reply_text,
-            }
-        )
-        LOGGER.info(
-            "Sent plain REST response sid=%s inbound_sid=%s state=%s",
-            sid,
-            inbound_sid or "-",
-            fsm_state,
-        )
-    except Exception as exc:
-        LOGGER.exception("Failed to send WhatsApp response via REST API: %s", exc)
-        raise
+    channel_delivery.send_channel_response(
+        to_number=to_number,
+        reply_text=reply_text,
+        fsm_state=fsm_state,
+        fsm=fsm,
+        inbound_sid=inbound_sid,
+    )
 
 
 def _send_plain_channel_message(to_number: str, body: str, inbound_sid: str = "") -> str:
-    if (to_number or "").strip().lower().startswith("telegram:"):
-        _t_send = time.perf_counter()
-        _send_telegram_message(to_number=to_number, body=body, inbound_sid=inbound_sid)
-        _send_ms = int((time.perf_counter() - _t_send) * 1000)
-        try:
-            log_event(extract_chat_id(to_number), "BOT_REPLY_SENT", send_ms=_send_ms, reply=body[:80])
-        except Exception:
-            pass
-        return "telegram"
-    sid = _send_with_retries(
-        {
-            "from_": settings.twilio_whatsapp_from,
-            "to": to_number,
-            "body": body,
-        }
+    return channel_delivery.send_plain_channel_message(
+        to_number=to_number,
+        body=body,
+        inbound_sid=inbound_sid,
     )
-    LOGGER.info("Sent safe processing message sid=%s inbound_sid=%s to=%s", sid, inbound_sid or "-", to_number)
-    return sid
+
 
 def _send_plain_channel_document(to_number: str, file_path: str, caption: str = "", inbound_sid: str = "") -> None:
-    if (to_number or "").strip().lower().startswith("telegram:"):
-        _send_telegram_document(
-            to_number=to_number,
-            file_path=file_path,
-            caption=caption,
-            inbound_sid=inbound_sid,
-        )
-        return
-    # Twilio WhatsApp media requires a publicly reachable media URL.
-    # For local scheduler exports, keep a safe fallback text notification.
-    LOGGER.warning(
-        "WhatsApp document send degraded to text (Twilio requires a public media URL). "
-        "to=%s file=%s — configure a media hosting endpoint to enable file delivery.",
-        to_number,
-        os.path.basename(file_path),
+    channel_delivery.send_plain_channel_document(
+        to_number=to_number,
+        file_path=file_path,
+        caption=caption,
+        inbound_sid=inbound_sid,
     )
-    msg = caption.strip() if caption else "Doctor reminder report generated."
-    msg = f"{msg}\nReport file: {os.path.basename(file_path)}"
-    _send_plain_channel_message(to_number=to_number, body=msg, inbound_sid=inbound_sid)
-
-
-def _send_telegram_message(to_number: str, body: str, inbound_sid: str = "") -> None:
-    if not settings.telegram_bot_token:
-        raise RuntimeError("TELEGRAM_BOT_TOKEN is not configured.")
-    chat_id = _telegram_chat_id_from_user(to_number)
-    if not chat_id:
-        raise RuntimeError(f"Invalid Telegram destination: {to_number}")
-    url = f"https://api.telegram.org/bot{settings.telegram_bot_token}/sendMessage"
-    payload = json.dumps({"chat_id": chat_id, "text": body}).encode("utf-8")
-    req = urlrequest.Request(
-        url=url,
-        data=payload,
-        headers={"Content-Type": "application/json"},
-        method="POST",
-    )
-    try:
-        with urlrequest.urlopen(req, timeout=10) as resp:
-            raw = resp.read().decode("utf-8", errors="replace")
-            LOGGER.info(
-                "Sent Telegram message inbound_sid=%s to=%s response=%s",
-                inbound_sid or "-",
-                to_number,
-                raw[:200],
-            )
-    except urlerror.HTTPError as exc:
-        detail = exc.read().decode("utf-8", errors="replace")
-        LOGGER.error("Telegram send failed status=%s body=%s", exc.code, detail[:400])
-        raise
-    except Exception as exc:
-        LOGGER.error("Telegram send failed error=%s", exc)
-        raise
-
-def _send_telegram_document(to_number: str, file_path: str, caption: str = "", inbound_sid: str = "") -> None:
-    if not settings.telegram_bot_token:
-        raise RuntimeError("TELEGRAM_BOT_TOKEN is not configured.")
-    chat_id = _telegram_chat_id_from_user(to_number)
-    if not chat_id:
-        raise RuntimeError(f"Invalid Telegram destination: {to_number}")
-    if not os.path.exists(file_path):
-        raise RuntimeError(f"Report file not found: {file_path}")
-
-    url = f"https://api.telegram.org/bot{settings.telegram_bot_token}/sendDocument"
-    boundary = f"----CodexBoundary{uuid.uuid4().hex}"
-    file_name = os.path.basename(file_path)
-    with open(file_path, "rb") as handle:
-        file_bytes = handle.read()
-
-    parts = bytearray()
-
-    def _append_field(name: str, value: str) -> None:
-        parts.extend(f"--{boundary}\r\n".encode("utf-8"))
-        parts.extend(f'Content-Disposition: form-data; name="{name}"\r\n\r\n'.encode("utf-8"))
-        parts.extend((value or "").encode("utf-8"))
-        parts.extend(b"\r\n")
-
-    _append_field("chat_id", chat_id)
-    if caption:
-        _append_field("caption", caption)
-
-    parts.extend(f"--{boundary}\r\n".encode("utf-8"))
-    parts.extend(
-        (
-            f'Content-Disposition: form-data; name="document"; filename="{file_name}"\r\n'
-            "Content-Type: application/vnd.openxmlformats-officedocument.spreadsheetml.sheet\r\n\r\n"
-        ).encode("utf-8")
-    )
-    parts.extend(file_bytes)
-    parts.extend(b"\r\n")
-    parts.extend(f"--{boundary}--\r\n".encode("utf-8"))
-
-    req = urlrequest.Request(
-        url=url,
-        data=bytes(parts),
-        headers={"Content-Type": f"multipart/form-data; boundary={boundary}"},
-        method="POST",
-    )
-    try:
-        with urlrequest.urlopen(req, timeout=20) as resp:
-            raw = resp.read().decode("utf-8", errors="replace")
-            LOGGER.info(
-                "Sent Telegram document inbound_sid=%s to=%s file=%s response=%s",
-                inbound_sid or "-",
-                to_number,
-                file_name,
-                raw[:200],
-            )
-    except urlerror.HTTPError as exc:
-        detail = exc.read().decode("utf-8", errors="replace")
-        LOGGER.error("Telegram document send failed status=%s body=%s", exc.code, detail[:400])
-        raise
-    except Exception as exc:
-        LOGGER.error("Telegram document send failed error=%s", exc)
-        raise
-
-
-def _telegram_chat_id_from_user(user_id: str) -> str:
-    raw = (user_id or "").strip()
-    if raw.startswith("telegram:"):
-        return raw[len("telegram:") :]
-    return raw
 
 
 def _resolve_telegram_bot_username() -> str:
-    token = (settings.telegram_bot_token or "").strip()
-    if not token:
-        return ""
-    url = f"https://api.telegram.org/bot{token}/getMe"
-    req = urlrequest.Request(url=url, method="GET")
-    try:
-        with urlrequest.urlopen(req, timeout=10) as resp:
-            payload = json.loads(resp.read().decode("utf-8", errors="replace"))
-        if not isinstance(payload, dict) or not payload.get("ok"):
-            return ""
-        result = payload.get("result") or {}
-        username = str(result.get("username") or "").strip().lstrip("@")
-        return username
-    except Exception:
-        return ""
-
-
-def _send_with_retries(kwargs: dict) -> str:
-    if not twilio_client:
-        return "-"
-    if settings.twilio_status_callback_url:
-        kwargs = dict(kwargs)
-        kwargs["status_callback"] = settings.twilio_status_callback_url
-    last_exc = None
-    total_attempts = max(1, settings.twilio_send_retries + 1)
-    for attempt in range(1, total_attempts + 1):
-        try:
-            message = twilio_client.messages.create(**kwargs)
-            return message.sid
-        except Exception as exc:
-            last_exc = exc
-            LOGGER.warning("Twilio send attempt failed attempt=%d/%d error=%s", attempt, total_attempts, exc)
-            if attempt == total_attempts:
-                raise
-            continue
-    if last_exc:
-        raise last_exc
-    return "-"
-
-
-def _template_for_state(state: str) -> str:
-    mapping = {
-        "ASK_PATIENT_TYPE": settings.twilio_template_patient_type_sid,
-        "ASK_GENDER": settings.twilio_template_gender_sid,
-        "ASK_PHONE": settings.twilio_template_phone_choice_sid,
-        "ASK_CLINIC": settings.twilio_template_clinic_sid,
-        "ASK_REASON": settings.twilio_template_reason_sid,
-        "ASK_DATE": settings.twilio_template_date_sid,
-        "ASK_TIME": settings.twilio_template_time_sid,
-    }
-    return mapping.get(state, "")
-
-
-def _content_variables_for_state(state: str, fsm) -> dict:
-    if state == "ASK_DATE":
-        dates = fsm._date_options()
-        if len(dates) < 3:
-            return {}
-        d1, d2, d3 = dates[:3]
-        return {"1": d1, "2": d2, "3": d3}
-    if state == "ASK_TIME":
-        slots = fsm._suggested_slots()
-        if len(slots) < 3:
-            return {}
-        return {"1": slots[0], "2": slots[1], "3": slots[2]}
-    return {}
+    return channel_delivery.resolve_telegram_bot_username()

@@ -1,0 +1,16 @@
+[13:26:01.141]  SESSION_REDIS_MISS                load_ms=0
+[13:26:01.160]  SESSION_DB_MISS                   load_ms=0
+[13:26:01.167]  SESSION_REDIS_MISS                load_ms=0
+[13:26:01.167]  SESSION_DB_HIT                    load_ms=0
+[13:26:01.168]  SESSION_REDIS_MISS                load_ms=0
+[13:26:01.168]  SESSION_DB_HIT                    load_ms=0
+[13:26:01.169]  SESSION_REDIS_MISS                load_ms=0
+[13:26:01.169]  SESSION_DB_HIT                    load_ms=0
+[13:30:42.506]  SESSION_REDIS_MISS                load_ms=0
+[13:30:42.508]  SESSION_DB_MISS                   load_ms=0
+[13:30:42.529]  SESSION_REDIS_MISS                load_ms=0
+[13:30:42.530]  SESSION_DB_HIT                    load_ms=0
+[13:30:42.531]  SESSION_REDIS_MISS                load_ms=0
+[13:30:42.531]  SESSION_DB_HIT                    load_ms=0
+[13:30:42.532]  SESSION_REDIS_MISS                load_ms=0
+[13:30:42.532]  SESSION_DB_HIT                    load_ms=0

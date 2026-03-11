@@ -145,18 +145,8 @@ def resolve_change_target(lower: str) -> Optional[str]:
         return "ASK_DATE"
     if "clinic" in lower or "branch" in lower or "location" in lower:
         return "ASK_CLINIC"
-    if "symptom" in lower:
-        return "ASK_SYMPTOMS"
-    if "reason" in lower:
-        return "ASK_REASON"
     if "phone" in lower or "number" in lower or "contact" in lower:
         return "ASK_PHONE"
-    if "age" in lower:
-        return "ASK_AGE"
-    if "gender" in lower or "male" in lower or "female" in lower or "other" in lower:
-        return "ASK_GENDER"
-    if "old" in lower or "new" in lower or "patient type" in lower:
-        return "ASK_PATIENT_TYPE"
     if "name" in lower:
         return "ASK_NAME"
     return None
@@ -228,42 +218,6 @@ def clean_name(name: str) -> str:
                 changed = True
                 break
     return " ".join(part.capitalize() for part in cleaned.split())
-
-
-def extract_patient_type(lower: str) -> Optional[str]:
-    if re.search(r"\b(1|new|first\s*time)\b", lower):
-        return "New"
-    if re.search(r"\b(2|old|existing|returning)\b", lower):
-        return "Old"
-    return None
-
-
-def extract_appointment_mode(lower: str) -> Optional[str]:
-    if re.search(r"\b(1|online|video|virtual)\b", lower):
-        return "Online appointment"
-    if re.search(r"\b(2|walkin|walk-in|walk in|clinic\s+visit|in\s*person|inperson)\b", lower):
-        return "Walk-in appointment"
-    return None
-
-
-def extract_age(lower: str) -> Optional[int]:
-    match = re.search(r"\b(\d{1,3})\b", lower)
-    if not match:
-        return None
-    value = int(match.group(1))
-    if value < 1 or value > 120:
-        return None
-    return value
-
-
-def extract_gender(lower: str) -> Optional[str]:
-    if re.search(r"\b(1|male|m|ladka|aadmi)\b", lower):
-        return "Male"
-    if re.search(r"\b(2|female|f|ladki|mahila)\b", lower):
-        return "Female"
-    if re.search(r"\b(3|other|others|non[- ]?binary|prefer not to say)\b", lower):
-        return "Other"
-    return None
 
 
 def extract_doctor_name(text: str) -> Optional[str]:

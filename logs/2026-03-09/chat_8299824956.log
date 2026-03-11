@@ -1,0 +1,262 @@
+[10:53:47.334]  SESSION_REDIS_MISS                load_ms=0
+[10:53:47.336]  SESSION_DB_MISS                   load_ms=0
+[10:53:47.338]  SESSION_REDIS_MISS                load_ms=0
+[10:53:47.338]  SESSION_DB_HIT                    load_ms=0
+[10:53:47.340]  SESSION_REDIS_MISS                load_ms=0
+[10:53:47.340]  SESSION_DB_HIT                    load_ms=0
+[10:53:47.354]  SESSION_REDIS_MISS                load_ms=0
+[10:53:47.354]  SESSION_DB_MISS                   load_ms=0
+[10:53:47.356]  SESSION_REDIS_MISS                load_ms=0
+[10:53:47.356]  SESSION_DB_HIT                    load_ms=0
+[10:53:47.358]  SESSION_REDIS_MISS                load_ms=0
+[10:53:47.358]  SESSION_DB_HIT                    load_ms=0
+[10:53:47.377]  SESSION_REDIS_MISS                load_ms=0
+[10:53:47.377]  SESSION_DB_MISS                   load_ms=0
+[10:53:47.379]  SESSION_REDIS_MISS                load_ms=0
+[10:53:47.379]  SESSION_DB_HIT                    load_ms=0
+[10:53:47.380]  SESSION_REDIS_MISS                load_ms=0
+[10:53:47.380]  SESSION_DB_HIT                    load_ms=0
+[10:53:47.381]  SESSION_REDIS_MISS                load_ms=0
+[10:53:47.381]  SESSION_DB_HIT                    load_ms=0
+[10:53:47.395]  SESSION_REDIS_MISS                load_ms=0
+[10:53:47.396]  SESSION_DB_MISS                   load_ms=0
+[10:53:47.398]  SESSION_REDIS_MISS                load_ms=0
+[10:53:47.399]  SESSION_DB_HIT                    load_ms=0
+[10:53:47.400]  SESSION_REDIS_MISS                load_ms=0
+[10:53:47.400]  SESSION_DB_HIT                    load_ms=0
+[10:53:47.402]  SESSION_REDIS_MISS                load_ms=0
+[10:53:47.402]  SESSION_DB_HIT                    load_ms=0
+[10:53:47.418]  SESSION_REDIS_MISS                load_ms=0
+[10:53:47.418]  SESSION_DB_MISS                   load_ms=0
+[10:53:47.420]  SESSION_REDIS_MISS                load_ms=0
+[10:53:47.420]  SESSION_DB_HIT                    load_ms=0
+[10:53:47.420]  SESSION_REDIS_MISS                load_ms=0
+[10:53:47.420]  SESSION_DB_HIT                    load_ms=0
+[10:53:47.421]  SESSION_REDIS_MISS                load_ms=0
+[10:53:47.421]  SESSION_DB_HIT                    load_ms=0
+[10:53:47.421]  SESSION_REDIS_MISS                load_ms=0
+[10:53:47.422]  SESSION_DB_HIT                    load_ms=0
+[10:53:47.422]  SESSION_REDIS_MISS                load_ms=0
+[10:53:47.422]  SESSION_DB_HIT                    load_ms=0
+[10:53:47.423]  SESSION_REDIS_MISS                load_ms=0
+[10:53:47.423]  SESSION_DB_HIT                    load_ms=0
+[10:53:47.424]  SESSION_REDIS_MISS                load_ms=0
+[10:53:47.424]  SESSION_DB_HIT                    load_ms=0
+[10:53:47.437]  SESSION_REDIS_MISS                load_ms=0
+[10:53:47.437]  SESSION_DB_MISS                   load_ms=0
+[10:53:47.439]  SESSION_REDIS_MISS                load_ms=0
+[10:53:47.439]  SESSION_DB_HIT                    load_ms=0
+[10:53:47.441]  SESSION_REDIS_MISS                load_ms=0
+[10:53:47.441]  SESSION_DB_HIT                    load_ms=0
+[10:53:47.442]  SESSION_REDIS_MISS                load_ms=0
+[10:53:47.442]  SESSION_DB_HIT                    load_ms=0
+[10:53:47.443]  SESSION_REDIS_MISS                load_ms=0
+[10:53:47.443]  SESSION_DB_HIT                    load_ms=0
+[10:53:47.444]  SESSION_REDIS_MISS                load_ms=0
+[10:53:47.444]  SESSION_DB_HIT                    load_ms=0
+[10:53:47.445]  SESSION_REDIS_MISS                load_ms=0
+[10:53:47.445]  SESSION_DB_HIT                    load_ms=0
+[10:53:47.446]  SESSION_REDIS_MISS                load_ms=0
+[10:53:47.447]  SESSION_DB_HIT                    load_ms=0
+[10:53:47.467]  SESSION_REDIS_MISS                load_ms=0
+[10:53:47.467]  SESSION_DB_MISS                   load_ms=0
+[10:53:47.469]  SESSION_REDIS_MISS                load_ms=0
+[10:53:47.469]  SESSION_DB_HIT                    load_ms=0
+[10:53:47.470]  SESSION_REDIS_MISS                load_ms=0
+[10:53:47.470]  SESSION_DB_HIT                    load_ms=0
+[10:53:47.470]  SESSION_REDIS_MISS                load_ms=0
+[10:53:47.471]  SESSION_DB_HIT                    load_ms=0
+[10:53:47.473]  SESSION_REDIS_MISS                load_ms=0
+[10:53:47.473]  SESSION_DB_HIT                    load_ms=0
+[10:53:47.476]  SESSION_REDIS_MISS                load_ms=0
+[10:53:47.476]  SESSION_DB_HIT                    load_ms=0
+[10:53:47.478]  SESSION_REDIS_MISS                load_ms=0
+[10:53:47.478]  SESSION_DB_HIT                    load_ms=0
+[11:01:20.733]  WEBHOOK_ARRIVED                   sid='1228'  text='hello'
+[11:01:20.737]  SESSION_REDIS_MISS                load_ms=1
+[11:01:21.554]  SESSION_DB_MISS                   load_ms=816
+[11:01:21.559]  LOCK_ACQUIRED                     
+[11:01:21.559]  TURN_QUEUED                       sid='1228'  state='INIT'  backlog=1  ack_ms=826
+[11:01:21.561]  TURN_START                        text='hello'
+[11:01:21.564]  SESSION_REDIS_MISS                load_ms=2
+[11:01:22.258]  SESSION_DB_MISS                   load_ms=694
+[11:01:28.414]  FSM_HANDLED                       pre_state='INIT'  post_state='INIT'  fsm_ms=6155  reply='Welcome to Dr. Sanjay Vinayak clinic, Ghrdftufg. How can I help you today? Pleas'
+[11:01:28.419]  SESSION_REDIS_SAVED               save_ms=3
+[11:01:29.237]  TURN_END                          total_ms=7675  save_ms=821  post_state='INIT'
+[11:01:29.644]  SESSION_REDIS_HIT                 load_ms=59
+[11:01:30.288]  BOT_REPLY_SENT                    send_ms=1050  reply='Welcome to Dr. Sanjay Vinayak clinic, Ghrdftufg. How can I help you today? Pleas'
+[11:01:30.704]  BOT_REPLY_SENT                    send_ms=1060  reply='We are facing a delay while processing your request. Please wait, we will respon'
+[11:01:39.987]  WEBHOOK_ARRIVED                   sid='1231'  text='1'
+[11:01:39.989]  SESSION_REDIS_HIT                 load_ms=0
+[11:01:39.989]  LOCK_ACQUIRED                     
+[11:01:39.989]  TURN_QUEUED                       sid='1231'  state='INIT'  backlog=1  ack_ms=3
+[11:01:40.000]  TURN_START                        text='1'
+[11:01:40.001]  SESSION_REDIS_HIT                 load_ms=0
+[11:01:41.472]  FSM_HANDLED                       pre_state='INIT'  post_state='ASK_BOOKING_FOR'  fsm_ms=1471  reply='Welcome to Dr. Sanjay Vinayak clinic, Ghrdftufg. Sure, I can help you book an ap'
+[11:01:41.473]  SESSION_REDIS_SAVED               save_ms=0
+[11:01:42.575]  TURN_END                          total_ms=2574  save_ms=1102  post_state='ASK_BOOKING_FOR'
+[11:01:43.613]  BOT_REPLY_SENT                    send_ms=1038  reply='Welcome to Dr. Sanjay Vinayak clinic, Ghrdftufg. Sure, I can help you book an ap'
+[11:01:48.425]  WEBHOOK_ARRIVED                   sid='1233'  text='1'
+[11:01:48.427]  SESSION_REDIS_HIT                 load_ms=0
+[11:01:48.427]  LOCK_ACQUIRED                     
+[11:01:48.428]  TURN_QUEUED                       sid='1233'  state='ASK_BOOKING_FOR'  backlog=1  ack_ms=2
+[11:01:48.445]  TURN_START                        text='1'
+[11:01:48.446]  SESSION_REDIS_HIT                 load_ms=0
+[11:01:56.513]  SESSION_REDIS_HIT                 load_ms=0
+[11:01:58.003]  BOT_REPLY_SENT                    send_ms=1488  reply='We are facing a delay while processing your request. Please wait, we will respon'
+[11:01:58.259]  FSM_HANDLED                       pre_state='ASK_BOOKING_FOR'  post_state='ASK_CLINIC'  fsm_ms=9812  reply='Noted. Booking for self. Thank you, Ghrdftufg. Contact number noted: 8976547689.'
+[11:01:58.260]  SESSION_REDIS_SAVED               save_ms=0
+[11:01:58.858]  TURN_END                          total_ms=10413  save_ms=599  post_state='ASK_CLINIC'
+[11:01:59.909]  BOT_REPLY_SENT                    send_ms=1049  reply='Noted. Booking for self. Thank you, Ghrdftufg. Contact number noted: 8976547689.'
+[11:02:05.232]  WEBHOOK_ARRIVED                   sid='1236'  text='1'
+[11:02:05.234]  SESSION_REDIS_HIT                 load_ms=0
+[11:02:05.235]  LOCK_ACQUIRED                     
+[11:02:05.235]  TURN_QUEUED                       sid='1236'  state='ASK_CLINIC'  backlog=1  ack_ms=3
+[11:02:05.236]  TURN_START                        text='1'
+[11:02:05.237]  SESSION_REDIS_HIT                 load_ms=0
+[11:02:05.240]  FSM_HANDLED                       pre_state='ASK_CLINIC'  post_state='ASK_DATE'  fsm_ms=2  reply='Please choose appointment date: 1. Tomorrow (2026-03-10) Press "0" to go back. R'
+[11:02:05.240]  SESSION_REDIS_SAVED               save_ms=0
+[11:02:06.061]  TURN_END                          total_ms=825  save_ms=821  post_state='ASK_DATE'
+[11:02:07.097]  BOT_REPLY_SENT                    send_ms=1035  reply='Please choose appointment date: 1. Tomorrow (2026-03-10) Press "0" to go back. R'
+[11:02:11.556]  WEBHOOK_ARRIVED                   sid='1238'  text='1'
+[11:02:11.835]  SESSION_REDIS_HIT                 load_ms=0
+[11:02:11.836]  LOCK_ACQUIRED                     
+[11:02:11.836]  TURN_QUEUED                       sid='1238'  state='ASK_DATE'  backlog=1  ack_ms=280
+[11:02:11.837]  TURN_START                        text='1'
+[11:02:11.838]  SESSION_REDIS_HIT                 load_ms=1
+[11:02:11.842]  FSM_HANDLED                       pre_state='ASK_DATE'  post_state='ASK_TIME'  fsm_ms=2  reply='Date noted: 2026-03-10. Please choose preferred time period: 1. Morning 2. After'
+[11:02:11.843]  SESSION_REDIS_SAVED               save_ms=1
+[11:02:12.473]  TURN_END                          total_ms=636  save_ms=632  post_state='ASK_TIME'
+[11:02:13.664]  BOT_REPLY_SENT                    send_ms=1190  reply='Date noted: 2026-03-10. Please choose preferred time period: 1. Morning 2. After'
+[11:02:17.331]  WEBHOOK_ARRIVED                   sid='1240'  text='2'
+[11:02:17.333]  SESSION_REDIS_HIT                 load_ms=0
+[11:02:17.333]  LOCK_ACQUIRED                     
+[11:02:17.334]  TURN_QUEUED                       sid='1240'  state='ASK_TIME'  backlog=1  ack_ms=3
+[11:02:17.336]  TURN_START                        text='2'
+[11:02:17.337]  SESSION_REDIS_HIT                 load_ms=0
+[11:02:17.340]  FSM_HANDLED                       pre_state='ASK_TIME'  post_state='ASK_TIME'  fsm_ms=2  reply='Please choose a slot: 1. 12:00 PM - 01:00 PM 2. 01:00 PM - 02:00 PM 3. 02:00 PM '
+[11:02:17.341]  SESSION_REDIS_SAVED               save_ms=0
+[11:02:18.262]  TURN_END                          total_ms=925  save_ms=921  post_state='ASK_TIME'
+[11:02:19.424]  BOT_REPLY_SENT                    send_ms=1162  reply='Please choose a slot: 1. 12:00 PM - 01:00 PM 2. 01:00 PM - 02:00 PM 3. 02:00 PM '
+[11:02:23.345]  WEBHOOK_ARRIVED                   sid='1242'  text='2'
+[11:02:23.347]  SESSION_REDIS_HIT                 load_ms=0
+[11:02:23.348]  LOCK_ACQUIRED                     
+[11:02:23.348]  TURN_QUEUED                       sid='1242'  state='ASK_TIME'  backlog=1  ack_ms=2
+[11:02:23.349]  TURN_START                        text='2'
+[11:02:23.349]  SESSION_REDIS_HIT                 load_ms=0
+[11:02:23.352]  FSM_HANDLED                       pre_state='ASK_TIME'  post_state='CONFIRM'  fsm_ms=1  reply='Time noted: 01:00 PM. Please confirm your appointment details: Name: Ghrdftufg C'
+[11:02:23.352]  SESSION_REDIS_SAVED               save_ms=0
+[11:02:24.403]  TURN_END                          total_ms=1053  save_ms=1050  post_state='CONFIRM'
+[11:02:25.785]  BOT_REPLY_SENT                    send_ms=1381  reply='Time noted: 01:00 PM. Please confirm your appointment details: Name: Ghrdftufg C'
+[11:02:29.193]  WEBHOOK_ARRIVED                   sid='1244'  text='1'
+[11:02:29.473]  SESSION_REDIS_HIT                 load_ms=0
+[11:02:29.474]  LOCK_ACQUIRED                     
+[11:02:29.474]  TURN_QUEUED                       sid='1244'  state='CONFIRM'  backlog=1  ack_ms=281
+[11:02:29.475]  TURN_START                        text='1'
+[11:02:29.476]  SESSION_REDIS_HIT                 load_ms=0
+[11:02:31.675]  FSM_HANDLED                       pre_state='CONFIRM'  post_state='COMPLETED'  fsm_ms=2198  reply='Appointment booked successfully. *Patient ID:* 5  Name: Ghrdftufg Contact: 89765'
+[11:02:31.675]  SESSION_REDIS_SAVED               save_ms=0
+[11:02:32.621]  TURN_END                          total_ms=3146  save_ms=946  post_state='COMPLETED'
+[11:02:33.965]  BOT_REPLY_SENT                    send_ms=1232  reply='Appointment booked successfully. *Patient ID:* 5  Name: Ghrdftufg Contact: 89765'
+[11:05:17.775]  BOT_REPLY_SENT                    send_ms=1174  reply='Update: Your appointment at Aditya on 2026-03-10 01:00 PM was cancelled by the d'
+[11:05:44.775]  WEBHOOK_ARRIVED                   sid='1247'  text='HELLO I NEED TO BOOK AN APPOINTMENT'
+[11:05:44.777]  SESSION_REDIS_HIT                 load_ms=0
+[11:05:44.778]  LOCK_ACQUIRED                     
+[11:05:44.778]  TURN_QUEUED                       sid='1247'  state='COMPLETED'  backlog=1  ack_ms=2
+[11:05:44.779]  TURN_START                        text='HELLO I NEED TO BOOK AN APPOINTMENT'
+[11:05:44.781]  SESSION_REDIS_HIT                 load_ms=0
+[11:05:45.296]  FSM_HANDLED                       pre_state='COMPLETED'  post_state='ASK_BOOKING_FOR'  fsm_ms=515  reply='Who is this appointment for? 1. Self 2. Another person Press "0" to go back.'
+[11:05:45.297]  SESSION_REDIS_SAVED               save_ms=0
+[11:05:46.422]  TURN_END                          total_ms=1642  save_ms=1125  post_state='ASK_BOOKING_FOR'
+[11:05:47.321]  BOT_REPLY_SENT                    send_ms=841  reply='Who is this appointment for? 1. Self 2. Another person Press "0" to go back.'
+[11:33:08.881]  WEBHOOK_ARRIVED                   sid='1249'  text='HELLO , I NEED TO BOOK AN APPOINTMENT'
+[11:33:08.906]  SESSION_REDIS_MISS                load_ms=3
+[11:33:09.939]  SESSION_DB_MISS                   load_ms=1034
+[11:33:09.942]  LOCK_ACQUIRED                     
+[11:33:09.942]  TURN_QUEUED                       sid='1249'  state='INIT'  backlog=1  ack_ms=1061
+[11:33:10.038]  TURN_START                        text='HELLO , I NEED TO BOOK AN APPOINTMENT'
+[11:33:10.039]  SESSION_REDIS_MISS                load_ms=0
+[11:33:10.618]  SESSION_DB_MISS                   load_ms=578
+[11:33:18.202]  SESSION_REDIS_MISS                load_ms=3
+[11:33:19.088]  SESSION_DB_MISS                   load_ms=886
+[11:33:20.333]  BOT_REPLY_SENT                    send_ms=1245  reply='We are facing a delay while processing your request. Please wait, we will respon'
+[11:33:34.418]  FSM_HANDLED                       pre_state='INIT'  post_state='ASK_BOOKING_FOR'  fsm_ms=23800  reply='Welcome to Dr. Sanjay Vinayak clinic, Ghrdftufg. Sure, I can help you book an ap'
+[11:33:34.420]  SESSION_REDIS_SAVED               save_ms=1
+[11:33:35.527]  TURN_END                          total_ms=25488  save_ms=1108  post_state='ASK_BOOKING_FOR'
+[11:33:36.392]  BOT_REPLY_SENT                    send_ms=865  reply='Welcome to Dr. Sanjay Vinayak clinic, Ghrdftufg. Sure, I can help you book an ap'
+[11:33:44.759]  WEBHOOK_ARRIVED                   sid='1252'  text='1'
+[11:33:44.772]  SESSION_REDIS_HIT                 load_ms=0
+[11:33:44.773]  LOCK_ACQUIRED                     
+[11:33:44.773]  TURN_QUEUED                       sid='1252'  state='ASK_BOOKING_FOR'  backlog=1  ack_ms=14
+[11:33:44.825]  TURN_START                        text='1'
+[11:33:44.825]  SESSION_REDIS_HIT                 load_ms=0
+[11:33:45.984]  FSM_HANDLED                       pre_state='ASK_BOOKING_FOR'  post_state='ASK_CLINIC'  fsm_ms=1159  reply='Noted. Booking for self. Thank you, Ghrdftufg. Contact number noted: 8976547689.'
+[11:33:45.985]  SESSION_REDIS_SAVED               save_ms=0
+[11:33:46.706]  TURN_END                          total_ms=1881  save_ms=721  post_state='ASK_CLINIC'
+[11:33:47.922]  BOT_REPLY_SENT                    send_ms=1215  reply='Noted. Booking for self. Thank you, Ghrdftufg. Contact number noted: 8976547689.'
+[11:33:50.018]  WEBHOOK_ARRIVED                   sid='1254'  text='1'
+[11:33:50.019]  SESSION_REDIS_HIT                 load_ms=0
+[11:33:50.020]  LOCK_ACQUIRED                     
+[11:33:50.020]  TURN_QUEUED                       sid='1254'  state='ASK_CLINIC'  backlog=1  ack_ms=3
+[11:33:50.021]  TURN_START                        text='1'
+[11:33:50.022]  SESSION_REDIS_HIT                 load_ms=0
+[11:33:50.026]  FSM_HANDLED                       pre_state='ASK_CLINIC'  post_state='ASK_DATE'  fsm_ms=3  reply='Please choose appointment date: 1. Tomorrow (2026-03-10) Press "0" to go back. R'
+[11:33:50.027]  SESSION_REDIS_SAVED               save_ms=0
+[11:33:50.926]  TURN_END                          total_ms=904  save_ms=899  post_state='ASK_DATE'
+[11:33:51.926]  BOT_REPLY_SENT                    send_ms=999  reply='Please choose appointment date: 1. Tomorrow (2026-03-10) Press "0" to go back. R'
+[11:33:55.610]  WEBHOOK_ARRIVED                   sid='1256'  text='1'
+[11:33:55.613]  SESSION_REDIS_HIT                 load_ms=0
+[11:33:55.613]  LOCK_ACQUIRED                     
+[11:33:55.613]  TURN_QUEUED                       sid='1256'  state='ASK_DATE'  backlog=1  ack_ms=3
+[11:33:55.614]  TURN_START                        text='1'
+[11:33:55.615]  SESSION_REDIS_HIT                 load_ms=0
+[11:33:55.617]  FSM_HANDLED                       pre_state='ASK_DATE'  post_state='ASK_TIME'  fsm_ms=2  reply='Date noted: 2026-03-10. Please choose preferred time period: 1. Morning 2. After'
+[11:33:55.621]  SESSION_REDIS_SAVED               save_ms=2
+[11:33:56.896]  TURN_END                          total_ms=1281  save_ms=1277  post_state='ASK_TIME'
+[11:33:57.924]  BOT_REPLY_SENT                    send_ms=1027  reply='Date noted: 2026-03-10. Please choose preferred time period: 1. Morning 2. After'
+[11:34:01.436]  WEBHOOK_ARRIVED                   sid='1258'  text='3'
+[11:34:01.437]  SESSION_REDIS_HIT                 load_ms=0
+[11:34:01.439]  LOCK_ACQUIRED                     
+[11:34:01.439]  TURN_QUEUED                       sid='1258'  state='ASK_TIME'  backlog=1  ack_ms=3
+[11:34:01.782]  TURN_START                        text='3'
+[11:34:01.783]  SESSION_REDIS_HIT                 load_ms=0
+[11:34:01.785]  FSM_HANDLED                       pre_state='ASK_TIME'  post_state='ASK_TIME'  fsm_ms=1  reply='Please choose a slot: 1. 04:00 PM - 05:00 PM Press "0" to go back. Reply with 1,'
+[11:34:01.785]  SESSION_REDIS_SAVED               save_ms=0
+[11:34:02.702]  TURN_END                          total_ms=919  save_ms=916  post_state='ASK_TIME'
+[11:34:03.778]  BOT_REPLY_SENT                    send_ms=1031  reply='Please choose a slot: 1. 04:00 PM - 05:00 PM Press "0" to go back. Reply with 1,'
+[11:34:07.245]  WEBHOOK_ARRIVED                   sid='1260'  text='1'
+[11:34:07.877]  SESSION_REDIS_HIT                 load_ms=205
+[11:34:08.154]  LOCK_ACQUIRED                     
+[11:34:08.154]  TURN_QUEUED                       sid='1260'  state='ASK_TIME'  backlog=1  ack_ms=909
+[11:34:08.155]  TURN_START                        text='1'
+[11:34:08.155]  SESSION_REDIS_HIT                 load_ms=0
+[11:34:08.157]  FSM_HANDLED                       pre_state='ASK_TIME'  post_state='CONFIRM'  fsm_ms=1  reply='Time noted: 04:00 PM. Please confirm your appointment details: Name: Ghrdftufg C'
+[11:34:08.159]  SESSION_REDIS_SAVED               save_ms=1
+[11:34:08.961]  TURN_END                          total_ms=805  save_ms=802  post_state='CONFIRM'
+[11:34:10.337]  BOT_REPLY_SENT                    send_ms=1376  reply='Time noted: 04:00 PM. Please confirm your appointment details: Name: Ghrdftufg C'
+[11:34:14.011]  WEBHOOK_ARRIVED                   sid='1262'  text='1'
+[11:34:14.013]  SESSION_REDIS_HIT                 load_ms=0
+[11:34:14.013]  LOCK_ACQUIRED                     
+[11:34:14.014]  TURN_QUEUED                       sid='1262'  state='CONFIRM'  backlog=1  ack_ms=2
+[11:34:14.015]  TURN_START                        text='1'
+[11:34:14.017]  SESSION_REDIS_HIT                 load_ms=1
+[11:34:17.424]  FSM_HANDLED                       pre_state='CONFIRM'  post_state='COMPLETED'  fsm_ms=3407  reply='Appointment booked successfully. *Patient ID:* 11  Name: Ghrdftufg Contact: 8976'
+[11:34:17.425]  SESSION_REDIS_SAVED               save_ms=0
+[11:34:18.491]  TURN_END                          total_ms=4476  save_ms=1066  post_state='COMPLETED'
+[11:34:19.860]  BOT_REPLY_SENT                    send_ms=1368  reply='Appointment booked successfully. *Patient ID:* 11  Name: Ghrdftufg Contact: 8976'
+[22:53:36.416]  WEBHOOK_ARRIVED                   sid='1264'  text='Hello'
+[22:53:36.421]  SESSION_REDIS_MISS                load_ms=1
+[22:53:36.829]  SESSION_DB_MISS                   load_ms=408
+[22:53:36.872]  LOCK_ACQUIRED                     
+[22:53:36.873]  TURN_QUEUED                       sid='1264'  state='INIT'  backlog=1  ack_ms=456
+[22:53:36.877]  TURN_START                        text='Hello'
+[22:53:36.878]  SESSION_REDIS_MISS                load_ms=0
+[22:53:37.041]  WEBHOOK_ARRIVED                   sid='1265'  text='Hello'
+[22:53:37.044]  SESSION_REDIS_MISS                load_ms=0
+[22:53:37.415]  SESSION_DB_MISS                   load_ms=536
+[22:53:37.654]  SESSION_DB_MISS                   load_ms=610
+[22:53:38.057]  LOCK_BUSY                         
+[22:53:40.500]  FSM_HANDLED                       pre_state='INIT'  post_state='ASK_EXISTING_BOOKING_ACTION'  fsm_ms=3046  reply='You already have a booked appointment: Booking Number: 11 Clinic: Aditya Date: 2'
+[22:53:40.501]  SESSION_REDIS_SAVED               save_ms=1
+[22:53:41.334]  TURN_END                          total_ms=4457  save_ms=834  post_state='ASK_EXISTING_BOOKING_ACTION'
+[22:53:42.220]  BOT_REPLY_SENT                    send_ms=885  reply='You already have a booked appointment: Booking Number: 11 Clinic: Aditya Date: 2'

@@ -12,6 +12,8 @@ from openpyxl import Workbook
 from openpyxl.styles import Font
 
 from src.repositories.booking_repository import BookingRepository
+from src.repositories.notification_repository import NotificationEvent
+from src.runtime.kafka_notification_bridge import KafkaNotificationBridge
 
 
 LOGGER = logging.getLogger(__name__)
@@ -92,6 +94,7 @@ class AutomationScheduler:
         doctor_reminder_lead_minutes: int = 10,
         doctor_reminder_window_seconds: int = 30,
         doctor_reminder_lead_minutes_list: Optional[list] = None,
+        notification_bridge: Optional[KafkaNotificationBridge] = None,
     ) -> None:
         self._booking_repository = booking_repository
         self._send_message_fn = send_message_fn
@@ -111,6 +114,7 @@ class AutomationScheduler:
         self._stop = threading.Event()
         self._threads: list[threading.Thread] = []
         self._worker_id = f"scheduler-{os.getpid()}-{uuid.uuid4().hex[:8]}"
+        self._notification_bridge = notification_bridge
         self._metrics_lock = threading.Lock()
         self._metrics = {
             "reminder_runs": 0,
@@ -135,6 +139,8 @@ class AutomationScheduler:
     def start(self) -> None:
         if not self._enabled or self._threads:
             return
+        if self._notification_bridge:
+            self._notification_bridge.start()
         if self._doctor_reminder_enabled and self._booking_repository:
             thread = threading.Thread(target=self._reminder_loop, name="doctor-reminder", daemon=True)
             thread.start()
@@ -145,12 +151,15 @@ class AutomationScheduler:
         for thread in self._threads:
             thread.join(timeout=2.0)
         self._threads.clear()
+        if self._notification_bridge:
+            self._notification_bridge.stop()
 
     def snapshot(self) -> dict:
         with self._metrics_lock:
             return {
                 **self._metrics,
                 "alive_workers": sum(1 for t in self._threads if t.is_alive()),
+                "notification_bridge": self._notification_bridge.snapshot() if self._notification_bridge else {},
             }
 
     def _reminder_loop(self) -> None:
@@ -373,49 +382,63 @@ class AutomationScheduler:
             limit=200,
             worker_id=self._worker_id,
         )
+        if not events:
+            return
         sent = 0
         failed = 0
-        max_attempts = 5
-        for event in events:
-            try:
-                to_number = self._notification_destination(event)
-                if not to_number:
-                    self._booking_repository.mark_notification_event_retry(
-                        notification_id=event.notification_id,
-                        error_text="No patient destination (phone/chat id) available.",
-                        backoff_seconds=120,
-                        max_attempts=max_attempts,
-                    )
+        queued = 0
+        if self._notification_bridge:
+            queued, sent, failed = self._notification_bridge.process_pending_events(events)
+        else:
+            for event in events:
+                if self._process_notification_event(event):
+                    sent += 1
+                else:
                     failed += 1
-                    continue
-
-                text = self._event_message_text(event)
-                provider_sid = self._send_message_fn(to_number, text)
-                self._booking_repository.mark_notification_event_status(
-                    notification_id=event.notification_id,
-                    status="SENT",
-                    provider_message_sid=str(provider_sid or ""),
-                )
-                sent += 1
-            except Exception as exc:
-                backoff = min(1800, 60 * (2 ** max(0, int(event.attempt_count))))
-                self._booking_repository.mark_notification_event_retry(
-                    notification_id=event.notification_id,
-                    error_text=str(exc),
-                    backoff_seconds=backoff,
-                    max_attempts=max_attempts,
-                )
-                failed += 1
         self._inc_metric("event_runs", 1)
         self._inc_metric("event_sent", sent)
         self._inc_metric("event_failed", failed)
         if events:
             LOGGER.info(
-                "Event notifications processed queued=%d sent=%d failed=%d",
+                "Event notifications processed queued=%d sent=%d failed=%d kafka_enqueued=%d",
                 len(events),
                 sent,
                 failed,
+                queued,
             )
+
+    def _process_notification_event(self, event: NotificationEvent) -> bool:
+        if not self._booking_repository:
+            return False
+        max_attempts = 5
+        try:
+            to_number = self._notification_destination(event)
+            if not to_number:
+                self._booking_repository.mark_notification_event_retry(
+                    notification_id=event.notification_id,
+                    error_text="No patient destination (phone/chat id) available.",
+                    backoff_seconds=120,
+                    max_attempts=max_attempts,
+                )
+                return False
+
+            text = self._event_message_text(event)
+            provider_sid = self._send_message_fn(to_number, text)
+            self._booking_repository.mark_notification_event_status(
+                notification_id=event.notification_id,
+                status="SENT",
+                provider_message_sid=str(provider_sid or ""),
+            )
+            return True
+        except Exception as exc:
+            backoff = min(1800, 60 * (2 ** max(0, int(event.attempt_count))))
+            self._booking_repository.mark_notification_event_retry(
+                notification_id=event.notification_id,
+                error_text=str(exc),
+                backoff_seconds=backoff,
+                max_attempts=max_attempts,
+            )
+            return False
 
     def _notification_destination(self, event) -> str:
         destination = (event.destination or "").strip()

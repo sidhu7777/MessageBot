@@ -21,3 +21,12 @@ KEYS msgbot:avail:*
 
 
  GET msgbot:sess:telegram:8299824956
+
+
+
+
+ curl -i -X POST `
+  https://graph.facebook.com/v22.0/938325149373696/messages `
+  -H 'Authorization: Bearer EAAZA4z74FThQBQ2SCtODvrGXUh41MiM5KIHSLrz5ySeFxKZA81y8TcZAgBCWzO41PNMfpcGmc4ZBV990nBGsD7sTlq9xoZCJriap9VwZBxdKA88tC4UrRR8KUZBPqf9iqohEZAqlTBD3VsX7bqcSBDWCq7jqZA7NFiHzcExdkC6hsCxwZCKnYqbDTf7uTJwSk7iXiDZChDRxZAr3RXi4uh9wETBXyJJsTYVr5J71HVJHsspDs0yiJZC3eTCnXqHbO0JM4aGeSiphHyIH65wjBkp5DTrSGIgZDZD' `
+  -H 'Content-Type: application/json' `
+  -d '{ \"messaging_product\": \"whatsapp\", \"to\": \"\", \"type\": \"template\", \"template\": { \"name\": \"hello_world\", \"language\": { \"code\": \"en_US\" } } }'

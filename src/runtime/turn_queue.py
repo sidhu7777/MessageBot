@@ -18,6 +18,8 @@ class TurnTask:
     pre_state: str
     attempt: int = 0
     enqueue_ts: float = field(default_factory=time.time)
+    send_started: threading.Event = field(default_factory=threading.Event)
+    timeout_notified: threading.Event = field(default_factory=threading.Event)
 
 
 class TurnQueueProcessor:
@@ -37,6 +39,7 @@ class TurnQueueProcessor:
         self.worker_count = worker_count
         self.retry_attempts = max(0, retry_attempts)
         self._processing_timeout_seconds = max(0.0, float(processing_timeout_seconds))
+        self._timeout_grace_seconds = 0.75
         self._process_fn = process_fn
         self._send_fn = send_fn
         try:
@@ -122,6 +125,11 @@ class TurnQueueProcessor:
             def _timeout_watchdog() -> None:
                 if done_event.wait(timeout=timeout_seconds):
                     return
+                if task.send_started.wait(timeout=self._timeout_grace_seconds):
+                    return
+                if task.timeout_notified.is_set():
+                    return
+                task.timeout_notified.set()
                 try:
                     self._timeout_fn(
                         task,
@@ -142,6 +150,7 @@ class TurnQueueProcessor:
                 reply, post_state, fsm = result
             else:
                 reply, post_state = result
+            task.send_started.set()
             if self._send_fn_accepts_fsm:
                 self._send_fn(task.from_number, reply, post_state, task.inbound_sid, fsm)
             else:
@@ -188,7 +197,8 @@ class TurnQueueProcessor:
                 retry_timer.start()
             else:
                 # Send "busy" message only once — on final failure
-                if is_timeout and self._timeout_fn:
+                if is_timeout and self._timeout_fn and not task.timeout_notified.is_set():
+                    task.timeout_notified.set()
                     try:
                         self._timeout_fn(task, exc)
                     except Exception:

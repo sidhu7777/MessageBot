@@ -9,12 +9,7 @@ from src.repositories.scheduling_repository import SchedulingRepository
 
 
 class BookingRepository(CoreBookingRepository):
-    @classmethod
-    def from_env(cls) -> Optional["BookingRepository"]:
-        config = _config_from_env()
-        if not config:
-            return None
-        return cls(config)
+    pass
 
 
 def repositories_from_env() -> Tuple[Optional[BookingRepository], Optional[SchedulingRepository]]:

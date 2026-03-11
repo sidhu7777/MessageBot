@@ -1,0 +1,124 @@
+flowchart LR
+    subgraph Channels[Inbound Channels]
+        TG[Telegram user]
+        WA1[WhatsApp via Twilio]
+        WA2[WhatsApp via Meta]
+        WA3[WhatsApp via Infobip]
+        QR[QR / Web patient page]
+    end
+
+    subgraph FastAPI[FastAPI App]
+        Main[main.py]
+        WH[register_webhook_routes]
+        QRPage[GET /qr/checkin]
+        QRSubmit[POST /qr/checkin/submit]
+        Health[/health + /health/queue]
+    end
+
+    subgraph Runtime[Runtime Layer]
+        Dedup[PersistentMessageSidStore]
+        Guard[UserProcessingGuard]
+        Buffer[UserTurnBuffer]
+        KTurn[KafkaTurnBridge]
+        TurnQ[TurnQueueProcessor]
+        Sess[SessionManager]
+        FSM[AppointmentFSM]
+        Delivery[ChannelDelivery]
+        Logger[chat_logger]
+    end
+
+    subgraph Async[Async / Background]
+        KNotif[KafkaNotificationBridge]
+        Scheduler[AutomationScheduler]
+        OverflowPoll[Overflow poller]
+        CachePoll[Doctor cache invalidation poller]
+    end
+
+    subgraph Service[Domain Services]
+        QRService[QrCheckinService]
+        LLM[LLMClient + llm.tasks]
+        NLU[extractors + initial_router + language_detector]
+    end
+
+    subgraph Repo[Repositories]
+        BookRepo[BookingRepository]
+        SchedRepo[SchedulingRepository]
+        ConvRepo[ConversationRepository]
+    end
+
+    subgraph Stores[Persistent Stores]
+        Redis[(Redis)]
+        Kafka[(Kafka)]
+        MySQL[(MySQL)]
+        Files[data/*.jsonl + logs/*]
+    end
+
+    TG --> WH
+    WA1 --> WH
+    WA2 --> WH
+    WA3 --> WH
+    QR --> QRPage
+    QR --> QRSubmit
+
+    Main --> WH
+    Main --> QRPage
+    Main --> QRSubmit
+    Main --> Health
+
+    WH --> Dedup
+    WH --> Guard
+    WH --> Buffer
+    WH --> KTurn
+    KTurn --> Kafka
+    Kafka --> KTurn
+    KTurn --> TurnQ
+
+    TurnQ --> Sess
+    Sess --> Redis
+    Sess --> ConvRepo
+    ConvRepo --> MySQL
+
+    TurnQ --> FSM
+    FSM --> NLU
+    FSM --> LLM
+    FSM --> BookRepo
+    FSM --> SchedRepo
+    BookRepo --> MySQL
+    SchedRepo --> MySQL
+    SchedRepo --> Redis
+
+    FSM --> Sess
+    TurnQ --> Delivery
+    Delivery --> TG
+    Delivery --> WA1
+    Delivery --> WA2
+    Delivery --> WA3
+
+    WH --> Logger
+    TurnQ --> Logger
+    QRSubmit --> Logger
+    Logger --> Files
+    Dedup --> Files
+
+    QRPage --> QRService
+    QRSubmit --> QRService
+    QRService --> BookRepo
+    QRService --> SchedRepo
+    QRService --> MySQL
+
+    Main --> Scheduler
+    Main --> OverflowPoll
+    Main --> CachePoll
+
+    OverflowPoll --> ConvRepo
+    OverflowPoll --> KTurn
+
+    CachePoll --> SchedRepo
+    CachePoll --> Redis
+    CachePoll --> MySQL
+
+    Scheduler --> BookRepo
+    Scheduler --> KNotif
+    KNotif --> Kafka
+    Kafka --> KNotif
+    KNotif --> Delivery

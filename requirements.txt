@@ -10,3 +10,4 @@ httpx
 openpyxl
 
 redis
+kafka-python

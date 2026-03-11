@@ -1,0 +1,4 @@
+[13:26:17.672]  SESSION_REDIS_MISS                load_ms=3
+[13:26:18.249]  SESSION_DB_MISS                   load_ms=576
+[13:31:04.525]  SESSION_REDIS_MISS                load_ms=0
+[13:31:06.168]  SESSION_DB_MISS                   load_ms=1641
