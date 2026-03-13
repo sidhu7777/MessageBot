@@ -1,0 +1,55 @@
+graph LR
+    START[Start]
+    INIT["INIT<br/>(bold)"]
+    BOOKING_FOR["ASK_BOOKING_FOR"]
+    NAME["ASK_NAME"]
+    PHONE["ASK_PHONE"]
+    CLINIC["ASK_CLINIC"]
+    DATE["ASK_DATE"]
+    TIME["ASK_TIME"]
+    CONFIRM["CONFIRM"]
+    COMPLETED["COMPLETED<br/>(success)"]
+    
+    AVAIL_DATE["ASK_AVAILABILITY_DATE"]
+    AVAIL_DETAILS["ASK_AVAILABILITY_DETAILS"]
+    
+    EXISTING_ACTION["ASK_EXISTING_BOOKING_ACTION"]
+    EXISTING_PICK["ASK_EXISTING_BOOKING_PICK"]
+    CONFIRM_RESCHEDULE["CONFIRM_RESCHEDULE"]
+    
+    MAX_ACTIVE["ASK_MAX_ACTIVE_BOOKINGS_ACTION"]
+    CHANGE["ASK_CHANGE_FIELD"]
+    CANCELLED["CANCELLED<br/>(end)"]
+    
+    START -->|""| INIT
+    INIT -->|hello/hi| BOOKING_FOR
+    INIT -->|availability| AVAIL_DATE
+    
+    AVAIL_DATE -->|pick date| AVAIL_DETAILS
+    AVAIL_DETAILS -->|book| BOOKING_FOR
+    
+    BOOKING_FOR -->|self/other| NAME
+    NAME -->|valid| PHONE
+    PHONE -->|valid| CLINIC
+    CLINIC -->|pick| DATE
+    DATE -->|pick| TIME
+    TIME -->|pick| CONFIRM
+    CONFIRM -->|confirm| COMPLETED
+    
+    INIT -->|existing| EXISTING_ACTION
+    EXISTING_ACTION -->|multi| EXISTING_PICK
+    EXISTING_PICK -->|reschedule| CONFIRM_RESCHEDULE
+    CONFIRM_RESCHEDULE -->|confirm| COMPLETED
+    EXISTING_PICK -->|cancel| COMPLETED
+    
+    BOOKING_FOR -->|limit| MAX_ACTIVE
+    MAX_ACTIVE -->|change| CHANGE
+    MAX_ACTIVE -->|cancel| CANCELLED
+    CHANGE -->|restart| COMPLETED
+    
+    COMPLETED -->|restart| INIT
+    
+    style START fill:#ecebfd,stroke:#7e78cc
+    style INIT fill:#ecebfd,stroke:#7e78cc
+    style COMPLETED fill:#eaf8ee,stroke:#4a9b68
+    style CANCELLED fill:#eaf8ee,stroke:#4a9b68

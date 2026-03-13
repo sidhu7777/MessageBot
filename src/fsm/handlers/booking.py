@@ -87,7 +87,7 @@ def handle_ask_booking_for_state(fsm: "AppointmentFSM", lower: str) -> str:
 def handle_ask_name_state(fsm: "AppointmentFSM", text: str, lower: str) -> str:
     name = extract_name(text)
     if not name:
-        rerouted, detected_language = route_initial_decision(
+        rerouted, detected_language, _ = route_initial_decision(
             llm_client=fsm.llm_client,
             enable_llm_polish=fsm.enable_llm_polish,
             text=text,

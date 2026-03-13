@@ -1,0 +1,2 @@
+[15:41:51.472]  QR_SUBMIT_RECEIVED                doctor_id=1  clinic_id=1  patient_name='Amiy'  phone='9595758688'
+[15:41:56.586]  QR_SUBMIT_FAILED                  status='error'  message='Unable to confirm QR booking: Doctor schedule is not configured for this clinic.'  appointment_date=''  appointment_time=''  clinic_name=''  doctor_name=''

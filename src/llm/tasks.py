@@ -6,6 +6,87 @@ from typing import Any, Dict, Optional
 from src.llm.client import LLMClient
 
 
+def llm_classify_initial_message(
+    llm_client: LLMClient,
+    enable_llm_polish: bool,
+    text: str,
+    min_confidence: float = 0.70,
+) -> Dict[str, Any]:
+    if not enable_llm_polish:
+        return {}
+    try:
+        system = (
+            "Classify the first user message for a medical appointment assistant. "
+            "User may write in English, Hindi (Devanagari), or Hinglish, including typos. "
+            "Focus on the user's main intent, not spelling quality. "
+            "Mark abuse as ABUSE only if the text is clearly insulting, offensive, or abusive. "
+            "Booking requests are not abuse. "
+            "Return strict JSON only with these keys and no extras: "
+            "{\"intent\":\"BOOK_APPOINTMENT|CHECK_AVAILABILITY|GREETING|GENERAL_QUERY|OTHER\","
+            "\"language\":\"EN|HI|HINGLISH|UNKNOWN\","
+            "\"abuse\":\"ABUSE|NONE\","
+            "\"confidence\":0.0}."
+        )
+        user = (
+            "Examples:\n"
+            "Text: hello\n"
+            "{\"intent\":\"GREETING\",\"language\":\"EN\",\"abuse\":\"NONE\",\"confidence\":0.98}\n"
+            "Text: मुझे अपॉइंटमेंट बुक करनी है\n"
+            "{\"intent\":\"BOOK_APPOINTMENT\",\"language\":\"HI\",\"abuse\":\"NONE\",\"confidence\":0.96}\n"
+            "Text: मेरो को अपॉइंटम बुक करना है\n"
+            "{\"intent\":\"BOOK_APPOINTMENT\",\"language\":\"HI\",\"abuse\":\"NONE\",\"confidence\":0.90}\n"
+            "Text: mujhe appointment book karna hai\n"
+            "{\"intent\":\"BOOK_APPOINTMENT\",\"language\":\"HINGLISH\",\"abuse\":\"NONE\",\"confidence\":0.95}\n"
+            "Text: doctor available hai kya kal\n"
+            "{\"intent\":\"CHECK_AVAILABILITY\",\"language\":\"HINGLISH\",\"abuse\":\"NONE\",\"confidence\":0.93}\n"
+            "Text: hi madarchod\n"
+            "{\"intent\":\"OTHER\",\"language\":\"HINGLISH\",\"abuse\":\"ABUSE\",\"confidence\":0.96}\n"
+            f"Text: {text}"
+        )
+        raw = llm_client.generate(system, user).strip()
+        parsed = parse_first_json_object(raw)
+        if not parsed:
+            return {}
+
+        intent = str(parsed.get("intent", "")).upper()
+        language = str(parsed.get("language", "")).upper()
+        abuse = str(parsed.get("abuse", "")).upper()
+        try:
+            confidence = float(parsed.get("confidence", 0))
+        except (TypeError, ValueError):
+            confidence = 0.0
+
+        allowed_intents = {
+            "BOOK_APPOINTMENT",
+            "CHECK_AVAILABILITY",
+            "GREETING",
+            "GENERAL_QUERY",
+            "OTHER",
+        }
+        intent_value = intent if intent in allowed_intents else None
+
+        if language == "EN":
+            language_value = "en"
+        elif language == "HI":
+            language_value = "hi"
+        elif language == "HINGLISH":
+            language_value = "hinglish"
+        else:
+            language_value = None
+
+        if not intent_value:
+            return {}
+
+        return {
+            "intent": intent_value,
+            "language": language_value,
+            "abuse": abuse == "ABUSE",
+            "confidence": confidence if confidence >= 0.0 else min_confidence,
+        }
+    except Exception:
+        return {}
+
+
 def llm_extract_booking_prefill(
     llm_client: LLMClient,
     enable_llm_polish: bool,
@@ -92,51 +173,13 @@ def llm_route_intent_and_language(
     text: str,
     min_confidence: float = 0.70,
 ) -> tuple[Optional[str], Optional[str]]:
-    if not enable_llm_polish:
-        return None, None
-    try:
-        system = (
-            "Classify initial user message for a medical appointment assistant. "
-            "User may write in English, Hindi (Devanagari), or Hinglish. "
-            "Return strict JSON only, no markdown, no extra keys: "
-            "{\"intent\":\"BOOK_APPOINTMENT|CHECK_AVAILABILITY|GREETING|GENERAL_QUERY|OTHER\","
-            "\"language\":\"EN|HI|HINGLISH|UNKNOWN\",\"confidence\":0.0}."
-        )
-        raw = llm_client.generate(system, f"Text: {text}").strip()
-        parsed = parse_first_json_object(raw)
-        if not parsed:
-            return None, None
-
-        intent = str(parsed.get("intent", "")).upper()
-        lang = str(parsed.get("language", "")).upper()
-        try:
-            confidence = float(parsed.get("confidence", 0))
-        except (TypeError, ValueError):
-            confidence = 0.0
-
-        if confidence < min_confidence:
-            return None, None
-
-        allowed_intents = {
-            "BOOK_APPOINTMENT",
-            "CHECK_AVAILABILITY",
-            "GREETING",
-            "GENERAL_QUERY",
-            "OTHER",
-        }
-        intent_value = intent if intent in allowed_intents else None
-
-        if lang == "EN":
-            lang_value = "en"
-        elif lang == "HI":
-            lang_value = "hi"
-        elif lang == "HINGLISH":
-            lang_value = "hinglish"
-        else:
-            lang_value = None
-        return intent_value, lang_value
-    except Exception:
-        return None, None
+    parsed = llm_classify_initial_message(
+        llm_client=llm_client,
+        enable_llm_polish=enable_llm_polish,
+        text=text,
+        min_confidence=min_confidence,
+    )
+    return parsed.get("intent"), parsed.get("language")
 
 
 def parse_first_json_object(raw: str) -> Optional[Dict[str, Any]]:
@@ -215,34 +258,13 @@ def llm_detect_language(
     enable_llm_polish: bool,
     text: str,
 ) -> Optional[str]:
-    if not enable_llm_polish:
-        return None
-    try:
-        system = (
-            "Detect user message language for WhatsApp medical assistant. "
-            "Possible labels: EN, HI, HINGLISH, UNKNOWN. "
-            "Return strict JSON only: {\"language\":\"EN|HI|HINGLISH|UNKNOWN\",\"confidence\":0.0}"
-        )
-        raw = llm_client.generate(system, f"Text: {text}").strip()
-        parsed = parse_first_json_object(raw)
-        if not parsed:
-            return None
-        lang = str(parsed.get("language", "")).upper()
-        try:
-            confidence = float(parsed.get("confidence", 0))
-        except (TypeError, ValueError):
-            confidence = 0.0
-        if confidence < 0.60:
-            return None
-        if lang == "EN":
-            return "en"
-        if lang == "HI":
-            return "hi"
-        if lang == "HINGLISH":
-            return "hinglish"
-        return None
-    except Exception:
-        return None
+    parsed = llm_classify_initial_message(
+        llm_client=llm_client,
+        enable_llm_polish=enable_llm_polish,
+        text=text,
+        min_confidence=0.60,
+    )
+    return parsed.get("language")
 
 
 def llm_detect_abuse(
@@ -250,22 +272,10 @@ def llm_detect_abuse(
     enable_llm_polish: bool,
     text: str,
 ) -> bool:
-    if not enable_llm_polish:
-        return False
-    try:
-        system = (
-            "Classify if the user text contains abusive, insulting, or offensive language. "
-            "Return strict JSON only: {\"label\":\"ABUSE|NONE\",\"confidence\":0.0}."
-        )
-        raw = llm_client.generate(system, f"Text: {text}").strip()
-        parsed = parse_first_json_object(raw)
-        if not parsed:
-            return False
-        label = str(parsed.get("label", "")).upper()
-        try:
-            confidence = float(parsed.get("confidence", 0))
-        except (TypeError, ValueError):
-            confidence = 0.0
-        return label == "ABUSE" and confidence >= 0.70
-    except Exception:
-        return False
+    parsed = llm_classify_initial_message(
+        llm_client=llm_client,
+        enable_llm_polish=enable_llm_polish,
+        text=text,
+        min_confidence=0.70,
+    )
+    return bool(parsed.get("abuse"))

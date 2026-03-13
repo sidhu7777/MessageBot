@@ -760,11 +760,9 @@ def _process_turn(from_number: str, body: str) -> Tuple[str, str, object]:
 
 
 def _timeout_message(language: str, state: str) -> str:
-    if language == "hi":
-        return "Abhi processing mein delay ho raha hai. Kripaya thoda intezar karein, hum jaldi reply karenge."
-    if language == "hinglish":
-        return "Processing mein delay ho raha hai. Please wait, hum jaldi response denge."
-    return "We are facing a delay while processing your request. Please wait, we will respond shortly."
+    from src.messages.templates import get_message
+
+    return get_message(language, "timeout_processing_delay")
 
 
 def _handle_turn_timeout(task: TurnTask, exc: Exception) -> None:

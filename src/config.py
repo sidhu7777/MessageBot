@@ -1,6 +1,11 @@
 from dataclasses import dataclass
 import os
 
+from dotenv import load_dotenv
+
+
+load_dotenv()
+
 
 def _as_bool(value: str, default: bool = False) -> bool:
     if value is None:
@@ -105,7 +110,7 @@ def load_settings() -> Settings:
         app_name=os.getenv("APP_NAME", "whatsapp-appointment-bot"),
         log_level=os.getenv("LOG_LEVEL", "INFO"),
         llm_provider=os.getenv("LLM_PROVIDER", "ollama"),
-        llm_model=os.getenv("LLM_MODEL", "qwen3:0.6b"),
+        llm_model=os.getenv("LLM_MODEL_NAME", "").strip() or "qwen3:0.6b",
         ollama_base_url=os.getenv("OLLAMA_BASE_URL", "http://127.0.0.1:11434"),
         llm_timeout_seconds=float(os.getenv("LLM_TIMEOUT_SECONDS", "33")),
         ollama_auto_start=_as_bool(os.getenv("OLLAMA_AUTO_START", "true")),

@@ -1,4 +1,5 @@
 import json
+import html
 import re
 import os
 import time
@@ -281,7 +282,13 @@ class ChannelDelivery:
         if not chat_id:
             raise RuntimeError(f"Invalid Telegram destination: {to_number}")
         url = f"https://api.telegram.org/bot{self.settings.telegram_bot_token}/sendMessage"
-        payload = json.dumps({"chat_id": chat_id, "text": body}).encode("utf-8")
+        payload = json.dumps(
+            {
+                "chat_id": chat_id,
+                "text": self._format_telegram_text(body),
+                "parse_mode": "HTML",
+            }
+        ).encode("utf-8")
         req = urlrequest.Request(
             url=url,
             data=payload,
@@ -304,6 +311,15 @@ class ChannelDelivery:
         except Exception as exc:
             self.logger.error("Telegram send failed error=%s", exc)
             raise
+
+    @staticmethod
+    def _format_telegram_text(body: str) -> str:
+        escaped = html.escape(body or "")
+        return re.sub(
+            r"\*(Patient ID:|रोगी आईडी:)\*",
+            lambda match: f"<b>{match.group(1)}</b>",
+            escaped,
+        )
 
     def send_telegram_document(self, to_number: str, file_path: str, caption: str = "", inbound_sid: str = "") -> None:
         if not self.settings.telegram_bot_token:

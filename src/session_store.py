@@ -131,6 +131,8 @@ class SessionManager:
         the Redis snapshot."""
         return {
             "known_patient_name": fsm.known_patient_name,
+            "pending_init_intent": fsm.pending_init_intent,
+            "language_selected_by_user": bool(fsm.language_selected_by_user),
             "booking_for_self": fsm.booking_for_self,
             "selected_time_period": fsm.selected_time_period,
             "time_options_cache": list(fsm.time_options_cache or []),
@@ -221,6 +223,9 @@ class SessionManager:
             fsm.admin_id = int(admin_id) if admin_id is not None else None
             known_patient_name = snapshot.get("known_patient_name")
             fsm.known_patient_name = str(known_patient_name) if known_patient_name else None
+            pending_init_intent = snapshot.get("pending_init_intent")
+            fsm.pending_init_intent = str(pending_init_intent) if pending_init_intent else None
+            fsm.language_selected_by_user = bool(snapshot.get("language_selected_by_user"))
             # Restore FSM-level fields that control flow and slot selection
             bfs = snapshot.get("booking_for_self")
             fsm.booking_for_self = bool(bfs) if bfs is not None else None

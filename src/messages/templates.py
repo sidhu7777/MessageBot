@@ -5,6 +5,34 @@ def get_message(response_language: str, key: str, **kwargs: object) -> str:
         "welcome_new_patient": "Welcome to Dr. {doctor_name} clinic. How can I help you today?",
         "welcome_known_patient_booking": "Welcome to Dr. {doctor_name} clinic, {patient_name}.",
         "welcome_new_patient_booking": "Welcome to Dr. {doctor_name} clinic.",
+        "language_selection_known_patient": (
+            "Hello / नमस्ते\n\n"
+            "Welcome to Dr. {doctor_name} clinic, {patient_name}.\n"
+            "डॉ. {doctor_name} क्लिनिक में आपका स्वागत है, {patient_name}।\n\n"
+            "Please choose your language:\n"
+            "कृपया अपनी भाषा चुनें:\n\n"
+            "1. English\n"
+            "2. हिंदी\n"
+            "3. Hinglish"
+        ),
+        "language_selection_new_patient": (
+            "Hello / नमस्ते\n\n"
+            "Welcome to Dr. {doctor_name} clinic.\n"
+            "डॉ. {doctor_name} क्लिनिक में आपका स्वागत है।\n\n"
+            "Please choose your language:\n"
+            "कृपया अपनी भाषा चुनें:\n\n"
+            "1. English\n"
+            "2. हिंदी\n"
+            "3. Hinglish"
+        ),
+        "invalid_language_selection": (
+            "Please choose your language:\n"
+            "कृपया अपनी भाषा चुनें:\n\n"
+            "1. English\n"
+            "2. हिंदी\n"
+            "3. Hinglish"
+        ),
+        "timeout_processing_delay": "We are facing a delay while processing your request. Please wait, we will respond shortly.",
         "intent_ack": "Sure, I can help you book an appointment.",
         "availability_intro": "Sure, I can help check doctor availability. Please share preferred date (YYYY-MM-DD or 'today'/'tomorrow'). Doctor name is optional.",
         "availability_ask": "Please share preferred date (YYYY-MM-DD or 'today'/'tomorrow') to check availability.",
@@ -14,6 +42,15 @@ def get_message(response_language: str, key: str, **kwargs: object) -> str:
             "Noted. You want availability for Dr. {availability_doctor} on {availability_date}.\n"
             "You can continue with booking now by saying 'book appointment'."
         ),
+        "availability_generic_noted": (
+            "Noted. You want doctor availability on {availability_date}.\n"
+            "Please share doctor name if you want doctor-specific availability."
+        ),
+        "availability_result_available_header": "Doctor availability on {availability_date}:",
+        "availability_result_next_header": "No slots available on {availability_date}.\nNext available dates:",
+        "availability_result_none": 'No slots available on {availability_date}.\n\n1. Book appointment\nPress "0" to go back.',
+        "availability_result_actions": '\n\n1. Book appointment\n0. Go back',
+        "availability_result_actions_back": '\n\n1. Book appointment\nPress "0" to go back.',
         "empty_input": "Please send a message so I can assist you.",
         "abusive_language": "I can help only with appointment tasks. Please use respectful language.",
         "abusive_language_final": "Please contact the clinic directly for further assistance.",
@@ -24,7 +61,8 @@ def get_message(response_language: str, key: str, **kwargs: object) -> str:
             "Please choose one option:\n"
             "1. Book appointment\n"
             "2. Check doctor availability\n"
-            "Reply with 1 or 2."
+            "0. Go back\n"
+            "Reply with 1, 2, or 0."
         ),
         "final_booking_check": "Do you want to book a medical appointment now? Reply YES or NO.",
         "non_scope_final": (
@@ -43,7 +81,7 @@ def get_message(response_language: str, key: str, **kwargs: object) -> str:
         "go_back_hint": "Press \"0\" to go back.",
         "existing_booking_found": (
             "You already have a booked appointment:\n"
-            "Booking Number: {appointment_id}\n"
+            "Patient ID: {appointment_id}\n"
             "Clinic: {clinic_name}\n"
             "Date: {appointment_date}\n"
             "Time: {appointment_time}\n"
@@ -81,7 +119,7 @@ def get_message(response_language: str, key: str, **kwargs: object) -> str:
         "confirm_reschedule_prompt": "1. Confirm\n2. Change details\n0. Go back\nReply with 1, 2, or 0.",
         "reschedule_confirmed": (
             "Appointment rescheduled successfully.\n"
-            "*Booking Number:* {appointment_id}\n"
+            "*Patient ID:* {appointment_id}\n"
             "Clinic: {clinic_name}\n"
             "Date: {appointment_date}\n"
             "Time: {appointment_time}"
@@ -119,6 +157,10 @@ def get_message(response_language: str, key: str, **kwargs: object) -> str:
         "no_clinic_available_restart": "No clinics are available right now. Please try later. Send 'book appointment' to restart.",
         "clinic_ack": "Clinic noted: {clinic_name}, {clinic_address}.",
         "ask_date": "Please share preferred appointment date (YYYY-MM-DD or 'tomorrow').",
+        "date_options_header": "Please choose appointment date:",
+        "availability_date_options_header": "Please choose a date to check availability:",
+        "date_label_today": "Today ({date})",
+        "date_label_tomorrow": "Tomorrow ({date})",
         "ask_date_options": (
             "Please choose appointment date:\n"
             "1. {date_1}\n"
@@ -129,6 +171,10 @@ def get_message(response_language: str, key: str, **kwargs: object) -> str:
         "no_date_available": "No available slots for {clinic_name}. Please choose another clinic.",
         "date_ack": "Date noted: {appointment_date}.",
         "ask_time": "Please share preferred time (e.g., 10 am or 14:30).",
+        "ask_time_period_header": "Please choose preferred time period:",
+        "time_period_morning": "Morning",
+        "time_period_afternoon": "Afternoon",
+        "time_period_evening": "Evening",
         "ask_time_hour_options": "Which hour is nearest for you to book?",
         "choose_slot_header": "Please choose a slot:",
         "invalid_time_hour": "Please reply with a valid option number, or type an exact time.",
@@ -193,77 +239,128 @@ def get_message(response_language: str, key: str, **kwargs: object) -> str:
 
     hi = {
         "greeting": "नमस्ते, मैं आपका मेडिकल अपॉइंटमेंट असिस्टेंट हूँ। मैं बुकिंग और डॉक्टर उपलब्धता में मदद कर सकता हूँ।",
+        "welcome_known_patient": "डॉ. {doctor_name} के क्लिनिक में आपका स्वागत है, {patient_name}। मैं आज आपकी किस प्रकार मदद कर सकता हूँ?",
+        "welcome_new_patient": "डॉ. {doctor_name} के क्लिनिक में आपका स्वागत है। मैं आज आपकी किस प्रकार मदद कर सकता हूँ?",
+        "welcome_known_patient_booking": "डॉ. {doctor_name} के क्लिनिक में आपका स्वागत है, {patient_name}।",
+        "welcome_new_patient_booking": "डॉ. {doctor_name} के क्लिनिक में आपका स्वागत है।",
+        "language_selection_known_patient": (
+            "Hello / नमस्ते\n\n"
+            "Welcome to Dr. {doctor_name} clinic, {patient_name}.\n"
+            "डॉ. {doctor_name} क्लिनिक में आपका स्वागत है, {patient_name}।\n\n"
+            "Please choose your language:\n"
+            "कृपया अपनी भाषा चुनें:\n\n"
+            "1. English\n"
+            "2. हिंदी\n"
+            "3. Hinglish"
+        ),
+        "language_selection_new_patient": (
+            "Hello / नमस्ते\n\n"
+            "Welcome to Dr. {doctor_name} clinic.\n"
+            "डॉ. {doctor_name} क्लिनिक में आपका स्वागत है।\n\n"
+            "Please choose your language:\n"
+            "कृपया अपनी भाषा चुनें:\n\n"
+            "1. English\n"
+            "2. हिंदी\n"
+            "3. Hinglish"
+        ),
+        "invalid_language_selection": (
+            "Please choose your language:\n"
+            "कृपया अपनी भाषा चुनें:\n\n"
+            "1. English\n"
+            "2. हिंदी\n"
+            "3. Hinglish"
+        ),
+        "timeout_processing_delay": "आपके अनुरोध को संसाधित करने में देरी हो रही है। कृपया थोड़ी देर प्रतीक्षा करें, हम शीघ्र उत्तर देंगे।",
         "intent_ack": "ठीक है, मैं आपकी अपॉइंटमेंट बुक करने में मदद कर सकता हूँ।",
         "availability_intro": "ठीक है, मैं डॉक्टर की उपलब्धता देखने में मदद कर सकता हूँ। कृपया डॉक्टर का नाम और पसंदीदा तारीख बताएं।",
-        "availability_ask": "उपलब्धता देखने के लिए कृपया डॉक्टर का नाम और तारीख भेजें (YYYY-MM-DD या 'tomorrow').",
+        "availability_ask": "उपलब्धता देखने के लिए कृपया डॉक्टर का नाम और तारीख भेजें (YYYY-MM-DD या 'कल').",
         "availability_ask_doctor": "कृपया उपलब्धता देखने के लिए डॉक्टर का नाम बताएं।",
-        "availability_ask_date": "कृपया उपलब्धता देखने के लिए तारीख बताएं (YYYY-MM-DD या 'tomorrow').",
+        "availability_ask_date": "कृपया उपलब्धता देखने के लिए तारीख बताएं (YYYY-MM-DD या 'कल').",
         "availability_noted": (
-            "नोट किया गया। आप Dr. {availability_doctor} के लिए {availability_date} की उपलब्धता पूछ रहे हैं।\n"
-            "बुकिंग जारी रखने के लिए 'book appointment' भेजें।"
+            "नोट किया गया। आप डॉ. {availability_doctor} के लिए {availability_date} की उपलब्धता पूछ रहे हैं।\n"
+            "बुकिंग जारी रखने के लिए 'अपॉइंटमेंट बुक करें' भेजें।"
         ),
+        "availability_generic_noted": (
+            "नोट किया गया। आप {availability_date} के लिए डॉक्टर की उपलब्धता पूछ रहे हैं।\n"
+            "यदि आप किसी विशेष डॉक्टर की उपलब्धता चाहते हैं, तो कृपया डॉक्टर का नाम बताएं।"
+        ),
+        "availability_result_available_header": "{availability_date} के लिए डॉक्टर की उपलब्धता:",
+        "availability_result_next_header": "{availability_date} को कोई स्लॉट उपलब्ध नहीं है।\nअगली उपलब्ध तारीखें:",
+        "availability_result_none": ' {availability_date} को कोई स्लॉट उपलब्ध नहीं है।\n\n1. अपॉइंटमेंट बुक करें\n"0" दबाकर वापस जाएं।',
+        "availability_result_actions": '\n\n1. अपॉइंटमेंट बुक करें\n0. वापस जाएं',
+        "availability_result_actions_back": '\n\n1. अपॉइंटमेंट बुक करें\n"0" दबाकर वापस जाएं।',
         "empty_input": "कृपया संदेश भेजें ताकि मैं आपकी मदद कर सकूँ।",
         "abusive_language": "मैं केवल अपॉइंटमेंट संबंधित मदद कर सकता हूँ। कृपया सम्मानजनक भाषा का प्रयोग करें।",
         "abusive_language_final": "कृपया आगे की मदद के लिए सीधे क्लिनिक से संपर्क करें।",
-        "no_intent": "शुरू करने के लिए कृपया लिखें: 'I need to book an appointment'.",
+        "no_intent": "शुरू करने के लिए कृपया लिखें: 'मुझे अपॉइंटमेंट बुक करनी है'।",
         "clarify_intent": (
             "कृपया एक विकल्प चुनें:\n"
             "1. अपॉइंटमेंट बुक करें\n"
             "2. डॉक्टर उपलब्धता जांचें\n"
             "1 या 2 से जवाब दें।"
         ),
+        "ask_booking_for": (
+            "यह अपॉइंटमेंट किसके लिए है?\n"
+            "1. स्वयं के लिए\n"
+            "2. किसी अन्य व्यक्ति के लिए"
+        ),
+        "invalid_booking_for": "कृपया 1, 2, या 0 में उत्तर दें।",
+        "booking_for_self_ack": "नोट किया गया। स्वयं के लिए बुकिंग की जा रही है।",
+        "booking_for_other_ack": "नोट किया गया। किसी अन्य व्यक्ति के लिए बुकिंग की जा रही है।",
+        "go_back_hint": "\"0\" दबाकर वापस जाएं।",
         "existing_booking_found": (
-            "Booking Number: {appointment_id}\n"
+            "आपकी एक बुक की हुई अपॉइंटमेंट पहले से मौजूद है:\n"
+            "रोगी आईडी: {appointment_id}\n"
             "क्लिनिक: {clinic_name}\n"
             "तारीख: {appointment_date}\n"
             "समय: {appointment_time}\n"
             "एक विकल्प चुनें:\n"
             "1. पुरानी अपॉइंटमेंट रखें\n"
-            "2. अपॉइंटमेंट cancel करें\n"
-            "3. Reschedule करें (clinic/date/time)\n"
+            "2. अपॉइंटमेंट रद्द करें\n"
+            "3. पुनर्निर्धारित करें (क्लिनिक/तारीख/समय)\n"
             "4. किसी और व्यक्ति के लिए बुक करें"
         ),
         "existing_booking_choice_invalid": "कृपया 1, 2, 3, या 4 भेजें।",
-        "existing_booking_choice_again": "कृपया फिर से चुनें:\n1. पुरानी रखें\n2. Cancel करें\n3. Reschedule करें\n4. किसी और व्यक्ति के लिए बुक करें",
+        "existing_booking_choice_again": "कृपया फिर से चुनें:\n1. पुरानी रखें\n2. रद्द करें\n3. पुनर्निर्धारित करें\n4. किसी और व्यक्ति के लिए बुक करें",
         "existing_booking_keep": "ठीक है। आपकी मौजूदा अपॉइंटमेंट वैसी ही रहेगी।",
-        "existing_booking_cancel_only_done": "ठीक है। आपकी अपॉइंटमेंट cancel कर दी गई है।",
-        "existing_booking_reschedule_start": "ठीक है। आपकी पुरानी क्लिनिक: {clinic_name}। आप वही या दूसरी क्लिनिक चुनकर reschedule कर सकते हैं।",
+        "existing_booking_cancel_only_done": "ठीक है। आपकी अपॉइंटमेंट रद्द कर दी गई है।",
+        "existing_booking_reschedule_start": "ठीक है। आपकी पुरानी क्लिनिक: {clinic_name}। आप वही या दूसरी क्लिनिक चुनकर पुनर्निर्धारित कर सकते हैं।",
         "max_active_bookings_actions": (
             "एक विकल्प चुनें:\n"
-            "1. किसी पुरानी अपॉइंटमेंट को cancel करें\n"
-            "2. किसी पुरानी अपॉइंटमेंट को reschedule करें\n"
+            "1. किसी पुरानी अपॉइंटमेंट को रद्द करें\n"
+            "2. किसी पुरानी अपॉइंटमेंट को पुनर्निर्धारित करें\n"
             "0. वापस जाएं"
         ),
         "max_active_bookings_invalid": "कृपया 1, 2, या 0 भेजें।",
         "confirm_reschedule_summary": (
-            "कृपया reschedule की पुष्टि करें:\n"
+            "कृपया पुनर्निर्धारण की पुष्टि करें:\n"
             "क्लिनिक: {clinic_name}\n"
             "पुराना स्लॉट: {old_date} {old_time}\n"
             "नया स्लॉट: {new_date} {new_time}\n"
-            "1. Confirm\n"
-            "2. Change details\n"
-            "0. Go back\n"
-            "Reply with 1, 2, or 0."
+            "1. पुष्टि करें\n"
+            "2. विवरण बदलें\n"
+            "0. वापस जाएं\n"
+            "कृपया 1, 2, या 0 में उत्तर दें।"
         ),
-        "confirm_reschedule_prompt": "1. Confirm\n2. Change details\n0. Go back\nReply with 1, 2, or 0.",
+        "confirm_reschedule_prompt": "1. पुष्टि करें\n2. विवरण बदलें\n0. वापस जाएं\nकृपया 1, 2, या 0 में उत्तर दें।",
         "reschedule_confirmed": (
-            "अपॉइंटमेंट सफलतापूर्वक reschedule हो गई।\n"
-            "*Booking Number:* {appointment_id}\n"
+            "अपॉइंटमेंट सफलतापूर्वक पुनर्निर्धारित हो गई।\n"
+            "*रोगी आईडी:* {appointment_id}\n"
             "क्लिनिक: {clinic_name}\n"
             "तारीख: {appointment_date}\n"
             "समय: {appointment_time}"
         ),
-        "reschedule_failed": "Reschedule असफल रहा क्योंकि चुना गया स्लॉट अभी उपलब्ध नहीं है। कृपया दूसरी तारीख/समय चुनें।",
-        "existing_booking_cancel_failed": "अभी पुरानी अपॉइंटमेंट cancel नहीं हो पाई। कृपया बाद में फिर कोशिश करें।",
+        "reschedule_failed": "पुनर्निर्धारण असफल रहा क्योंकि चुना गया स्लॉट अभी उपलब्ध नहीं है। कृपया दूसरी तारीख/समय चुनें।",
+        "existing_booking_cancel_failed": "अभी पुरानी अपॉइंटमेंट रद्द नहीं हो पाई। कृपया बाद में फिर कोशिश करें।",
         "invalid_name": "कृपया सही नाम बताएं। उदाहरण: Vineeth Raja Banala",
         "name_ack": "धन्यवाद, {name}।",
         "ask_phone": (
             "कृपया संपर्क नंबर की पुष्टि करें:\n"
-            "1. यही WhatsApp नंबर उपयोग करें\n"
+            "1. यही व्हाट्सऐप नंबर उपयोग करें\n"
             "2. अलग नंबर भेजें (10 अंक)"
         ),
         "ask_phone_telegram": "कृपया वैध 10 अंकों का संपर्क नंबर भेजें।",
-        "invalid_phone_same_missing": "WhatsApp नंबर पढ़ा नहीं जा सका। कृपया 10 अंकों का नंबर भेजें।",
+        "invalid_phone_same_missing": "व्हाट्सऐप नंबर पढ़ा नहीं जा सका। कृपया 10 अंकों का नंबर भेजें।",
         "invalid_phone": "कृपया 10 अंकों का सही संपर्क नंबर भेजें।",
         "phone_ack": "संपर्क नंबर नोट किया गया: {phone_number}।",
         "ask_clinic": (
@@ -275,14 +372,18 @@ def get_message(response_language: str, key: str, **kwargs: object) -> str:
         "ask_clinic_header": "कृपया क्लिनिक चुनें:",
         "invalid_clinic": "कृपया क्लिनिक 1, 2 या 3 चुनें।",
         "no_clinic_available": "फिलहाल बुकिंग के लिए कोई क्लिनिक उपलब्ध नहीं है। कृपया बाद में फिर कोशिश करें।",
-        "no_clinic_available_restart": "फिलहाल कोई क्लिनिक उपलब्ध नहीं है। कृपया बाद में कोशिश करें। पुनः शुरू करने के लिए 'book appointment' भेजें।",
+        "no_clinic_available_restart": "फिलहाल कोई क्लिनिक उपलब्ध नहीं है। कृपया बाद में कोशिश करें। पुनः शुरू करने के लिए 'अपॉइंटमेंट बुक करें' भेजें।",
         "clinic_ack": "क्लिनिक नोट किया गया: {clinic_name}, {clinic_address}।",
-        "ask_date": "कृपया पसंदीदा तारीख भेजें (YYYY-MM-DD या 'tomorrow').",
+        "ask_date": "कृपया पसंदीदा तारीख भेजें (YYYY-MM-DD या 'कल').",
+        "date_options_header": "कृपया अपॉइंटमेंट की तारीख चुनें:",
+        "availability_date_options_header": "कृपया उपलब्धता जांचने के लिए तारीख चुनें:",
+        "date_label_today": "आज ({date})",
+        "date_label_tomorrow": "कल ({date})",
         "ask_date_options": (
             "कृपया अपॉइंटमेंट तारीख चुनें:\n"
             "1. {date_1}\n"
             "2. {date_2}\n"
-            "3. Other date"
+            "3. दूसरी तारीख"
         ),
         "ask_date_manual": "कृपया सही विकल्प संख्या चुनें, या वापस जाने के लिए 0 भेजें।",
         "invalid_date": "तारीख अमान्य है। कृपया भविष्य की तारीख YYYY-MM-DD फ़ॉर्मेट में भेजें।",
@@ -296,7 +397,7 @@ def get_message(response_language: str, key: str, **kwargs: object) -> str:
             "2. {slot_2}\n"
             "3. {slot_3}\n"
             "या दूसरा समय टाइप करें।\n"
-            "Reply with 1, 2, 3, or 0.\n"
+            "कृपया 1, 2, 3, या 0 में उत्तर दें।\n"
         ),
         "time_not_available": "माँगा गया समय {requested_time} उपलब्ध नहीं है।",
         "no_time_available": "इस तारीख के लिए कोई उपलब्ध समय स्लॉट नहीं है। कृपया दूसरी तारीख चुनें।",
@@ -310,28 +411,23 @@ def get_message(response_language: str, key: str, **kwargs: object) -> str:
             "क्लिनिक पता: {clinic_address}\n"
             "तारीख: {appointment_date}\n"
             "समय: {appointment_time}\n"
-            "1. Confirm\n"
-            "2. Change details\n"
-            "0. Go back\n"
-            "Reply with 1, 2, or 0."
+            "1. पुष्टि करें\n"
+            "2. विवरण बदलें\n"
+            "0. वापस जाएं\n"
+            "कृपया 1, 2, या 0 में उत्तर दें।"
         ),
-        "confirm_prompt": "1. Confirm\n2. Change details\n0. Go back\nReply with 1, 2, or 0.",
+        "confirm_prompt": "1. पुष्टि करें\n2. विवरण बदलें\n0. वापस जाएं\nकृपया 1, 2, या 0 में उत्तर दें।",
         "ask_change_field": (
             "कोई बात नहीं। आप कौन-सा विवरण बदलना चाहते हैं?\n"
             "1. नाम\n"
-            "2. मरीज़ का प्रकार\n"
-            "3. आयु\n"
-            "4. जेंडर\n"
-            "5. संपर्क नंबर\n"
-            "6. क्लिनिक\n"
-            "7. तारीख\n"
-            "8. समय\n"
-            "9. कारण\n"
-            "10. लक्षण\n"
-            "0. Go back\n"
-            "Reply with 1-10 or 0."
+            "2. संपर्क नंबर\n"
+            "3. क्लिनिक\n"
+            "4. तारीख\n"
+            "5. समय\n"
+            "0. वापस जाएं\n"
+            "कृपया 1, 2, 3, 4, 5, या 0 में उत्तर दें।"
         ),
-        "invalid_change_field": "Please choose a valid option (1-10 or 0).",
+        "invalid_change_field": "कृपया मान्य विकल्प चुनें (1-5 या 0)।",
         "change_ack": "ठीक है। हम वह विवरण अपडेट करते हैं।",
         "confirmed": (
             "नाम: {patient_name}\n"
@@ -341,16 +437,45 @@ def get_message(response_language: str, key: str, **kwargs: object) -> str:
             "तारीख: {appointment_date}\n"
             "समय: {appointment_time}"
         ),
+        "reply_with_numbers": "कृपया {numbers} में उत्तर दें।",
         "not_confirmed": "कोई बात नहीं। प्रक्रिया दोबारा शुरू कर रहा हूँ। कृपया मरीज़ का पूरा नाम बताएं।",
-        "completed_hint": "यह बुकिंग पूरी हो चुकी है। नई बुकिंग के लिए 'book appointment' भेजें।",
-        "db_save_ok": "अपॉइंटमेंट सफलतापूर्वक बुक हो गई।\n*Patient ID:* {appointment_id}",
-        "db_save_failed": "बुकिंग confirm हुई, लेकिन डेटाबेस सेव लंबित है। मैनुअल फ़ॉलो-अप आवश्यक है।",
-        "ended": "ठीक है, प्रक्रिया समाप्त कर दी गई है। दोबारा शुरू करने के लिए 'book appointment' भेजें।",
-        "cancelled_hint": "प्रक्रिया समाप्त है। नई बुकिंग के लिए 'book appointment' भेजें।",
+        "completed_hint": "यह बुकिंग पूरी हो चुकी है। नई बुकिंग के लिए 'अपॉइंटमेंट बुक करें' भेजें।",
+        "db_save_ok": "अपॉइंटमेंट सफलतापूर्वक बुक हो गई।\n*रोगी आईडी:* {appointment_id}",
+        "db_save_failed": "बुकिंग की पुष्टि हो गई, लेकिन डेटाबेस सेव लंबित है। मैनुअल फ़ॉलो-अप आवश्यक है।",
+        "ended": "ठीक है, प्रक्रिया समाप्त कर दी गई है। दोबारा शुरू करने के लिए 'अपॉइंटमेंट बुक करें' भेजें।",
+        "cancelled_hint": "प्रक्रिया समाप्त है। नई बुकिंग के लिए 'अपॉइंटमेंट बुक करें' भेजें।",
         "restart": "अपॉइंटमेंट प्रक्रिया दोबारा शुरू की जा रही है।",
     }
     hinglish = {
         "greeting": "Hello, main aapka medical appointment assistant hoon. Main booking aur doctor availability mein help kar sakta hoon.",
+        "language_selection_known_patient": (
+            "Hello / नमस्ते\n\n"
+            "Welcome to Dr. {doctor_name} clinic, {patient_name}.\n"
+            "डॉ. {doctor_name} क्लिनिक में आपका स्वागत है, {patient_name}।\n\n"
+            "Please choose your language:\n"
+            "कृपया अपनी भाषा चुनें:\n\n"
+            "1. English\n"
+            "2. हिंदी\n"
+            "3. Hinglish"
+        ),
+        "language_selection_new_patient": (
+            "Hello / नमस्ते\n\n"
+            "Welcome to Dr. {doctor_name} clinic.\n"
+            "डॉ. {doctor_name} क्लिनिक में आपका स्वागत है।\n\n"
+            "Please choose your language:\n"
+            "कृपया अपनी भाषा चुनें:\n\n"
+            "1. English\n"
+            "2. हिंदी\n"
+            "3. Hinglish"
+        ),
+        "invalid_language_selection": (
+            "Please choose your language:\n"
+            "कृपया अपनी भाषा चुनें:\n\n"
+            "1. English\n"
+            "2. हिंदी\n"
+            "3. Hinglish"
+        ),
+        "timeout_processing_delay": "Processing mein delay ho raha hai. Please wait, hum jaldi response denge.",
         "ask_booking_for": (
             "Yeh appointment kiske liye hai?\n"
             "1. Self\n"
@@ -373,6 +498,15 @@ def get_message(response_language: str, key: str, **kwargs: object) -> str:
             "Noted. Aap Dr. {availability_doctor} ki {availability_date} ki availability pooch rahe hain.\n"
             "Booking continue karne ke liye 'book appointment' bhejiye."
         ),
+        "availability_generic_noted": (
+            "Noted. Aap {availability_date} ke liye doctor availability pooch rahe hain.\n"
+            "Agar doctor-specific availability chahiye, to doctor name share kariye."
+        ),
+        "availability_result_available_header": "Doctor availability on {availability_date}:",
+        "availability_result_next_header": "{availability_date} par koi slot available nahi hai.\nNext available dates:",
+        "availability_result_none": ' {availability_date} par koi slot available nahi hai.\n\n1. Appointment book kariye\nPress "0" to go back.',
+        "availability_result_actions": '\n\n1. Appointment book kariye\n0. Go back',
+        "availability_result_actions_back": '\n\n1. Appointment book kariye\nPress "0" to go back.',
         "empty_input": "Please message bhejiye taaki main help kar sakoon.",
         "abusive_language": "Main sirf appointment related help kar sakta hoon. Please respectful language use kariye.",
         "abusive_language_final": "Aage ki help ke liye please clinic ko directly contact kariye.",
@@ -381,10 +515,12 @@ def get_message(response_language: str, key: str, **kwargs: object) -> str:
             "Please ek option choose kariye:\n"
             "1. Appointment book kariye\n"
             "2. Doctor availability check kariye\n"
-            "1 ya 2 se reply kariye."
+            "0. Go back\n"
+            "1, 2, ya 0 se reply kariye."
         ),
         "existing_booking_found": (
-            "Booking Number: {appointment_id}\n"
+            "Aapki ek booked appointment pehle se maujood hai:\n"
+            "Patient ID: {appointment_id}\n"
             "Clinic: {clinic_name}\n"
             "Date: {appointment_date}\n"
             "Time: {appointment_time}\n"
@@ -422,7 +558,7 @@ def get_message(response_language: str, key: str, **kwargs: object) -> str:
         "confirm_reschedule_prompt": "1. Confirm kariye\n2. Details badliye\n0. Go back\nReply with 1, 2, or 0.",
         "reschedule_confirmed": (
             "Appointment successfully reschedule ho gaya.\n"
-            "*Booking Number:* {appointment_id}\n"
+            "*Patient ID:* {appointment_id}\n"
             "Clinic: {clinic_name}\n"
             "Date: {appointment_date}\n"
             "Time: {appointment_time}"
@@ -460,6 +596,10 @@ def get_message(response_language: str, key: str, **kwargs: object) -> str:
         "no_clinic_available_restart": "Abhi koi clinic available nahi hai. Please baad mein try kariye. Restart ke liye 'book appointment' bhejiye.",
         "clinic_ack": "Clinic noted: {clinic_name}, {clinic_address}.",
         "ask_date": "Please preferred appointment date bhejiye (YYYY-MM-DD ya 'tomorrow').",
+        "date_options_header": "Please appointment date choose kariye:",
+        "availability_date_options_header": "Please availability check karne ke liye date choose kariye:",
+        "date_label_today": "Aaj ({date})",
+        "date_label_tomorrow": "Kal ({date})",
         "ask_date_options": (
             "Please appointment date choose kariye:\n"
             "1. {date_1}\n"

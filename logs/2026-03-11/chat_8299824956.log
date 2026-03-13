@@ -116,3 +116,196 @@
 [11:28:42.455]  SESSION_REDIS_SAVED               save_ms=1
 [11:28:43.439]  TURN_END                          total_ms=3386  save_ms=985  post_state='COMPLETED'
 [11:28:44.847]  BOT_REPLY_SENT                    send_ms=1270  reply='Appointment booked successfully. *Patient ID:* 5  Name: Ghrdftufg Contact: 89765'
+[13:44:15.976]  WEBHOOK_ARRIVED                   sid='1380'  text='Hello'
+[13:44:15.980]  SESSION_REDIS_MISS                load_ms=1
+[13:44:17.156]  SESSION_DB_MISS                   load_ms=1175
+[13:44:17.595]  LOCK_ACQUIRED                     
+[13:44:17.826]  TURN_QUEUED                       sid='1380'  state='INIT'  backlog=0  ack_ms=1850
+[13:44:17.864]  TURN_START                        text='Hello'
+[13:44:17.865]  SESSION_REDIS_MISS                load_ms=0
+[13:44:18.503]  SESSION_DB_MISS                   load_ms=638
+[13:44:25.002]  FSM_HANDLED                       pre_state='INIT'  post_state='ASK_EXISTING_BOOKING_ACTION'  fsm_ms=6498  reply='You already have a booked appointment: Booking Number: 5 Clinic: Aditya Date: 20'
+[13:44:25.004]  SESSION_REDIS_SAVED               save_ms=1
+[13:44:26.042]  TURN_END                          total_ms=8178  save_ms=1040  post_state='ASK_EXISTING_BOOKING_ACTION'
+[13:44:27.282]  BOT_REPLY_SENT                    send_ms=1239  reply='You already have a booked appointment: Booking Number: 5 Clinic: Aditya Date: 20'
+[14:48:57.390]  WEBHOOK_ARRIVED                   sid='1382'  text='Hello'
+[14:48:57.468]  SESSION_REDIS_MISS                load_ms=0
+[14:48:58.586]  SESSION_DB_MISS                   load_ms=1118
+[14:48:58.587]  LOCK_ACQUIRED                     
+[14:48:58.691]  TURN_QUEUED                       sid='1382'  state='INIT'  backlog=0  ack_ms=1301
+[14:48:58.751]  TURN_START                        text='Hello'
+[14:48:58.752]  SESSION_REDIS_MISS                load_ms=0
+[14:48:59.462]  SESSION_DB_MISS                   load_ms=710
+[14:49:04.579]  FSM_HANDLED                       pre_state='INIT'  post_state='ASK_EXISTING_BOOKING_ACTION'  fsm_ms=5115  reply='You already have a booked appointment: Booking Number: 5 Clinic: Health Plus Cli'
+[14:49:04.730]  SESSION_REDIS_SAVED               save_ms=2
+[14:49:05.580]  TURN_END                          total_ms=6829  save_ms=853  post_state='ASK_EXISTING_BOOKING_ACTION'
+[14:49:06.708]  BOT_REPLY_SENT                    send_ms=1126  reply='You already have a booked appointment: Booking Number: 5 Clinic: Health Plus Cli'
+[14:49:09.115]  WEBHOOK_ARRIVED                   sid='1384'  text='2'
+[14:49:09.131]  SESSION_REDIS_HIT                 load_ms=0
+[14:49:09.132]  LOCK_ACQUIRED                     
+[14:49:09.138]  TURN_QUEUED                       sid='1384'  state='ASK_EXISTING_BOOKING_ACTION'  backlog=0  ack_ms=22
+[14:49:09.293]  TURN_START                        text='2'
+[14:49:09.295]  SESSION_REDIS_HIT                 load_ms=1
+[14:49:10.285]  FSM_HANDLED                       pre_state='ASK_EXISTING_BOOKING_ACTION'  post_state='ASK_EXISTING_BOOKING_PICK'  fsm_ms=990  reply='Please choose which booking you want to modify: 1. Health Plus Clinic | 2026-03-'
+[14:49:10.358]  SESSION_REDIS_SAVED               save_ms=5
+[14:49:11.288]  TURN_END                          total_ms=1994  save_ms=934  post_state='ASK_EXISTING_BOOKING_PICK'
+[14:49:12.546]  BOT_REPLY_SENT                    send_ms=1257  reply='Please choose which booking you want to modify: 1. Health Plus Clinic | 2026-03-'
+[14:49:16.078]  WEBHOOK_ARRIVED                   sid='1386'  text='1'
+[14:49:16.081]  SESSION_REDIS_HIT                 load_ms=0
+[14:49:16.082]  LOCK_ACQUIRED                     
+[14:49:16.090]  TURN_QUEUED                       sid='1386'  state='ASK_EXISTING_BOOKING_PICK'  backlog=1  ack_ms=11
+[14:49:16.101]  TURN_START                        text='1'
+[14:49:16.102]  SESSION_REDIS_HIT                 load_ms=0
+[14:49:18.186]  FSM_HANDLED                       pre_state='ASK_EXISTING_BOOKING_PICK'  post_state='COMPLETED'  fsm_ms=2083  reply='Done. Your appointment has been cancelled.'
+[14:49:18.187]  SESSION_REDIS_SAVED               save_ms=0
+[14:49:19.221]  TURN_END                          total_ms=3120  save_ms=1035  post_state='COMPLETED'
+[14:49:20.922]  BOT_REPLY_SENT                    send_ms=1700  reply='Done. Your appointment has been cancelled.'
+[14:49:30.842]  WEBHOOK_ARRIVED                   sid='1388'  text='Hello'
+[14:49:30.845]  SESSION_REDIS_HIT                 load_ms=0
+[14:49:30.846]  LOCK_ACQUIRED                     
+[14:49:30.852]  TURN_QUEUED                       sid='1388'  state='COMPLETED'  backlog=0  ack_ms=9
+[14:49:30.868]  TURN_START                        text='Hello'
+[14:49:30.869]  SESSION_REDIS_HIT                 load_ms=1
+[14:49:32.036]  FSM_HANDLED                       pre_state='COMPLETED'  post_state='ASK_EXISTING_BOOKING_ACTION'  fsm_ms=1166  reply='You already have a booked appointment: Booking Number: 5 Clinic: Health Plus Cli'
+[14:49:32.146]  SESSION_REDIS_SAVED               save_ms=1
+[14:49:32.950]  TURN_END                          total_ms=2081  save_ms=804  post_state='ASK_EXISTING_BOOKING_ACTION'
+[14:49:34.046]  BOT_REPLY_SENT                    send_ms=1095  reply='You already have a booked appointment: Booking Number: 5 Clinic: Health Plus Cli'
+[14:49:38.629]  WEBHOOK_ARRIVED                   sid='1390'  text='2'
+[14:49:38.634]  SESSION_REDIS_HIT                 load_ms=0
+[14:49:38.634]  LOCK_ACQUIRED                     
+[14:49:38.643]  TURN_QUEUED                       sid='1390'  state='ASK_EXISTING_BOOKING_ACTION'  backlog=1  ack_ms=13
+[14:49:38.650]  TURN_START                        text='2'
+[14:49:38.651]  SESSION_REDIS_HIT                 load_ms=0
+[14:49:39.763]  FSM_HANDLED                       pre_state='ASK_EXISTING_BOOKING_ACTION'  post_state='ASK_EXISTING_BOOKING_PICK'  fsm_ms=1112  reply='Please choose which booking you want to modify: 1. Health Plus Clinic | 2026-03-'
+[14:49:39.766]  SESSION_REDIS_SAVED               save_ms=2
+[14:49:40.543]  TURN_END                          total_ms=1893  save_ms=780  post_state='ASK_EXISTING_BOOKING_PICK'
+[14:49:41.912]  BOT_REPLY_SENT                    send_ms=1368  reply='Please choose which booking you want to modify: 1. Health Plus Clinic | 2026-03-'
+[14:49:54.637]  WEBHOOK_ARRIVED                   sid='1392'  text='1'
+[14:49:54.640]  SESSION_REDIS_HIT                 load_ms=1
+[14:49:54.641]  LOCK_ACQUIRED                     
+[14:49:54.667]  TURN_QUEUED                       sid='1392'  state='ASK_EXISTING_BOOKING_PICK'  backlog=0  ack_ms=30
+[14:49:54.673]  TURN_START                        text='1'
+[14:49:54.673]  SESSION_REDIS_HIT                 load_ms=0
+[14:49:56.232]  FSM_HANDLED                       pre_state='ASK_EXISTING_BOOKING_PICK'  post_state='COMPLETED'  fsm_ms=1558  reply='Done. Your appointment has been cancelled.'
+[14:49:56.411]  SESSION_REDIS_SAVED               save_ms=1
+[14:49:57.479]  TURN_END                          total_ms=2805  save_ms=1069  post_state='COMPLETED'
+[14:49:59.319]  BOT_REPLY_SENT                    send_ms=1775  reply='Done. Your appointment has been cancelled.'
+[14:50:04.560]  WEBHOOK_ARRIVED                   sid='1394'  text='Hello'
+[14:50:04.562]  SESSION_REDIS_HIT                 load_ms=0
+[14:50:04.563]  LOCK_ACQUIRED                     
+[14:50:04.819]  TURN_QUEUED                       sid='1394'  state='COMPLETED'  backlog=0  ack_ms=258
+[14:50:04.830]  TURN_START                        text='Hello'
+[14:50:04.833]  SESSION_REDIS_HIT                 load_ms=2
+[14:50:05.797]  FSM_HANDLED                       pre_state='COMPLETED'  post_state='ASK_EXISTING_BOOKING_ACTION'  fsm_ms=964  reply='You already have a booked appointment: Booking Number: 5 Clinic: Aditya Date: 20'
+[14:50:05.799]  SESSION_REDIS_SAVED               save_ms=2
+[14:50:06.512]  TURN_END                          total_ms=1681  save_ms=714  post_state='ASK_EXISTING_BOOKING_ACTION'
+[14:50:07.563]  BOT_REPLY_SENT                    send_ms=1050  reply='You already have a booked appointment: Booking Number: 5 Clinic: Aditya Date: 20'
+[14:50:13.375]  WEBHOOK_ARRIVED                   sid='1396'  text='2'
+[14:50:13.378]  SESSION_REDIS_HIT                 load_ms=0
+[14:50:13.379]  LOCK_ACQUIRED                     
+[14:50:13.388]  TURN_QUEUED                       sid='1396'  state='ASK_EXISTING_BOOKING_ACTION'  backlog=0  ack_ms=12
+[14:50:13.395]  TURN_START                        text='2'
+[14:50:13.395]  SESSION_REDIS_HIT                 load_ms=0
+[14:50:15.552]  FSM_HANDLED                       pre_state='ASK_EXISTING_BOOKING_ACTION'  post_state='COMPLETED'  fsm_ms=2156  reply='Done. Your appointment has been cancelled.'
+[14:50:15.553]  SESSION_REDIS_SAVED               save_ms=1
+[14:50:16.413]  TURN_END                          total_ms=3018  save_ms=860  post_state='COMPLETED'
+[14:50:17.483]  BOT_REPLY_SENT                    send_ms=1069  reply='Done. Your appointment has been cancelled.'
+[14:50:20.657]  WEBHOOK_ARRIVED                   sid='1398'  text='Hello'
+[14:50:20.659]  SESSION_REDIS_HIT                 load_ms=0
+[14:50:20.660]  LOCK_ACQUIRED                     
+[14:50:20.666]  TURN_QUEUED                       sid='1398'  state='COMPLETED'  backlog=0  ack_ms=9
+[14:50:20.673]  TURN_START                        text='Hello'
+[14:50:20.674]  SESSION_REDIS_HIT                 load_ms=0
+[14:50:22.127]  FSM_HANDLED                       pre_state='COMPLETED'  post_state='INIT'  fsm_ms=1452  reply='Welcome to Dr. Sanjay Vinayak clinic. How can I help you today? Please choose on'
+[14:50:22.128]  SESSION_REDIS_SAVED               save_ms=0
+[14:50:23.346]  TURN_END                          total_ms=2673  save_ms=1219  post_state='INIT'
+[14:50:24.478]  BOT_REPLY_SENT                    send_ms=1130  reply='Welcome to Dr. Sanjay Vinayak clinic. How can I help you today? Please choose on'
+[15:52:56.141]  WEBHOOK_ARRIVED                   sid='1400'  text='Helllo'
+[15:52:56.146]  SESSION_REDIS_MISS                load_ms=1
+[15:52:56.707]  SESSION_DB_MISS                   load_ms=560
+[15:52:56.708]  LOCK_ACQUIRED                     
+[15:52:56.721]  TURN_QUEUED                       sid='1400'  state='INIT'  backlog=0  ack_ms=580
+[15:52:56.741]  TURN_START                        text='Helllo'
+[15:52:56.742]  SESSION_REDIS_MISS                load_ms=0
+[15:52:57.783]  SESSION_DB_MISS                   load_ms=1041
+[15:53:11.050]  SESSION_REDIS_MISS                load_ms=5483
+[15:53:12.014]  SESSION_DB_MISS                   load_ms=963
+[15:53:13.198]  BOT_REPLY_SENT                    send_ms=1046  reply='We are facing a delay while processing your request. Please wait, we will respon'
+[15:53:53.365]  FSM_HANDLED                       pre_state='INIT'  post_state='INIT'  fsm_ms=55581  reply='Please choose one option: 1. Book appointment 2. Check doctor availability Reply'
+[15:53:53.368]  SESSION_REDIS_SAVED               save_ms=1
+[15:53:54.147]  TURN_END                          total_ms=57405  save_ms=781  post_state='INIT'
+[15:53:55.425]  BOT_REPLY_SENT                    send_ms=1278  reply='Please choose one option: 1. Book appointment 2. Check doctor availability Reply'
+[15:54:12.600]  WEBHOOK_ARRIVED                   sid='1403'  text='1'
+[15:54:12.602]  SESSION_REDIS_HIT                 load_ms=0
+[15:54:12.603]  LOCK_ACQUIRED                     
+[15:54:12.609]  TURN_QUEUED                       sid='1403'  state='INIT'  backlog=0  ack_ms=9
+[15:54:12.620]  TURN_START                        text='1'
+[15:54:12.622]  SESSION_REDIS_HIT                 load_ms=1
+[15:54:13.418]  FSM_HANDLED                       pre_state='INIT'  post_state='ASK_EXISTING_BOOKING_ACTION'  fsm_ms=796  reply='You already have a booked appointment: Booking Number: 5 Clinic: Health Plus Cli'
+[15:54:13.419]  SESSION_REDIS_SAVED               save_ms=0
+[15:54:14.233]  TURN_END                          total_ms=1613  save_ms=815  post_state='ASK_EXISTING_BOOKING_ACTION'
+[15:54:15.636]  BOT_REPLY_SENT                    send_ms=1250  reply='You already have a booked appointment: Booking Number: 5 Clinic: Health Plus Cli'
+[16:32:07.253]  WEBHOOK_ARRIVED                   sid='1405'  text='Mero ko appointment Book karna hai'
+[16:32:07.257]  SESSION_REDIS_MISS                load_ms=0
+[16:32:08.022]  SESSION_DB_MISS                   load_ms=764
+[16:32:08.195]  LOCK_ACQUIRED                     
+[16:32:08.204]  TURN_QUEUED                       sid='1405'  state='INIT'  backlog=1  ack_ms=951
+[16:32:08.205]  TURN_START                        text='Mero ko appointment Book karna hai'
+[16:32:08.206]  SESSION_REDIS_MISS                load_ms=0
+[16:32:09.360]  SESSION_DB_MISS                   load_ms=1154
+[16:32:17.271]  SESSION_REDIS_MISS                load_ms=5
+[16:32:18.388]  SESSION_DB_MISS                   load_ms=1116
+[16:32:19.591]  BOT_REPLY_SENT                    send_ms=1127  reply='We are facing a delay while processing your request. Please wait, we will respon'
+[16:32:36.438]  FSM_HANDLED                       pre_state='INIT'  post_state='ASK_EXISTING_BOOKING_ACTION'  fsm_ms=27077  reply='Booking Number: 5 Clinic: Health Plus Clinic Date: 2026-03-13 Time: 02:30 PM Ple'
+[16:32:36.440]  SESSION_REDIS_SAVED               save_ms=1
+[16:32:37.305]  TURN_END                          total_ms=29100  save_ms=867  post_state='ASK_EXISTING_BOOKING_ACTION'
+[16:32:38.522]  BOT_REPLY_SENT                    send_ms=1216  reply='Booking Number: 5 Clinic: Health Plus Clinic Date: 2026-03-13 Time: 02:30 PM Ple'
+[16:52:02.967]  WEBHOOK_ARRIVED                   sid='1408'  text='Mero ko appointment book karna hai'
+[16:52:02.971]  SESSION_REDIS_MISS                load_ms=1
+[16:52:03.805]  SESSION_DB_MISS                   load_ms=833
+[16:52:03.826]  LOCK_ACQUIRED                     
+[16:52:04.008]  TURN_QUEUED                       sid='1408'  state='INIT'  backlog=0  ack_ms=1041
+[16:52:04.107]  TURN_START                        text='Mero ko appointment book karna hai'
+[16:52:04.232]  SESSION_REDIS_MISS                load_ms=124
+[16:52:05.089]  SESSION_DB_MISS                   load_ms=856
+[16:52:13.930]  SESSION_REDIS_MISS                load_ms=473
+[16:52:14.556]  SESSION_DB_MISS                   load_ms=625
+[16:52:15.695]  BOT_REPLY_SENT                    send_ms=1139  reply='We are facing a delay while processing your request. Please wait, we will respon'
+[16:52:36.562]  FSM_HANDLED                       pre_state='INIT'  post_state='ASK_EXISTING_BOOKING_ACTION'  fsm_ms=31473  reply='Aapki ek booked appointment pehle se maujood hai: Patient ID: 5 Clinic: Health P'
+[16:52:36.606]  SESSION_REDIS_SAVED               save_ms=1
+[16:52:37.649]  TURN_END                          total_ms=33542  save_ms=1044  post_state='ASK_EXISTING_BOOKING_ACTION'
+[16:52:39.274]  BOT_REPLY_SENT                    send_ms=1624  reply='Aapki ek booked appointment pehle se maujood hai: Patient ID: 5 Clinic: Health P'
+[17:23:22.060]  WEBHOOK_ARRIVED                   sid='1411'  text='Hello'
+[17:23:22.062]  SESSION_REDIS_MISS                load_ms=0
+[17:23:22.875]  SESSION_DB_MISS                   load_ms=812
+[17:23:23.084]  LOCK_ACQUIRED                     
+[17:23:23.406]  TURN_QUEUED                       sid='1411'  state='INIT'  backlog=0  ack_ms=1347
+[17:23:23.446]  TURN_START                        text='Hello'
+[17:23:23.447]  SESSION_REDIS_MISS                load_ms=0
+[17:23:24.097]  SESSION_DB_MISS                   load_ms=650
+[17:23:28.187]  FSM_HANDLED                       pre_state='INIT'  post_state='ASK_EXISTING_BOOKING_ACTION'  fsm_ms=4089  reply='You already have a booked appointment: Patient ID: 5 Clinic: Health Plus Clinic '
+[17:23:28.188]  SESSION_REDIS_SAVED               save_ms=0
+[17:23:29.120]  TURN_END                          total_ms=5674  save_ms=932  post_state='ASK_EXISTING_BOOKING_ACTION'
+[17:23:42.067]  BOT_REPLY_SENT                    send_ms=12946  reply='You already have a booked appointment: Patient ID: 5 Clinic: Health Plus Clinic '
+[18:01:43.135]  WEBHOOK_ARRIVED                   sid='1413'  text='Hello'
+[18:01:43.147]  SESSION_REDIS_MISS                load_ms=1
+[18:01:43.148]  LOCK_ACQUIRED                     
+[18:01:43.182]  TURN_QUEUED                       sid='1413'  state='INIT'  backlog=0  ack_ms=46
+[18:01:45.048]  TURN_START                        text='Hello'
+[18:01:45.049]  SESSION_REDIS_MISS                load_ms=0
+[18:01:45.855]  TURN_START                        text='Hello'
+[18:01:45.856]  SESSION_REDIS_MISS                load_ms=0
+[18:01:47.462]  TURN_START                        text='Hello'
+[18:01:47.462]  SESSION_REDIS_MISS                load_ms=0
+[18:02:23.434]  WEBHOOK_ARRIVED                   sid='1414'  text='Hello'
+[18:02:23.441]  SESSION_REDIS_MISS                load_ms=0
+[18:02:24.306]  SESSION_DB_MISS                   load_ms=865
+[18:02:24.307]  LOCK_ACQUIRED                     
+[18:02:24.564]  TURN_QUEUED                       sid='1414'  state='INIT'  backlog=0  ack_ms=1129
+[18:02:24.629]  TURN_START                        text='Hello'
+[18:02:24.630]  SESSION_REDIS_MISS                load_ms=0
+[18:02:25.531]  SESSION_DB_MISS                   load_ms=900
+[18:02:30.659]  FSM_HANDLED                       pre_state='INIT'  post_state='ASK_EXISTING_BOOKING_ACTION'  fsm_ms=5128  reply='You already have a booked appointment: Patient ID: 5 Clinic: Health Plus Clinic '
+[18:02:30.661]  SESSION_REDIS_SAVED               save_ms=1
+[18:02:31.534]  TURN_END                          total_ms=6905  save_ms=875  post_state='ASK_EXISTING_BOOKING_ACTION'
+[18:02:32.810]  BOT_REPLY_SENT                    send_ms=1206  reply='You already have a booked appointment: Patient ID: 5 Clinic: Health Plus Clinic '

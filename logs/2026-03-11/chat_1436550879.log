@@ -1,0 +1,67 @@
+[20:12:44.277]  WEBHOOK_ARRIVED                   sid='1440'  text='/start'
+[20:12:44.287]  SESSION_REDIS_MISS                load_ms=0
+[20:12:45.195]  SESSION_DB_MISS                   load_ms=907
+[20:12:45.195]  LOCK_ACQUIRED                     
+[20:12:45.205]  TURN_QUEUED                       sid='1440'  state='INIT'  backlog=1  ack_ms=928
+[20:12:45.215]  TURN_START                        text='/start'
+[20:12:45.216]  SESSION_REDIS_MISS                load_ms=0
+[20:12:45.936]  SESSION_DB_MISS                   load_ms=719
+[20:12:54.334]  SESSION_REDIS_MISS                load_ms=1
+[20:12:55.263]  SESSION_DB_MISS                   load_ms=928
+[20:12:56.363]  BOT_REPLY_SENT                    send_ms=1099  reply='We are facing a delay while processing your request. Please wait, we will respon'
+[20:13:07.785]  FSM_HANDLED                       pre_state='INIT'  post_state='INIT'  fsm_ms=21848  reply='Welcome to Dr. Sanjay Vinayak clinic. How can I help you today? Please choose on'
+[20:13:07.788]  SESSION_REDIS_SAVED               save_ms=3
+[20:13:08.612]  TURN_END                          total_ms=23396  save_ms=827  post_state='INIT'
+[20:13:09.508]  BOT_REPLY_SENT                    send_ms=895  reply='Welcome to Dr. Sanjay Vinayak clinic. How can I help you today? Please choose on'
+[20:13:16.681]  WEBHOOK_ARRIVED                   sid='1443'  text='कख ज्ञझझ'
+[20:13:16.683]  SESSION_REDIS_HIT                 load_ms=0
+[20:13:16.684]  LOCK_ACQUIRED                     
+[20:13:16.690]  TURN_QUEUED                       sid='1443'  state='INIT'  backlog=1  ack_ms=8
+[20:13:16.692]  TURN_START                        text='कख ज्ञझझ'
+[20:13:16.692]  SESSION_REDIS_HIT                 load_ms=0
+[20:13:25.728]  SESSION_REDIS_HIT                 load_ms=2
+[20:13:26.780]  BOT_REPLY_SENT                    send_ms=1051  reply='We are facing a delay while processing your request. Please wait, we will respon'
+[20:14:00.350]  FSM_HANDLED                       pre_state='INIT'  post_state='INIT'  fsm_ms=43657  reply='Welcome to Dr. Sanjay Vinayak clinic. How can I help you today? कृपया एक विकल्प '
+[20:14:00.351]  SESSION_REDIS_SAVED               save_ms=0
+[20:14:01.462]  TURN_END                          total_ms=44770  save_ms=1111  post_state='INIT'
+[20:14:02.566]  BOT_REPLY_SENT                    send_ms=1102  reply='Welcome to Dr. Sanjay Vinayak clinic. How can I help you today? कृपया एक विकल्प '
+[20:14:26.838]  WEBHOOK_ARRIVED                   sid='1446'  text='1'
+[20:14:26.840]  SESSION_REDIS_HIT                 load_ms=0
+[20:14:26.840]  LOCK_ACQUIRED                     
+[20:14:26.846]  TURN_QUEUED                       sid='1446'  state='INIT'  backlog=1  ack_ms=7
+[20:14:26.870]  TURN_START                        text='1'
+[20:14:26.871]  SESSION_REDIS_HIT                 load_ms=0
+[20:14:28.541]  FSM_HANDLED                       pre_state='INIT'  post_state='ASK_BOOKING_FOR'  fsm_ms=1669  reply='ठीक है, मैं आपकी अपॉइंटमेंट बुक करने में मदद कर सकता हूँ। Who is this appointmen'
+[20:14:28.542]  SESSION_REDIS_SAVED               save_ms=0
+[20:14:29.269]  TURN_END                          total_ms=2399  save_ms=728  post_state='ASK_BOOKING_FOR'
+[20:14:30.243]  BOT_REPLY_SENT                    send_ms=972  reply='ठीक है, मैं आपकी अपॉइंटमेंट बुक करने में मदद कर सकता हूँ। Who is this appointmen'
+[20:17:58.902]  WEBHOOK_ARRIVED                   sid='1448'  text='Hi'
+[20:17:59.373]  SESSION_REDIS_HIT                 load_ms=42
+[20:17:59.374]  LOCK_ACQUIRED                     
+[20:17:59.380]  TURN_QUEUED                       sid='1448'  state='ASK_BOOKING_FOR'  backlog=0  ack_ms=477
+[20:17:59.384]  TURN_START                        text='Hi'
+[20:17:59.385]  SESSION_REDIS_HIT                 load_ms=0
+[20:17:59.965]  FSM_HANDLED                       pre_state='ASK_BOOKING_FOR'  post_state='ASK_BOOKING_FOR'  fsm_ms=580  reply='Please reply with 1, 2, or 0. Press "0" to go back.'
+[20:17:59.966]  SESSION_REDIS_SAVED               save_ms=0
+[20:18:00.723]  TURN_END                          total_ms=1338  save_ms=756  post_state='ASK_BOOKING_FOR'
+[20:18:01.899]  BOT_REPLY_SENT                    send_ms=1031  reply='Please reply with 1, 2, or 0. Press "0" to go back.'
+[20:18:14.771]  WEBHOOK_ARRIVED                   sid='1450'  text=',0'
+[20:18:14.967]  SESSION_REDIS_HIT                 load_ms=128
+[20:18:14.970]  LOCK_ACQUIRED                     
+[20:18:14.975]  TURN_QUEUED                       sid='1450'  state='ASK_BOOKING_FOR'  backlog=0  ack_ms=204
+[20:18:14.978]  TURN_START                        text=',0'
+[20:18:14.982]  SESSION_REDIS_HIT                 load_ms=3
+[20:18:15.600]  FSM_HANDLED                       pre_state='ASK_BOOKING_FOR'  post_state='ASK_BOOKING_FOR'  fsm_ms=617  reply='Please reply with 1, 2, or 0. Press "0" to go back.'
+[20:18:15.601]  SESSION_REDIS_SAVED               save_ms=0
+[20:18:16.387]  TURN_END                          total_ms=1408  save_ms=786  post_state='ASK_BOOKING_FOR'
+[20:18:17.573]  BOT_REPLY_SENT                    send_ms=1186  reply='Please reply with 1, 2, or 0. Press "0" to go back.'
+[20:18:26.071]  WEBHOOK_ARRIVED                   sid='1452'  text='0'
+[20:18:26.075]  SESSION_REDIS_HIT                 load_ms=0
+[20:18:26.076]  LOCK_ACQUIRED                     
+[20:18:26.093]  TURN_QUEUED                       sid='1452'  state='ASK_BOOKING_FOR'  backlog=1  ack_ms=22
+[20:18:26.109]  TURN_START                        text='0'
+[20:18:26.110]  SESSION_REDIS_HIT                 load_ms=0
+[20:18:27.067]  FSM_HANDLED                       pre_state='ASK_BOOKING_FOR'  post_state='INIT'  fsm_ms=957  reply='Welcome to Dr. Sanjay Vinayak clinic. How can I help you today? कृपया एक विकल्प '
+[20:18:27.069]  SESSION_REDIS_SAVED               save_ms=1
+[20:18:27.664]  TURN_END                          total_ms=1554  save_ms=595  post_state='INIT'
+[20:18:28.679]  BOT_REPLY_SENT                    send_ms=1015  reply='Welcome to Dr. Sanjay Vinayak clinic. How can I help you today? कृपया एक विकल्प '

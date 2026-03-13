@@ -20,6 +20,9 @@ if TYPE_CHECKING:
 
 
 def handle_init_state(fsm: "AppointmentFSM", text: str, lower: str) -> str:
+    def _clarify_options_only() -> str:
+        return fsm._msg("clarify_intent")
+
     def _booking_start_reply() -> str:
         return (
             fsm._welcome_booking_start()
@@ -36,27 +39,84 @@ def handle_init_state(fsm: "AppointmentFSM", text: str, lower: str) -> str:
             + fsm._with_back(fsm._msg("ask_booking_for"), option_count=2)
         )
 
+    def _language_choice(value: str) -> str | None:
+        normalized = (value or "").strip().lower()
+        if normalized in {"1", "english", "en"}:
+            return "en"
+        if normalized in {"2", "hindi", "hi", "हिंदी", "हिन्दी"}:
+            return "hi"
+        if normalized in {"3", "hinglish"}:
+            return "hinglish"
+        return None
+
+    def _language_already_selected() -> bool:
+        return bool(fsm.language_selected_by_user and fsm.response_language in {"en", "hi", "hinglish"})
+
+    def _continue_after_language_selection() -> str:
+        routed = fsm.pending_init_intent or "OTHER"
+        fsm.pending_init_intent = None
+        fsm.init_unclear_count = 0
+        if routed == "BOOK_APPOINTMENT":
+            existing_reply = fsm._existing_booking_entry_response()
+            if existing_reply:
+                return existing_reply
+            fsm.state = "ASK_BOOKING_FOR"
+            return _booking_continue_reply()
+        if routed == "CHECK_AVAILABILITY":
+            fsm.state = "ASK_AVAILABILITY_DATE"
+            fsm.availability_date_options_cache = []
+            date_opts = fsm._availability_date_options()
+            fsm.availability_date_options_cache = date_opts
+            return fsm._availability_date_options_prompt(date_opts)
+        if routed == "GREETING":
+            fsm.state = "INIT"
+            return _clarify_options_only()
+        fsm.state = "INIT"
+        return _clarify_options_only()
+
+    if fsm.state == "ASK_LANGUAGE":
+        chosen_language = _language_choice(lower)
+        if not chosen_language:
+            return fsm._respond(fsm._msg("invalid_language_selection"), allow_polish=False)
+        fsm.response_language = chosen_language
+        fsm.language_locked = True
+        fsm.language_selected_by_user = True
+        return fsm._respond(_continue_after_language_selection(), allow_polish=False)
+
     if fsm._is_telegram_start_command(lower):
         fsm.init_unclear_count = 0
-        existing_reply = fsm._existing_booking_entry_response()
-        if existing_reply:
-            return fsm._respond(existing_reply, allow_polish=False)
-        return fsm._respond(fsm._welcome_greeting() + "\n" + fsm._msg("clarify_intent"), allow_polish=False)
+        if _language_already_selected():
+            return fsm._respond(_clarify_options_only(), allow_polish=False)
+        fsm.pending_init_intent = "GREETING"
+        fsm.state = "ASK_LANGUAGE"
+        return fsm._respond(fsm._language_selection_prompt(), allow_polish=False)
 
     if lower.strip() == "1":
-        fsm.init_unclear_count = 0
-        existing_reply = fsm._existing_booking_entry_response()
-        if existing_reply:
-            return fsm._respond(existing_reply, allow_polish=False)
-        fsm.state = "ASK_BOOKING_FOR"
-        return fsm._respond(_booking_continue_reply(), allow_polish=False)
+        if _language_already_selected():
+            fsm.init_unclear_count = 0
+            existing_reply = fsm._existing_booking_entry_response()
+            if existing_reply:
+                return fsm._respond(existing_reply, allow_polish=False)
+            fsm.state = "ASK_BOOKING_FOR"
+            return fsm._respond(_booking_continue_reply(), allow_polish=False)
+        fsm.pending_init_intent = "BOOK_APPOINTMENT"
+        fsm.state = "ASK_LANGUAGE"
+        return fsm._respond(fsm._language_selection_prompt(), allow_polish=False)
     if lower.strip() == "2":
-        fsm.init_unclear_count = 0
-        fsm.state = "ASK_AVAILABILITY_DATE"
-        fsm.availability_date_options_cache = []
-        date_opts = fsm._availability_date_options()
-        fsm.availability_date_options_cache = date_opts
-        return fsm._respond(fsm._availability_date_options_prompt(date_opts), allow_polish=False)
+        if _language_already_selected():
+            fsm.init_unclear_count = 0
+            fsm.state = "ASK_AVAILABILITY_DATE"
+            fsm.availability_date_options_cache = []
+            date_opts = fsm._availability_date_options()
+            fsm.availability_date_options_cache = date_opts
+            return fsm._respond(fsm._availability_date_options_prompt(date_opts), allow_polish=False)
+        fsm.pending_init_intent = "CHECK_AVAILABILITY"
+        fsm.state = "ASK_LANGUAGE"
+        return fsm._respond(fsm._language_selection_prompt(), allow_polish=False)
+    if lower.strip() == "0" and _language_already_selected():
+        fsm.pending_init_intent = "GREETING"
+        fsm.state = "ASK_LANGUAGE"
+        return fsm._respond(fsm._language_selection_prompt(), allow_polish=False)
 
     if fsm.init_unclear_count >= 3:
         if is_yes(lower) or is_booking_intent(lower):
@@ -69,7 +129,7 @@ def handle_init_state(fsm: "AppointmentFSM", text: str, lower: str) -> str:
         fsm._reset_all(cancelled=True)
         return fsm._respond(fsm._msg("non_scope_final"), allow_polish=False)
 
-    routed, detected_language = route_initial_decision(
+    routed, detected_language, abuse_detected = route_initial_decision(
         llm_client=fsm.llm_client,
         enable_llm_polish=fsm.enable_llm_polish,
         text=text,
@@ -78,30 +138,40 @@ def handle_init_state(fsm: "AppointmentFSM", text: str, lower: str) -> str:
     if detected_language in {"en", "hi", "hinglish"}:
         fsm.response_language = detected_language
         fsm.language_locked = True
-    if routed == "BOOK_APPOINTMENT":
-        fsm.init_unclear_count = 0
-        existing_reply = fsm._existing_booking_entry_response()
-        if existing_reply:
-            return fsm._respond(existing_reply, allow_polish=False)
-        fsm.state = "ASK_BOOKING_FOR"
-        return fsm._respond(_booking_start_reply(), allow_polish=False)
-    if routed == "CHECK_AVAILABILITY":
-        fsm.init_unclear_count = 0
-        fsm.state = "ASK_AVAILABILITY_DATE"
-        fsm.availability_date_options_cache = []
-        date_opts = fsm._availability_date_options()
-        fsm.availability_date_options_cache = date_opts
-        return fsm._respond(fsm._availability_date_options_prompt(date_opts), allow_polish=False)
-    if routed == "GREETING":
-        fsm.init_unclear_count = 0
-        existing_reply = fsm._existing_booking_entry_response()
-        if existing_reply:
-            return fsm._respond(existing_reply, allow_polish=False)
-        return fsm._respond(fsm._welcome_greeting() + "\n" + fsm._msg("clarify_intent"), allow_polish=False)
-    fsm.init_unclear_count += 1
-    if fsm.init_unclear_count >= 3:
-        return fsm._respond(fsm._msg("final_booking_check"), allow_polish=False)
-    return fsm._respond(fsm._msg("clarify_intent"), allow_polish=False)
+    if abuse_detected or routed == "ABUSE":
+        fsm.context.abusive_warning_count = int(fsm.context.abusive_warning_count or 0) + 1
+        if fsm.context.abusive_warning_count >= 2:
+            fsm.context.abuse_blocked = True
+            return fsm._respond(fsm._msg("abusive_language_final"), allow_polish=False)
+        return fsm._respond(fsm._msg("abusive_language"), allow_polish=False)
+    if _language_already_selected():
+        if routed == "BOOK_APPOINTMENT":
+            existing_reply = fsm._existing_booking_entry_response()
+            if existing_reply:
+                return fsm._respond(existing_reply, allow_polish=False)
+            fsm.state = "ASK_BOOKING_FOR"
+            return fsm._respond(_booking_start_reply(), allow_polish=False)
+        if routed == "CHECK_AVAILABILITY":
+            fsm.init_unclear_count = 0
+            fsm.state = "ASK_AVAILABILITY_DATE"
+            fsm.availability_date_options_cache = []
+            date_opts = fsm._availability_date_options()
+            fsm.availability_date_options_cache = date_opts
+            return fsm._respond(fsm._availability_date_options_prompt(date_opts), allow_polish=False)
+        if routed == "GREETING":
+            fsm.init_unclear_count = 0
+            existing_reply = fsm._existing_booking_entry_response()
+            if existing_reply:
+                return fsm._respond(existing_reply, allow_polish=False)
+            return fsm._respond(_clarify_options_only(), allow_polish=False)
+        fsm.init_unclear_count += 1
+        if fsm.init_unclear_count >= 3:
+            return fsm._respond(fsm._msg("final_booking_check"), allow_polish=False)
+        return fsm._respond(_clarify_options_only(), allow_polish=False)
+
+    fsm.pending_init_intent = routed if routed in {"BOOK_APPOINTMENT", "CHECK_AVAILABILITY", "GREETING"} else "OTHER"
+    fsm.state = "ASK_LANGUAGE"
+    return fsm._respond(fsm._language_selection_prompt(), allow_polish=False)
 
 
 def handle_cancelled_state(fsm: "AppointmentFSM", lower: str) -> str:
@@ -113,7 +183,7 @@ def handle_cancelled_state(fsm: "AppointmentFSM", lower: str) -> str:
     existing_reply = fsm._existing_booking_entry_response()
     if existing_reply:
         return fsm._respond(existing_reply, allow_polish=False)
-    return fsm._respond(fsm._welcome_greeting() + "\n" + fsm._msg("clarify_intent"), allow_polish=False)
+    return fsm._respond(fsm._msg("clarify_intent"), allow_polish=False)
 
 
 def handle_availability_date_state(fsm: "AppointmentFSM", lower: str) -> str:
@@ -245,7 +315,7 @@ def handle_completed_state(fsm: "AppointmentFSM", lower: str) -> str:
             allow_polish=False,
         )
     fsm._reset_all(cancelled=False)
-    return fsm._respond(fsm._welcome_greeting() + "\n" + fsm._msg("clarify_intent"), allow_polish=False)
+    return fsm._respond(fsm._msg("clarify_intent"), allow_polish=False)
 
 
 def handle_ask_date_state(fsm: "AppointmentFSM", lower: str) -> str:

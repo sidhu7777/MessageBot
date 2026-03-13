@@ -18,8 +18,10 @@ def capture_prefill_entities(context: Any, text: str) -> None:
 def is_booking_intent(lower: str) -> bool:
     devanagari_patterns = [
         r"अपॉइंटमेंट",
+        r"अपॉइंटम",
         r"अपॉइन्टमेंट",
         r"बुकिंग",
+        r"बुक",
         r"चेकअप",
         r"कंसल्ट",
         r"मुलाकात",
@@ -40,6 +42,11 @@ def is_booking_intent(lower: str) -> bool:
         r"\bbook\s+kar\s+do\b",
         r"\bappointment\s+chahiye\b",
         r"\bschedule\b.*\bappointment\b",
+        r"\bmujhe\b.*\bbook\b",
+        r"\bmera\b.*\bbook\b",
+        r"\bmero\b.*\bbook\b",
+        r"\bappointment\b.*\bkarna\b",
+        r"\bappoint\w*\b.*\bbook\b",
     ]
     return any(re.search(pattern, lower) for pattern in patterns) or any(
         re.search(pattern, lower) for pattern in devanagari_patterns

@@ -140,6 +140,8 @@ class AppointmentFSM:
     pending_existing_action: Optional[str] = None
     known_patient_name: Optional[str] = None
     known_patient_phone: Optional[str] = None
+    pending_init_intent: Optional[str] = None
+    language_selected_by_user: bool = False
 
     def handle(self, user_text: str) -> str:
         text = (user_text or "").strip()
@@ -152,7 +154,7 @@ class AppointmentFSM:
         if not text:
             return self._respond(self._msg("empty_input"))
 
-        if self._is_abusive_message(text, lower, allow_llm=(self.state == "INIT" and not self._is_init_safe_input(lower))):
+        if self._is_abusive_message(text, lower, allow_llm=False):
             self.context.abusive_warning_count = int(self.context.abusive_warning_count or 0) + 1
             if self.context.abusive_warning_count >= 2:
                 self.context.abuse_blocked = True
@@ -184,6 +186,8 @@ class AppointmentFSM:
             return self._respond(self._msg("restart") + "\n" + self._msg("ask_name"))
 
         if self.state == "INIT":
+            return handle_init_state(self, text, lower)
+        if self.state == "ASK_LANGUAGE":
             return handle_init_state(self, text, lower)
         if self.state == "CANCELLED":
             return handle_cancelled_state(self, lower)
@@ -224,6 +228,7 @@ class AppointmentFSM:
 
     def _normalize_option_input_for_state(self, text: str, lower: str) -> tuple[str, str]:
         option_states = {
+            "ASK_LANGUAGE",
             "ASK_BOOKING_FOR",
             "ASK_EXISTING_BOOKING_ACTION",
             "ASK_MAX_ACTIVE_BOOKINGS_ACTION",
@@ -349,6 +354,8 @@ class AppointmentFSM:
         self.in_edit_flow = False
         self.known_patient_name = None
         self.known_patient_phone = None
+        self.pending_init_intent = None
+        self.language_selected_by_user = False
         self.clinic_options_cache = []
         self.date_options_cache = []
         self.time_options_cache = []
@@ -393,10 +400,12 @@ class AppointmentFSM:
     def _handle_go_back(self) -> Optional[str]:
         if self.state == "ASK_BOOKING_FOR":
             self.state = "INIT"
-            return self._welcome_greeting() + "\n" + self._msg("clarify_intent")
+            return self._msg("clarify_intent")
         if self.state == "ASK_NAME":
             self.state = "ASK_BOOKING_FOR"
             return self._with_back(self._msg("ask_booking_for"), option_count=2)
+        if self.state == "ASK_LANGUAGE":
+            return self._language_selection_prompt()
         if self.state == "ASK_PHONE":
             self.state = "ASK_NAME"
             return self._with_back(self._msg("ask_name"))
@@ -421,7 +430,7 @@ class AppointmentFSM:
         if self.state == "ASK_AVAILABILITY_DATE":
             self.state = "INIT"
             self.availability_date_options_cache = []
-            return self._welcome_greeting() + "\n" + self._msg("clarify_intent")
+            return self._msg("clarify_intent")
         if self.state == "ASK_AVAILABILITY_DETAILS":
             self.state = "ASK_AVAILABILITY_DATE"
             self.context.availability_date = None
@@ -464,6 +473,16 @@ class AppointmentFSM:
                 patient_name=self.known_patient_name,
             )
         return self._msg("welcome_new_patient_booking", doctor_name=doctor_name)
+
+    def _language_selection_prompt(self) -> str:
+        doctor_name = self._doctor_display_name()
+        if self.known_patient_name:
+            return self._msg(
+                "language_selection_known_patient",
+                doctor_name=doctor_name,
+                patient_name=self.known_patient_name,
+            )
+        return self._msg("language_selection_new_patient", doctor_name=doctor_name)
 
     def _doctor_display_name(self) -> str:
         self._ensure_actor_defaults()
@@ -674,12 +693,28 @@ class AppointmentFSM:
         periods = self._available_periods()
         if not periods:
             return self._msg("no_time_available")
-        labels = {
-            "morning": "Morning",
-            "afternoon": "Afternoon",
-            "evening": "Evening",
-        }
-        lines = ["Please choose preferred time period:"]
+        if self.response_language == "hi":
+            labels = {
+                "morning": "सुबह",
+                "afternoon": "दोपहर",
+                "evening": "शाम",
+            }
+            header = "कृपया पसंदीदा समय अवधि चुनें:"
+        elif self.response_language == "hinglish":
+            labels = {
+                "morning": "Morning",
+                "afternoon": "Afternoon",
+                "evening": "Evening",
+            }
+            header = "Please preferred time period choose kariye:"
+        else:
+            labels = {
+                "morning": "Morning",
+                "afternoon": "Afternoon",
+                "evening": "Evening",
+            }
+            header = "Please choose preferred time period:"
+        lines = [header]
         for idx, period in enumerate(periods, start=1):
             lines.append(f"{idx}. {labels.get(period, period.title())}")
         lines.append(self._msg("go_back_hint"))
@@ -1135,11 +1170,11 @@ class AppointmentFSM:
         tomorrow_iso = (date.today() + timedelta(days=1)).isoformat()
         def label(d: str) -> str:
             if d == today_iso:
-                return f"Today ({d})"
+                return self._msg("date_label_today", date=d)
             if d == tomorrow_iso:
-                return f"Tomorrow ({d})"
+                return self._msg("date_label_tomorrow", date=d)
             return d
-        lines = ["Please choose appointment date:"]
+        lines = [self._msg("date_options_header")]
         for idx, d in enumerate(date_options, start=1):
             lines.append(f"{idx}. {label(d)}")
         lines.append(self._msg("go_back_hint"))
@@ -1172,15 +1207,15 @@ class AppointmentFSM:
 
         def label(d: str) -> str:
             if d == today_iso:
-                return f"Today ({d})"
+                return self._msg("date_label_today", date=d)
             if d == tomorrow_iso:
-                return f"Tomorrow ({d})"
+                return self._msg("date_label_tomorrow", date=d)
             return d
 
-        lines = ["Please choose a date to check availability:"]
+        lines = [self._msg("availability_date_options_header")]
         for idx, d in enumerate(date_options, start=1):
             lines.append(f"{idx}. {label(d)}")
-        lines.append('Press "0" to go back.')
+        lines.append(self._msg("go_back_hint"))
         return "\n".join(lines)
 
     def _display_context(self) -> dict:
@@ -1217,10 +1252,7 @@ class AppointmentFSM:
                     availability_doctor=self.context.availability_doctor,
                     availability_date=slot_date,
                 )
-            return (
-                f"Noted. You want doctor availability on {slot_date}.\n"
-                "Please share doctor name if you want doctor-specific availability."
-            )
+            return self._msg("availability_generic_noted", availability_date=slot_date)
 
         try:
             # Redis-primary path: fetch one snapshot and derive all clinic/date/time output.
@@ -1262,19 +1294,20 @@ class AppointmentFSM:
 
             if available_lines:
                 return (
-                    f"Doctor availability on {slot_date}:\n"
+                    self._msg("availability_result_available_header", availability_date=slot_date)
+                    + "\n"
                     + "\n".join(available_lines)
-                    + "\n\n1. Book appointment\n0. Go back"
+                    + self._msg("availability_result_actions")
                 )
 
             if next_lines:
                 return (
-                    f"No slots available on {slot_date}.\n"
-                    "Next available dates:\n"
+                    self._msg("availability_result_next_header", availability_date=slot_date)
+                    + "\n"
                     + "\n".join(next_lines)
-                    + "\n\n1. Book appointment\nPress \"0\" to go back."
+                    + self._msg("availability_result_actions_back")
                 )
-            return f"No slots available on {slot_date}.\n\n1. Book appointment\nPress \"0\" to go back."
+            return self._msg("availability_result_none", availability_date=slot_date)
         except Exception:
             if self.context.availability_doctor:
                 return self._msg(
