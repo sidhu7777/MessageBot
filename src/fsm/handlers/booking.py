@@ -28,7 +28,7 @@ def handle_ask_booking_for_state(fsm: "AppointmentFSM", lower: str) -> str:
                         + fsm._msg("name_ack", name=fsm.known_patient_name)
                         + "\n"
                         + fsm._msg("phone_ack", phone_number=chat_phone)
-                        + "\n"
+                        + "\n\n"
                         + fsm._with_back(auto)
                     )
                 fsm.state = "ASK_CLINIC"
@@ -38,7 +38,7 @@ def handle_ask_booking_for_state(fsm: "AppointmentFSM", lower: str) -> str:
                     + fsm._msg("name_ack", name=fsm.known_patient_name)
                     + "\n"
                     + fsm._msg("phone_ack", phone_number=chat_phone)
-                    + "\n"
+                    + "\n\n"
                     + fsm._clinic_prompt()
                 )
             telegram_phone = fsm.known_patient_phone
@@ -61,7 +61,7 @@ def handle_ask_booking_for_state(fsm: "AppointmentFSM", lower: str) -> str:
                     + fsm._msg("name_ack", name=fsm.known_patient_name)
                     + "\n"
                     + fsm._msg("phone_ack", phone_number=telegram_phone)
-                    + "\n"
+                    + "\n\n"
                     + fsm._clinic_prompt()
                 )
             fsm.state = "ASK_PHONE"
@@ -69,15 +69,15 @@ def handle_ask_booking_for_state(fsm: "AppointmentFSM", lower: str) -> str:
                 fsm._msg("booking_for_self_ack")
                 + "\n"
                 + fsm._msg("name_ack", name=fsm.known_patient_name)
-                + "\n"
+                + "\n\n"
                 + fsm._with_back(fsm._ask_phone_prompt())
             )
         fsm.state = "ASK_NAME"
-        return fsm._respond(fsm._msg("booking_for_self_ack") + "\n" + fsm._with_back(fsm._msg("ask_name")))
+        return fsm._respond(fsm._msg("booking_for_self_ack") + "\n\n" + fsm._with_back(fsm._msg("ask_name")))
     if choice in {"2", "b", "another", "another person", "other"}:
         fsm.booking_for_self = False
         fsm.state = "ASK_NAME"
-        return fsm._respond(fsm._msg("booking_for_other_ack") + "\n" + fsm._with_back(fsm._msg("ask_name")))
+        return fsm._respond(fsm._msg("booking_for_other_ack") + "\n\n" + fsm._with_back(fsm._msg("ask_name")))
     if choice in {"0", "back", "go back"}:
         fsm.state = "INIT"
         return fsm._respond(fsm._msg("no_intent"))
@@ -106,7 +106,7 @@ def handle_ask_name_state(fsm: "AppointmentFSM", text: str, lower: str) -> str:
     if fsm.in_edit_flow:
         fsm.in_edit_flow = False
         fsm.state = "CONFIRM"
-        return fsm._respond(fsm._msg("change_ack", step="ASK_NAME") + "\n" + fsm._msg("confirm_summary", **fsm._display_context()))
+        return fsm._respond(fsm._msg("change_ack", step="ASK_NAME") + "\n\n" + fsm._msg("confirm_summary", **fsm._display_context()))
     if fsm.booking_for_self:
         chat_phone = fsm._normalize_phone(fsm.chat_phone_number or "")
         if chat_phone and not fsm._is_telegram_channel():
@@ -117,7 +117,7 @@ def handle_ask_name_state(fsm: "AppointmentFSM", text: str, lower: str) -> str:
                     fsm._msg("name_ack", name=name)
                     + "\n"
                     + fsm._msg("phone_ack", phone_number=chat_phone)
-                    + "\n"
+                    + "\n\n"
                     + fsm._with_back(auto)
                 )
             fsm.state = "ASK_CLINIC"
@@ -125,11 +125,11 @@ def handle_ask_name_state(fsm: "AppointmentFSM", text: str, lower: str) -> str:
                 fsm._msg("name_ack", name=name)
                 + "\n"
                 + fsm._msg("phone_ack", phone_number=chat_phone)
-                + "\n"
+                + "\n\n"
                 + fsm._clinic_prompt()
             )
     fsm.state = "ASK_PHONE"
-    return fsm._respond(fsm._msg("name_ack", name=name) + "\n" + fsm._with_back(fsm._ask_phone_prompt()))
+    return fsm._respond(fsm._msg("name_ack", name=name) + "\n\n" + fsm._with_back(fsm._ask_phone_prompt()))
 
 
 def handle_ask_phone_state(fsm: "AppointmentFSM", text: str, lower: str) -> str:
@@ -166,13 +166,13 @@ def handle_ask_phone_state(fsm: "AppointmentFSM", text: str, lower: str) -> str:
         if fsm.in_edit_flow:
             fsm.in_edit_flow = False
             fsm.state = "CONFIRM"
-            return fsm._respond(fsm._msg("change_ack", step="ASK_PHONE") + "\n" + fsm._msg("confirm_summary", **fsm._display_context()))
+            return fsm._respond(fsm._msg("change_ack", step="ASK_PHONE") + "\n\n" + fsm._msg("confirm_summary", **fsm._display_context()))
         auto = fsm._auto_select_single_clinic_after_phone()
         if auto:
-            return fsm._respond(fsm._msg("phone_ack", phone_number=fsm.context.phone_number) + "\n" + fsm._with_back(auto))
+            return fsm._respond(fsm._msg("phone_ack", phone_number=fsm.context.phone_number) + "\n\n" + fsm._with_back(auto))
         fsm.state = "ASK_CLINIC"
         return fsm._respond(
-            fsm._msg("phone_ack", phone_number=fsm.context.phone_number) + "\n" + fsm._clinic_prompt()
+            fsm._msg("phone_ack", phone_number=fsm.context.phone_number) + "\n\n" + fsm._clinic_prompt()
         )
 
     phone = extract_phone(text)
@@ -184,12 +184,12 @@ def handle_ask_phone_state(fsm: "AppointmentFSM", text: str, lower: str) -> str:
     if fsm.in_edit_flow:
         fsm.in_edit_flow = False
         fsm.state = "CONFIRM"
-        return fsm._respond(fsm._msg("change_ack", step="ASK_PHONE") + "\n" + fsm._msg("confirm_summary", **fsm._display_context()))
+        return fsm._respond(fsm._msg("change_ack", step="ASK_PHONE") + "\n\n" + fsm._msg("confirm_summary", **fsm._display_context()))
     auto = fsm._auto_select_single_clinic_after_phone()
     if auto:
-        return fsm._respond(fsm._msg("phone_ack", phone_number=phone) + "\n" + fsm._with_back(auto))
+        return fsm._respond(fsm._msg("phone_ack", phone_number=phone) + "\n\n" + fsm._with_back(auto))
     fsm.state = "ASK_CLINIC"
-    return fsm._respond(fsm._msg("phone_ack", phone_number=phone) + "\n" + fsm._clinic_prompt())
+    return fsm._respond(fsm._msg("phone_ack", phone_number=phone) + "\n\n" + fsm._clinic_prompt())
 
 
 def handle_ask_clinic_state(fsm: "AppointmentFSM", text: str, lower: str) -> str:
@@ -218,7 +218,7 @@ def handle_ask_clinic_state(fsm: "AppointmentFSM", text: str, lower: str) -> str
     date_options = fsm._date_options()
     if not date_options:
         fsm.state = "ASK_CLINIC"
-        return fsm._respond(fsm._msg("no_date_available", clinic_name=fsm.context.clinic_name or "this clinic") + "\n" + fsm._clinic_prompt())
+        return fsm._respond(fsm._msg("no_date_available", clinic_name=fsm.context.clinic_name or "this clinic") + "\n\n" + fsm._clinic_prompt())
     fsm.state = "ASK_DATE"
     return fsm._respond(fsm._date_options_prompt(date_options))
 
@@ -238,7 +238,7 @@ def handle_ask_time_state(fsm: "AppointmentFSM", text: str, lower: str) -> str:
             return fsm._respond(fsm._msg("no_time_available"))
         return fsm._respond(
             fsm._msg("date_ack", appointment_date=date_from_text)
-            + "\n"
+            + "\n\n"
             + fsm._initial_time_prompt()
         )
 
@@ -324,6 +324,6 @@ def handle_ask_time_state(fsm: "AppointmentFSM", text: str, lower: str) -> str:
     if fsm.in_edit_flow:
         fsm.in_edit_flow = False
         fsm.state = "CONFIRM"
-        return fsm._respond(fsm._msg("change_ack", step="ASK_TIME") + "\n" + fsm._msg("confirm_summary", **fsm._display_context()))
+        return fsm._respond(fsm._msg("change_ack", step="ASK_TIME") + "\n\n" + fsm._msg("confirm_summary", **fsm._display_context()))
     fsm.state = "CONFIRM"
-    return fsm._respond(fsm._msg("time_ack", appointment_time=fsm._format_time_for_display(parsed_time)) + "\n" + fsm._msg("confirm_summary", **fsm._display_context()))
+    return fsm._respond(fsm._msg("time_ack", appointment_time=fsm._format_time_for_display(parsed_time)) + "\n\n" + fsm._msg("confirm_summary", **fsm._display_context()))

@@ -246,6 +246,45 @@ class SchedulingRepository:
         except Exception:
             return
 
+    @staticmethod
+    def _build_time_end_lookup(windows: list[tuple[time, time, int]]) -> dict[str, str]:
+        lookup: dict[str, str] = {}
+        for start_t, end_t, duration in windows:
+            cursor = datetime.combine(date.today(), start_t)
+            end_dt = datetime.combine(date.today(), end_t)
+            step = timedelta(minutes=duration)
+            while cursor < end_dt:
+                slot_start = cursor.strftime("%H:%M")
+                slot_end = min(cursor + step, end_dt).strftime("%H:%M")
+                lookup[slot_start] = slot_end
+                cursor += step
+        return lookup
+
+    @staticmethod
+    def _filter_runtime_visible_times(
+        *,
+        slot_date: str,
+        times: list[str],
+        end_times_by_start: Optional[dict[str, str]] = None,
+    ) -> list[str]:
+        values = [str(t or "").strip() for t in (times or []) if str(t or "").strip()]
+        if not values:
+            return []
+        today_iso = datetime.now(_IST).date().isoformat()
+        if slot_date != today_iso:
+            return values
+        now_hhmm = datetime.now(_IST).strftime("%H:%M")
+        visible: list[str] = []
+        end_lookup = {str(k): str(v) for k, v in (end_times_by_start or {}).items() if str(k) and str(v)}
+        for slot_start in values:
+            slot_end = end_lookup.get(slot_start)
+            if slot_end:
+                if slot_end > now_hhmm:
+                    visible.append(slot_start)
+            elif slot_start >= now_hhmm:
+                visible.append(slot_start)
+        return visible
+
     def _appointment_windows_for_date(
         self,
         *,
@@ -417,9 +456,11 @@ class SchedulingRepository:
             conn.close()
 
         free = [t for t in candidate_times if t not in booked]
-        if slot_date == datetime.now(_IST).date().isoformat():
-            now_hhmm = datetime.now(_IST).strftime("%H:%M")
-            free = [t for t in free if t >= now_hhmm]
+        free = self._filter_runtime_visible_times(
+            slot_date=slot_date,
+            times=free,
+            end_times_by_start=self._build_time_end_lookup(windows),
+        )
         return free
 
     def _build_availability_snapshot(self, doctor_id: int, admin_id: Optional[int], accept_days: int) -> dict:
@@ -436,12 +477,21 @@ class SchedulingRepository:
         ]
         dates_by_clinic: dict[str, list[str]] = {}
         times_by_clinic_date: dict[str, list[str]] = {}
+        time_end_by_clinic_date: dict[str, dict[str, str]] = {}
 
         for clinic in clinics:
             clinic_key = str(clinic.clinic_id)
             clinic_dates: list[str] = []
             for offset in range(day_horizon + 1):
                 day_value = (date.today() + timedelta(days=offset)).isoformat()
+                windows = self._appointment_windows_for_date(
+                    doctor_id=doctor_id,
+                    clinic_id=clinic.clinic_id,
+                    slot_date=day_value,
+                    admin_id=admin_id,
+                )
+                if windows:
+                    time_end_by_clinic_date[f"{clinic_key}|{day_value}"] = self._build_time_end_lookup(windows)
                 times = self._db_list_available_times_for_date(
                     doctor_id=doctor_id,
                     clinic_id=clinic.clinic_id,
@@ -462,6 +512,7 @@ class SchedulingRepository:
             "clinics": clinics_payload,
             "dates_by_clinic": dates_by_clinic,
             "times_by_clinic_date": times_by_clinic_date,
+            "time_end_by_clinic_date": time_end_by_clinic_date,
         }
 
     def _get_availability_snapshot(self, doctor_id: int, admin_id: Optional[int]) -> dict:
@@ -1100,9 +1151,24 @@ class SchedulingRepository:
     ) -> list[str]:
         snapshot = self._get_availability_snapshot(doctor_id=doctor_id, admin_id=admin_id)
         dates_by_clinic = snapshot.get("dates_by_clinic") or {}
+        times_by_clinic_date = snapshot.get("times_by_clinic_date") or {}
+        time_end_by_clinic_date = snapshot.get("time_end_by_clinic_date") or {}
         clinic_dates = list(dates_by_clinic.get(str(int(clinic_id))) or [])
         if clinic_dates:
-            return clinic_dates[: max(1, int(limit))]
+            visible_dates: list[str] = []
+            for slot_date in clinic_dates:
+                key = f"{int(clinic_id)}|{slot_date}"
+                visible_times = self._filter_runtime_visible_times(
+                    slot_date=slot_date,
+                    times=list(times_by_clinic_date.get(key) or []),
+                    end_times_by_start=dict(time_end_by_clinic_date.get(key) or {}),
+                )
+                if visible_times:
+                    visible_dates.append(slot_date)
+                if len(visible_dates) >= max(1, int(limit)):
+                    break
+            if visible_dates:
+                return visible_dates
 
         # Fallback to DB for resilience (cache miss/incomplete payload).
         accept_days = self.doctor_accept_days(doctor_id=doctor_id, admin_id=admin_id)
@@ -1130,20 +1196,15 @@ class SchedulingRepository:
         admin_id: Optional[int] = None,
         limit: int = 3,
     ) -> list[str]:
-        today_iso = datetime.now(_IST).date().isoformat()
-        if slot_date == today_iso:
-            db_times = self._db_list_available_times_for_date(
-                doctor_id=doctor_id,
-                clinic_id=clinic_id,
-                slot_date=slot_date,
-                admin_id=admin_id,
-            )
-            return db_times[: max(1, int(limit))]
-
         snapshot = self._get_availability_snapshot(doctor_id=doctor_id, admin_id=admin_id)
         times_map = snapshot.get("times_by_clinic_date") or {}
+        time_end_by_clinic_date = snapshot.get("time_end_by_clinic_date") or {}
         cache_key = f"{int(clinic_id)}|{slot_date}"
-        cached_times = list(times_map.get(cache_key) or [])
+        cached_times = self._filter_runtime_visible_times(
+            slot_date=slot_date,
+            times=list(times_map.get(cache_key) or []),
+            end_times_by_start=dict(time_end_by_clinic_date.get(cache_key) or {}),
+        )
         if cached_times:
             return cached_times[: max(1, int(limit))]
 
@@ -1154,6 +1215,7 @@ class SchedulingRepository:
             slot_date=slot_date,
             admin_id=admin_id,
         )
+        db_times = self._filter_runtime_visible_times(slot_date=slot_date, times=db_times)
         return db_times[: max(1, int(limit))]
 
     def generate_slots_for_schedule(self, schedule_id: int, days_ahead: int) -> None:

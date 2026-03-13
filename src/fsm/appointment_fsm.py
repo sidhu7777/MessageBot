@@ -389,8 +389,8 @@ class AppointmentFSM:
 
     def _with_back(self, text: str, option_count: Optional[int] = None) -> str:
         if option_count is not None and option_count >= 1:
-            return text + "\n" + self._msg("go_back_hint")
-        return text + "\n" + self._msg("go_back_hint")
+            return text + "\n\n" + self._msg("go_back_hint")
+        return text + "\n\n" + self._msg("go_back_hint")
 
     @staticmethod
     def _is_go_back(lower_text: str) -> bool:
@@ -448,7 +448,7 @@ class AppointmentFSM:
             # data to work with; only do the DB call when the cache is actually empty.
             if not self.time_options_cache:
                 self._load_time_options(limit=60)
-            return self._with_back(self._initial_time_prompt())
+            return self._initial_time_prompt()
         return None
 
     def _welcome_greeting(self) -> str:
@@ -611,9 +611,10 @@ class AppointmentFSM:
             if display_number is None:
                 display_number = row.get("appointment_id")
             lines.append(
-                f"{idx}. {row.get('clinic_name') or '-'} | {row.get('slot_date') or '-'} | "
-                f"{self._format_time_for_display(str(row.get('slot_time') or '-'))} | Booking Number: {display_number}"
+                f"{idx}. {row.get('clinic_name') or '-'}, Date: {row.get('slot_date') or '-'}, "
+                f"Time: {self._format_time_for_display(str(row.get('slot_time') or '-'))}, Booking Number: {display_number}"
             )
+        lines.append("")
         lines.append(self._msg("go_back_hint"))
         choice_numbers = ", ".join(str(i) for i in range(1, len(self.active_booking_options_cache) + 1))
         lines.append(self._msg("reply_with_numbers", numbers=f"{choice_numbers}, 0"))
@@ -717,6 +718,7 @@ class AppointmentFSM:
         lines = [header]
         for idx, period in enumerate(periods, start=1):
             lines.append(f"{idx}. {labels.get(period, period.title())}")
+        lines.append("")
         lines.append(self._msg("go_back_hint"))
         lines.append(self._reply_with_prompt(len(periods)))
         return "\n".join(lines)
@@ -779,6 +781,7 @@ class AppointmentFSM:
         else:
             for idx, hhmm in enumerate(self.time_slot_options_cache, start=1):
                 lines.append(f"{idx}. {self._format_time_for_display(hhmm)}")
+        lines.append("")
         lines.append(self._msg("go_back_hint"))
         lines.append(self._reply_with_prompt(len(self.time_slot_options_cache)))
         return "\n".join(lines)
@@ -1120,8 +1123,9 @@ class AppointmentFSM:
             if self.clinic_options_cache:
                 lines = [self._msg("ask_clinic_header")]
                 for clinic in self.clinic_options_cache[:10]:
-                    lines.append(f"{clinic['ordinal']}. {clinic['name']} | {clinic['address']}")
+                    lines.append(f"{clinic['ordinal']}. {clinic['name']}, Address: {clinic['address']}")
                 option_count = len(self.clinic_options_cache[:10])
+                lines.append("")
                 lines.append(self._msg("go_back_hint"))
                 lines.append(self._reply_with_prompt(option_count))
                 return "\n".join(lines)
@@ -1177,6 +1181,7 @@ class AppointmentFSM:
         lines = [self._msg("date_options_header")]
         for idx, d in enumerate(date_options, start=1):
             lines.append(f"{idx}. {label(d)}")
+        lines.append("")
         lines.append(self._msg("go_back_hint"))
         numbers = ", ".join(str(i) for i in range(1, len(date_options) + 1))
         lines.append(self._msg("reply_with_numbers", numbers=f"{numbers}, 0"))
@@ -1215,6 +1220,7 @@ class AppointmentFSM:
         lines = [self._msg("availability_date_options_header")]
         for idx, d in enumerate(date_options, start=1):
             lines.append(f"{idx}. {label(d)}")
+        lines.append("")
         lines.append(self._msg("go_back_hint"))
         return "\n".join(lines)
 

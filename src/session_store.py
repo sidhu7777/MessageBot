@@ -39,6 +39,13 @@ class SessionManager:
     def get_or_create(self, user_id: str) -> AppointmentFSM:
         return self._load_or_create_fsm(user_id=user_id)
 
+    def get_cached_state(self, user_id: str, default: str = "INIT") -> str:
+        snapshot = self._load_redis_snapshot(user_id=user_id)
+        if not isinstance(snapshot, dict):
+            return default
+        state = str(snapshot.get("state") or "").strip()
+        return state or default
+
     def save(self, user_id: str, fsm: Optional[AppointmentFSM] = None) -> None:
         current_fsm = fsm or self._load_or_create_fsm(user_id=user_id)
         self._save_redis_snapshot(user_id=user_id, fsm=current_fsm)

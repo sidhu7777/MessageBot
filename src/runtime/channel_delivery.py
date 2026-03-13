@@ -315,6 +315,16 @@ class ChannelDelivery:
     @staticmethod
     def _format_telegram_text(body: str) -> str:
         escaped = html.escape(body or "")
+        escaped = re.sub(
+            r"\*(Patient ID:\s*[^*\n]+)\*",
+            lambda match: f"<b>{match.group(1)}</b>",
+            escaped,
+        )
+        escaped = re.sub(
+            r"\*(à¤°à¥‹à¤—à¥€ à¤†à¤ˆà¤¡à¥€:\s*[^*\n]+)\*",
+            lambda match: f"<b>{match.group(1)}</b>",
+            escaped,
+        )
         return re.sub(
             r"\*(Patient ID:|रोगी आईडी:)\*",
             lambda match: f"<b>{match.group(1)}</b>",

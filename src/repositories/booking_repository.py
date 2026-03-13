@@ -1,3 +1,4 @@
+import json
 from dataclasses import dataclass
 from datetime import datetime, timedelta, date, time
 import threading
@@ -55,6 +56,8 @@ class BookingResult:
 class BookingRepository:
     def __init__(self, config: MySQLConfig) -> None:
         self._config = config
+        self.redis_client = None
+        self._redis_key_prefix = "msgbot"
         self._meta_cache_lock = threading.Lock()
         self._table_exists_cache: dict[str, bool] = {}
         self._table_columns_cache: dict[str, set[str]] = {}
@@ -63,6 +66,56 @@ class BookingRepository:
 
     def _connect(self):
         return connect_mysql(self._config)
+
+    def set_redis_client(self, redis_client: Optional[object], *, key_prefix: str = "msgbot") -> None:
+        self.redis_client = redis_client
+        self._redis_key_prefix = (key_prefix or "msgbot").strip() or "msgbot"
+
+    def _patient_phone_cache_key(self, *, admin_id: Optional[int], doctor_id: Optional[int], phone_number: str) -> str:
+        admin_key = str(int(admin_id)) if admin_id is not None else "na"
+        doctor_key = str(int(doctor_id)) if doctor_id is not None else "na"
+        return f"{self._redis_key_prefix}:patient:phone:{admin_key}:{doctor_key}:{phone_number}"
+
+    def _patient_chat_cache_key(self, *, admin_id: Optional[int], doctor_id: Optional[int], chat_user_id: str) -> str:
+        admin_key = str(int(admin_id)) if admin_id is not None else "na"
+        doctor_key = str(int(doctor_id)) if doctor_id is not None else "na"
+        return f"{self._redis_key_prefix}:patient:chat:{admin_key}:{doctor_key}:{chat_user_id}"
+
+    def _load_cached_patient_identity(self, *, key: str) -> Optional[dict]:
+        if not self.redis_client or not key.strip():
+            return None
+        try:
+            raw = self.redis_client.get(key)
+            if not raw:
+                return None
+            payload = json.loads(str(raw))
+            return payload if isinstance(payload, dict) else None
+        except Exception:
+            return None
+
+    def _save_cached_patient_identity(
+        self,
+        *,
+        key: str,
+        full_name: Optional[str],
+        phone_number: Optional[str] = None,
+        ttl_seconds: int = 1800,
+    ) -> None:
+        if not self.redis_client or not key.strip():
+            return
+        existing = self._load_cached_patient_identity(key=key) or {}
+        merged_name = str(full_name or "").strip() or str(existing.get("full_name") or "").strip()
+        merged_phone = self._normalize_phone(str(phone_number or "").strip()) or self._normalize_phone(
+            str(existing.get("phone_number") or "").strip()
+        )
+        payload = {
+            "full_name": merged_name,
+            "phone_number": merged_phone or "",
+        }
+        try:
+            self.redis_client.set(key, json.dumps(payload, ensure_ascii=False), ex=max(60, int(ttl_seconds)))
+        except Exception:
+            return
 
     def _ensure_meta_cache(self) -> None:
         if not hasattr(self, "_meta_cache_lock"):
@@ -691,12 +744,38 @@ class BookingRepository:
         admin_id: Optional[int] = None,
         doctor_id: Optional[int] = None,
     ) -> BookingResult:
-        return _save_confirmed_appointment(
+        result = _save_confirmed_appointment(
             self,
             context=context,
             admin_id=admin_id,
             doctor_id=doctor_id,
         )
+        if result.ok:
+            actual_admin_id = admin_id or self.default_admin_id()
+            patient_name = str(getattr(context, "patient_name", "") or "").strip()
+            phone_number = self._normalize_phone(str(getattr(context, "phone_number", "") or "").strip())
+            chat_user_id = self._normalize_chat_user_id(str(getattr(context, "chat_user_id", "") or "").strip())
+            if phone_number:
+                self._save_cached_patient_identity(
+                    key=self._patient_phone_cache_key(
+                        admin_id=actual_admin_id,
+                        doctor_id=doctor_id,
+                        phone_number=phone_number,
+                    ),
+                    full_name=patient_name,
+                    phone_number=phone_number,
+                )
+            if chat_user_id:
+                self._save_cached_patient_identity(
+                    key=self._patient_chat_cache_key(
+                        admin_id=actual_admin_id,
+                        doctor_id=doctor_id,
+                        chat_user_id=chat_user_id,
+                    ),
+                    full_name=patient_name,
+                    phone_number=phone_number,
+                )
+        return result
 
     def get_appointment_status(self, appointment_id: int) -> Optional[dict]:
         return _get_appointment_status(self, appointment_id)

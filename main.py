@@ -122,6 +122,11 @@ _ollama_max_concurrency = max(1, int(os.getenv("OLLAMA_MAX_CONCURRENCY", "1")))
 _ollama_semaphore = threading.Semaphore(_ollama_max_concurrency)
 _redis_client = build_redis_client_from_env()
 session_manager.redis_client = _redis_client
+if booking_repository:
+    booking_repository.set_redis_client(
+        _redis_client,
+        key_prefix=os.getenv("REDIS_KEY_PREFIX", "msgbot"),
+    )
 if scheduling_repository:
     scheduling_repository.set_redis_client(_redis_client)
     scheduling_repository.set_cache_config(
@@ -575,6 +580,17 @@ def _qr_page_html(*, doctor_id: int, clinic_id: int, doctor_name: str, clinic_na
           body: JSON.stringify(payload),
         }});
         const data = await resp.json();
+        const renderResultMessage = (message) => {{
+          const safe = String(message || "Done.")
+            .replace(/&/g, "&amp;")
+            .replace(/</g, "&lt;")
+            .replace(/>/g, "&gt;");
+          const withBold = safe.replace(
+            /(Patient ID:\s*\d+\.?)/gi,
+            "<strong>$1</strong>"
+          );
+          result.innerHTML = withBold.replace(/\n/g, "<br>");
+        }};
         if (!resp.ok) {{
           result.classList.add("err");
           result.textContent = data.detail || "Request failed.";
@@ -583,7 +599,7 @@ def _qr_page_html(*, doctor_id: int, clinic_id: int, doctor_name: str, clinic_na
           if (status === "booked") result.classList.add("ok");
           else if (status === "overflow" || status === "active_booking") result.classList.add("warn");
           else result.classList.add("err");
-          result.textContent = data.message || "Done.";
+          renderResultMessage(data.message || "Done.");
         }}
       }} catch (_err) {{
         result.classList.add("err");
@@ -759,7 +775,7 @@ def _process_turn(from_number: str, body: str) -> Tuple[str, str, object]:
         return reply, fsm.state, fsm
 
 
-def _timeout_message(language: str, state: str) -> str:
+def _timeout_message(language: str) -> str:
     from src.messages.templates import get_message
 
     return get_message(language, "timeout_processing_delay")
@@ -770,7 +786,7 @@ def _handle_turn_timeout(task: TurnTask, exc: Exception) -> None:
     _pop_overflow_queue_id(task)
     try:
         fsm = session_manager.get_or_create(task.from_number)
-        timeout_msg = _timeout_message(fsm.response_language, task.pre_state)
+        timeout_msg = _timeout_message(fsm.response_language)
         _send_plain_channel_message(
             to_number=task.from_number,
             body=timeout_msg,

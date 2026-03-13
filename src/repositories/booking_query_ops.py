@@ -43,12 +43,22 @@ def find_patient_name_by_phone_number(
     target = repo._normalize_phone(phone_number)
     if not target:
         return None
+    actual_admin_id = admin_id or repo.default_admin_id()
+    if not actual_admin_id:
+        return None
+    cache_key = repo._patient_phone_cache_key(
+        admin_id=actual_admin_id,
+        doctor_id=doctor_id,
+        phone_number=target,
+    )
+    cached = repo._load_cached_patient_identity(key=cache_key)
+    if isinstance(cached, dict):
+        cached_name = str(cached.get("full_name") or "").strip()
+        if cached_name:
+            return cached_name
     conn = repo._connect()
     cur = conn.cursor(dictionary=True)
     try:
-        actual_admin_id = admin_id or repo.default_admin_id()
-        if not actual_admin_id:
-            return None
         params: list[object] = [actual_admin_id]
         doctor_join = ""
         doctor_sql = ""
@@ -98,7 +108,14 @@ def find_patient_name_by_phone_number(
             )
             row = cur.fetchone()
             if row:
-                return str(row.get("full_name") or "").strip() or None
+                patient_name = str(row.get("full_name") or "").strip() or None
+                if patient_name:
+                    repo._save_cached_patient_identity(
+                        key=cache_key,
+                        full_name=patient_name,
+                        phone_number=target,
+                    )
+                return patient_name
 
         last10 = target[-10:] if len(target) >= 10 else ""
         if not last10:
@@ -131,7 +148,14 @@ def find_patient_name_by_phone_number(
         row = cur.fetchone()
         if not row:
             return None
-        return str(row.get("full_name") or "").strip() or None
+        patient_name = str(row.get("full_name") or "").strip() or None
+        if patient_name:
+            repo._save_cached_patient_identity(
+                key=cache_key,
+                full_name=patient_name,
+                phone_number=target,
+            )
+        return patient_name
     finally:
         cur.close()
         conn.close()
@@ -147,12 +171,22 @@ def find_patient_name_by_chat_user_id(
     target = repo._normalize_chat_user_id(chat_user_id)
     if not target:
         return None
+    actual_admin_id = admin_id or repo.default_admin_id()
+    if not actual_admin_id:
+        return None
+    cache_key = repo._patient_chat_cache_key(
+        admin_id=actual_admin_id,
+        doctor_id=doctor_id,
+        chat_user_id=target,
+    )
+    cached = repo._load_cached_patient_identity(key=cache_key)
+    if isinstance(cached, dict):
+        cached_name = str(cached.get("full_name") or "").strip()
+        if cached_name:
+            return cached_name
     conn = repo._connect()
     cur = conn.cursor(dictionary=True)
     try:
-        actual_admin_id = admin_id or repo.default_admin_id()
-        if not actual_admin_id:
-            return None
         chat_col = repo._first_existing_column("patients", ("telegram_chat_id", "telegram_user_id", "user_id"))
         if not chat_col:
             return None
@@ -175,7 +209,10 @@ def find_patient_name_by_chat_user_id(
         )
         row = cur.fetchone()
         if row:
-            return str(row.get("full_name") or "").strip() or None
+            patient_name = str(row.get("full_name") or "").strip() or None
+            if patient_name:
+                repo._save_cached_patient_identity(key=cache_key, full_name=patient_name)
+            return patient_name
         return None
     finally:
         cur.close()
@@ -192,12 +229,22 @@ def find_patient_phone_by_chat_user_id(
     target = repo._normalize_chat_user_id(chat_user_id)
     if not target:
         return None
+    actual_admin_id = admin_id or repo.default_admin_id()
+    if not actual_admin_id:
+        return None
+    cache_key = repo._patient_chat_cache_key(
+        admin_id=actual_admin_id,
+        doctor_id=doctor_id,
+        chat_user_id=target,
+    )
+    cached = repo._load_cached_patient_identity(key=cache_key)
+    if isinstance(cached, dict):
+        cached_phone = repo._normalize_phone(str(cached.get("phone_number") or "").strip())
+        if cached_phone:
+            return cached_phone
     conn = repo._connect()
     cur = conn.cursor(dictionary=True)
     try:
-        actual_admin_id = admin_id or repo.default_admin_id()
-        if not actual_admin_id:
-            return None
         chat_col = repo._first_existing_column("patients", ("telegram_chat_id", "telegram_user_id", "user_id"))
         if not chat_col:
             return None
@@ -220,7 +267,13 @@ def find_patient_phone_by_chat_user_id(
         )
         row = cur.fetchone()
         if row:
-            return repo._normalize_phone(str(row.get("phone") or "").strip()) or None
+            phone_number = repo._normalize_phone(str(row.get("phone") or "").strip()) or None
+            repo._save_cached_patient_identity(
+                key=cache_key,
+                full_name="",
+                phone_number=phone_number,
+            )
+            return phone_number
         return None
     finally:
         cur.close()

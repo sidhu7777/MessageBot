@@ -126,7 +126,7 @@ def register_webhook_routes(
                 return PlainTextResponse("", status_code=200)
         set_user_bot_identity(from_number, to_number)
         try:
-            pre_state = session_manager_local.get_or_create(from_number).state
+            pre_state = session_manager_local.get_cached_state(from_number, default="INIT")
         except Exception:
             pre_state = "INIT"
 
@@ -507,7 +507,7 @@ def register_webhook_routes(
         bot_identity = f"telegram_username:{runtime_username}" if runtime_username else ""
         set_user_bot_identity(from_number, bot_identity)
         try:
-            pre_state = session_manager_local.get_or_create(from_number).state
+            pre_state = session_manager_local.get_cached_state(from_number, default="INIT")
         except Exception:
             pre_state = "INIT"
         acquired = False

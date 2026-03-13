@@ -28,14 +28,14 @@ def handle_init_state(fsm: "AppointmentFSM", text: str, lower: str) -> str:
             fsm._welcome_booking_start()
             + "\n"
             + fsm._msg("intent_ack")
-            + "\n"
+            + "\n\n"
             + fsm._with_back(fsm._msg("ask_booking_for"), option_count=2)
         )
 
     def _booking_continue_reply() -> str:
         return (
             fsm._msg("intent_ack")
-            + "\n"
+            + "\n\n"
             + fsm._with_back(fsm._msg("ask_booking_for"), option_count=2)
         )
 
@@ -213,7 +213,7 @@ def handle_availability_details_state(fsm: "AppointmentFSM", text: str, lower: s
         if existing_reply:
             return fsm._respond(existing_reply)
         fsm.state = "ASK_BOOKING_FOR"
-        return fsm._respond(fsm._msg("intent_ack") + "\n" + fsm._with_back(fsm._msg("ask_booking_for"), option_count=2))
+        return fsm._respond(fsm._msg("intent_ack") + "\n\n" + fsm._with_back(fsm._msg("ask_booking_for"), option_count=2))
 
     doctor_name = extract_doctor_name(text)
     if doctor_name:
@@ -261,9 +261,9 @@ def handle_confirm_state(fsm: "AppointmentFSM", text: str, lower: str) -> str:
         if reroute_state:
             fsm.state = reroute_state
             if reroute_state == "ASK_CLINIC":
-                return fsm._respond(fsm._msg("change_ack") + "\n" + fsm._clinic_prompt())
+                return fsm._respond(fsm._msg("change_ack") + "\n\n" + fsm._clinic_prompt())
             if reroute_state == "ASK_TIME":
-                return fsm._respond(fsm._msg("change_ack") + "\n" + fsm._time_prompt_for_edit_flow())
+                return fsm._respond(fsm._msg("change_ack") + "\n\n" + fsm._time_prompt_for_edit_flow())
             return fsm._respond(fsm._msg("change_ack", step=reroute_state))
         fsm.state = "ASK_CHANGE_FIELD"
         return fsm._respond(fsm._with_back(fsm._msg("ask_change_field"), option_count=5))
@@ -293,9 +293,9 @@ def handle_change_field_state(fsm: "AppointmentFSM", text: str, lower: str) -> s
     fsm.in_edit_flow = True
     fsm.state = reroute_state
     if reroute_state == "ASK_CLINIC":
-        return fsm._respond(fsm._msg("change_ack") + "\n" + fsm._clinic_prompt())
+        return fsm._respond(fsm._msg("change_ack") + "\n\n" + fsm._clinic_prompt())
     if reroute_state == "ASK_TIME":
-        return fsm._respond(fsm._msg("change_ack") + "\n" + fsm._time_prompt_for_edit_flow())
+        return fsm._respond(fsm._msg("change_ack") + "\n\n" + fsm._time_prompt_for_edit_flow())
     return fsm._respond(fsm._msg("change_ack", step=reroute_state))
 
 
@@ -310,7 +310,7 @@ def handle_completed_state(fsm: "AppointmentFSM", lower: str) -> str:
             fsm._welcome_booking_start()
             + "\n"
             + fsm._msg("intent_ack")
-            + "\n"
+            + "\n\n"
             + fsm._with_back(fsm._msg("ask_booking_for"), option_count=2),
             allow_polish=False,
         )
@@ -323,7 +323,7 @@ def handle_ask_date_state(fsm: "AppointmentFSM", lower: str) -> str:
     date_options = fsm._date_options()
     if not date_options:
         fsm.state = "ASK_CLINIC"
-        return fsm._respond(fsm._msg("no_date_available", clinic_name=fsm.context.clinic_name or "this clinic") + "\n" + fsm._clinic_prompt())
+        return fsm._respond(fsm._msg("no_date_available", clinic_name=fsm.context.clinic_name or "this clinic") + "\n\n" + fsm._clinic_prompt())
     if normalized.isdigit():
         index = int(normalized)
         if 1 <= index <= len(date_options):
@@ -369,6 +369,6 @@ def handle_ask_date_state(fsm: "AppointmentFSM", lower: str) -> str:
         return fsm._respond(fsm._msg("no_time_available"))
     return fsm._respond(
         fsm._msg("date_ack", appointment_date=parsed_date)
-        + "\n"
+        + "\n\n"
         + fsm._initial_time_prompt()
     )

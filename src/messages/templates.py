@@ -1,3 +1,33 @@
+import re
+
+
+def _normalize_menu_spacing(text: str) -> str:
+    normalized = text.replace("\n\n\n", "\n\n")
+    replacements = {
+        '\n0. Go back': '\n\nPress "0" to go back.',
+        '\nPress "0" to go back.': '\n\nPress "0" to go back.',
+        '\n0. वापस जाएं': '\n\n"0" दबाकर वापस जाएं।',
+        '\n"0" दबाकर वापस जाएं।': '\n\n"0" दबाकर वापस जाएं।',
+    }
+    for old, new in replacements.items():
+        normalized = normalized.replace(old, new)
+    return normalized
+
+
+def _emphasize_patient_id_line(text: str) -> str:
+    emphasized = re.sub(
+        r"\*Patient ID:\*\s*([^\n]+)",
+        r"*Patient ID: \1*",
+        text,
+    )
+    emphasized = re.sub(
+        r"\*रोगी आईडी:\*\s*([^\n]+)",
+        r"*रोगी आईडी: \1*",
+        emphasized,
+    )
+    return emphasized
+
+
 def get_message(response_language: str, key: str, **kwargs: object) -> str:
     en = {
         "greeting": "Hello, I am your medical appointment assistant. I can help with booking and doctor availability.",
@@ -116,10 +146,10 @@ def get_message(response_language: str, key: str, **kwargs: object) -> str:
             "0. Go back\n"
             "Reply with 1, 2, or 0."
         ),
-        "confirm_reschedule_prompt": "1. Confirm\n2. Change details\n0. Go back\nReply with 1, 2, or 0.",
+        "confirm_reschedule_prompt": "1. Confirm\n2. Change details\n\n0. Go back\nReply with 1, 2, or 0.",
         "reschedule_confirmed": (
             "Appointment rescheduled successfully.\n"
-            "*Patient ID:* {appointment_id}\n"
+            "*Patient ID: {appointment_id}*\n"
             "Clinic: {clinic_name}\n"
             "Date: {appointment_date}\n"
             "Time: {appointment_time}"
@@ -127,7 +157,7 @@ def get_message(response_language: str, key: str, **kwargs: object) -> str:
         "reschedule_failed": "Reschedule failed because the selected slot is not available now. Please try another date/time.",
         "existing_booking_cancel_failed": "I could not cancel the existing appointment right now. Please try again later.",
         "invalid_name": "Please provide a valid name. Example: Vineeth Raja Banala",
-        "name_ack": "Thank you, {name}.",
+        "name_ack": "Name noted: {name}.",
         "ask_appointment_mode": (
             "Please choose appointment type:\n"
             "1. Online appointment\n"
@@ -147,9 +177,9 @@ def get_message(response_language: str, key: str, **kwargs: object) -> str:
         "phone_ack": "Contact number noted: {phone_number}.",
         "ask_clinic": (
             "Please choose clinic:\n"
-            "1. City Care Clinic | MG Road, Hyderabad | Slots today: 7\n"
-            "2. Sunrise Health Center | KPHB, Hyderabad | Slots today: 5\n"
-            "3. Green Valley Clinic | Gachibowli, Hyderabad | Slots today: 4"
+            "1. City Care Clinic, Address: MG Road, Hyderabad. Slots today: 7\n"
+            "2. Sunrise Health Center, Address: KPHB, Hyderabad. Slots today: 5\n"
+            "3. Green Valley Clinic, Address: Gachibowli, Hyderabad. Slots today: 4"
         ),
         "ask_clinic_header": "Please choose clinic:",
         "invalid_clinic": "Please reply with a valid option number, or type clinic name.",
@@ -204,7 +234,7 @@ def get_message(response_language: str, key: str, **kwargs: object) -> str:
             "0. Go back\n"
             "Reply with 1, 2, or 0."
         ),
-        "confirm_prompt": "1. Confirm\n2. Change details\n0. Go back\nReply with 1, 2, or 0.",
+        "confirm_prompt": "1. Confirm\n2. Change details\n\n0. Go back\nReply with 1, 2, or 0.",
         "ask_change_field": (
             "No problem. Which detail do you want to change?\n"
             "1. Name\n"
@@ -230,7 +260,7 @@ def get_message(response_language: str, key: str, **kwargs: object) -> str:
         "reply_with_numbers": "Reply with {numbers}.",
         "not_confirmed": "No problem. Restarting booking flow. Please share the patient full name.",
         "completed_hint": "This appointment flow is complete. Send 'book appointment' to start another.",
-        "db_save_ok": "Appointment booked successfully.\n*Patient ID:* {appointment_id}",
+        "db_save_ok": "Appointment booked successfully.\n*Patient ID: {appointment_id}*",
         "db_save_failed": "Booking confirmation received, but database save is pending manual follow-up.",
         "ended": "Understood. I have ended the process. Send 'book appointment' whenever you want to start again.",
         "cancelled_hint": "Process is ended. Send 'book appointment' to start a new booking.",
@@ -297,7 +327,9 @@ def get_message(response_language: str, key: str, **kwargs: object) -> str:
             "कृपया एक विकल्प चुनें:\n"
             "1. अपॉइंटमेंट बुक करें\n"
             "2. डॉक्टर उपलब्धता जांचें\n"
-            "1 या 2 से जवाब दें।"
+            "\n"
+            "\"0\" दबाकर वापस जाएं।\n"
+            "कृपया 1, 2, या 0 में उत्तर दें।"
         ),
         "ask_booking_for": (
             "यह अपॉइंटमेंट किसके लिए है?\n"
@@ -345,7 +377,7 @@ def get_message(response_language: str, key: str, **kwargs: object) -> str:
         "confirm_reschedule_prompt": "1. पुष्टि करें\n2. विवरण बदलें\n0. वापस जाएं\nकृपया 1, 2, या 0 में उत्तर दें।",
         "reschedule_confirmed": (
             "अपॉइंटमेंट सफलतापूर्वक पुनर्निर्धारित हो गई।\n"
-            "*रोगी आईडी:* {appointment_id}\n"
+            "*रोगी आईडी: {appointment_id}*\n"
             "क्लिनिक: {clinic_name}\n"
             "तारीख: {appointment_date}\n"
             "समय: {appointment_time}"
@@ -353,7 +385,7 @@ def get_message(response_language: str, key: str, **kwargs: object) -> str:
         "reschedule_failed": "पुनर्निर्धारण असफल रहा क्योंकि चुना गया स्लॉट अभी उपलब्ध नहीं है। कृपया दूसरी तारीख/समय चुनें।",
         "existing_booking_cancel_failed": "अभी पुरानी अपॉइंटमेंट रद्द नहीं हो पाई। कृपया बाद में फिर कोशिश करें।",
         "invalid_name": "कृपया सही नाम बताएं। उदाहरण: Vineeth Raja Banala",
-        "name_ack": "धन्यवाद, {name}।",
+        "name_ack": "नाम नोट किया गया: {name}।",
         "ask_phone": (
             "कृपया संपर्क नंबर की पुष्टि करें:\n"
             "1. यही व्हाट्सऐप नंबर उपयोग करें\n"
@@ -365,9 +397,9 @@ def get_message(response_language: str, key: str, **kwargs: object) -> str:
         "phone_ack": "संपर्क नंबर नोट किया गया: {phone_number}।",
         "ask_clinic": (
             "कृपया क्लिनिक चुनें:\n"
-            "1. City Care Clinic | MG Road, Hyderabad | आज स्लॉट: 7\n"
-            "2. Sunrise Health Center | KPHB, Hyderabad | आज स्लॉट: 5\n"
-            "3. Green Valley Clinic | Gachibowli, Hyderabad | आज स्लॉट: 4"
+            "1. City Care Clinic, पता: MG Road, Hyderabad। आज स्लॉट: 7\n"
+            "2. Sunrise Health Center, पता: KPHB, Hyderabad। आज स्लॉट: 5\n"
+            "3. Green Valley Clinic, पता: Gachibowli, Hyderabad। आज स्लॉट: 4"
         ),
         "ask_clinic_header": "कृपया क्लिनिक चुनें:",
         "invalid_clinic": "कृपया क्लिनिक 1, 2 या 3 चुनें।",
@@ -440,7 +472,7 @@ def get_message(response_language: str, key: str, **kwargs: object) -> str:
         "reply_with_numbers": "कृपया {numbers} में उत्तर दें।",
         "not_confirmed": "कोई बात नहीं। प्रक्रिया दोबारा शुरू कर रहा हूँ। कृपया मरीज़ का पूरा नाम बताएं।",
         "completed_hint": "यह बुकिंग पूरी हो चुकी है। नई बुकिंग के लिए 'अपॉइंटमेंट बुक करें' भेजें।",
-        "db_save_ok": "अपॉइंटमेंट सफलतापूर्वक बुक हो गई।\n*रोगी आईडी:* {appointment_id}",
+        "db_save_ok": "अपॉइंटमेंट सफलतापूर्वक बुक हो गई।\n*रोगी आईडी: {appointment_id}*",
         "db_save_failed": "बुकिंग की पुष्टि हो गई, लेकिन डेटाबेस सेव लंबित है। मैनुअल फ़ॉलो-अप आवश्यक है।",
         "ended": "ठीक है, प्रक्रिया समाप्त कर दी गई है। दोबारा शुरू करने के लिए 'अपॉइंटमेंट बुक करें' भेजें।",
         "cancelled_hint": "प्रक्रिया समाप्त है। नई बुकिंग के लिए 'अपॉइंटमेंट बुक करें' भेजें।",
@@ -558,7 +590,7 @@ def get_message(response_language: str, key: str, **kwargs: object) -> str:
         "confirm_reschedule_prompt": "1. Confirm kariye\n2. Details badliye\n0. Go back\nReply with 1, 2, or 0.",
         "reschedule_confirmed": (
             "Appointment successfully reschedule ho gaya.\n"
-            "*Patient ID:* {appointment_id}\n"
+            "*Patient ID: {appointment_id}*\n"
             "Clinic: {clinic_name}\n"
             "Date: {appointment_date}\n"
             "Time: {appointment_time}"
@@ -566,7 +598,7 @@ def get_message(response_language: str, key: str, **kwargs: object) -> str:
         "reschedule_failed": "Reschedule fail hua kyunki selected slot ab available nahi hai. Please doosri date/time try kariye.",
         "existing_booking_cancel_failed": "Existing appointment abhi cancel nahi ho paaya. Please baad mein try kariye.",
         "invalid_name": "Please valid name batayiye. Example: Vineeth Raja Banala",
-        "name_ack": "Thank you, {name}.",
+        "name_ack": "Name noted: {name}.",
         "ask_appointment_mode": (
             "Please appointment type choose kariye:\n"
             "1. Online appointment\n"
@@ -586,9 +618,9 @@ def get_message(response_language: str, key: str, **kwargs: object) -> str:
         "phone_ack": "Contact number noted: {phone_number}.",
         "ask_clinic": (
             "Please clinic choose kariye:\n"
-            "1. City Care Clinic | MG Road, Hyderabad | Aaj ke slots: 7\n"
-            "2. Sunrise Health Center | KPHB, Hyderabad | Aaj ke slots: 5\n"
-            "3. Green Valley Clinic | Gachibowli, Hyderabad | Aaj ke slots: 4"
+            "1. City Care Clinic, Address: MG Road, Hyderabad. Aaj ke slots: 7\n"
+            "2. Sunrise Health Center, Address: KPHB, Hyderabad. Aaj ke slots: 5\n"
+            "3. Green Valley Clinic, Address: Gachibowli, Hyderabad. Aaj ke slots: 4"
         ),
         "ask_clinic_header": "Please clinic choose kariye:",
         "invalid_clinic": "Please clinic 1, 2, ya 3 choose kariye.",
@@ -660,7 +692,7 @@ def get_message(response_language: str, key: str, **kwargs: object) -> str:
         ),
         "not_confirmed": "No problem. Booking flow restart kar raha hoon. Please patient ka full name share kariye.",
         "completed_hint": "Yeh appointment flow complete ho chuka hai. Nayi booking ke liye 'book appointment' bhejiye.",
-        "db_save_ok": "Appointment successfully book ho gaya.\n*Patient ID:* {appointment_id}",
+        "db_save_ok": "Appointment successfully book ho gaya.\n*Patient ID: {appointment_id}*",
         "db_save_failed": "Booking confirm ho gayi, lekin database save pending hai. Manual follow-up zaroori hai.",
         "ended": "Theek hai, process end kar diya gaya hai. Dobara start karne ke liye 'book appointment' bhejiye.",
         "cancelled_hint": "Process ended hai. Nayi booking ke liye 'book appointment' bhejiye.",
@@ -714,5 +746,24 @@ def get_message(response_language: str, key: str, **kwargs: object) -> str:
             }
         return source[key].format(**kwargs) + "\n" + prompts.get(step, "")
     template = source.get(key, en.get(key, key))
-    return template.format(**kwargs)
+    message = template.format(**kwargs)
+    spacing_keys = {
+        "clarify_intent",
+        "availability_result_none",
+        "availability_result_actions",
+        "availability_result_actions_back",
+        "confirm_reschedule_summary",
+        "confirm_reschedule_prompt",
+        "confirm_summary",
+        "confirm_prompt",
+        "ask_change_field",
+        "existing_booking_found",
+        "existing_booking_choice_again",
+        "max_active_bookings_actions",
+    }
+    if key in spacing_keys:
+        message = _normalize_menu_spacing(message)
+    if key in {"db_save_ok", "reschedule_confirmed"}:
+        message = _emphasize_patient_id_line(message)
+    return message
 
