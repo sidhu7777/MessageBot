@@ -6,3 +6,13 @@ data/
 
 logs/
 *.log
+*.pyc
+*.pyo   
+images/
+images/*
+images_mmd_generation/
+images_mmd_generation/*
+tests/
+tests/* 
+System_Diagrams_presentation.pdf
+S

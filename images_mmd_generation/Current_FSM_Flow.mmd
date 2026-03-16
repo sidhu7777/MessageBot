@@ -21,33 +21,33 @@ graph LR
     CHANGE["ASK_CHANGE_FIELD"]
     CANCELLED["CANCELLED<br/>(end)"]
     
-    START -->|""| INIT
-    INIT -->|hello/hi| BOOKING_FOR
-    INIT -->|availability| AVAIL_DATE
+    START --> INIT
+    INIT --> BOOKING_FOR
+    INIT --> AVAIL_DATE
     
-    AVAIL_DATE -->|pick date| AVAIL_DETAILS
-    AVAIL_DETAILS -->|book| BOOKING_FOR
+    AVAIL_DATE --> AVAIL_DETAILS
+    AVAIL_DETAILS --> BOOKING_FOR
     
-    BOOKING_FOR -->|self/other| NAME
-    NAME -->|valid| PHONE
-    PHONE -->|valid| CLINIC
-    CLINIC -->|pick| DATE
-    DATE -->|pick| TIME
-    TIME -->|pick| CONFIRM
-    CONFIRM -->|confirm| COMPLETED
+    BOOKING_FOR --> NAME
+    NAME --> PHONE
+    PHONE --> CLINIC
+    CLINIC --> DATE
+    DATE --> TIME
+    TIME --> CONFIRM
+    CONFIRM --> COMPLETED
     
-    INIT -->|existing| EXISTING_ACTION
-    EXISTING_ACTION -->|multi| EXISTING_PICK
-    EXISTING_PICK -->|reschedule| CONFIRM_RESCHEDULE
-    CONFIRM_RESCHEDULE -->|confirm| COMPLETED
-    EXISTING_PICK -->|cancel| COMPLETED
+    INIT --> EXISTING_ACTION
+    EXISTING_ACTION --> EXISTING_PICK
+    EXISTING_PICK --> CONFIRM_RESCHEDULE
+    CONFIRM_RESCHEDULE --> COMPLETED
+    EXISTING_PICK --> COMPLETED
     
-    BOOKING_FOR -->|limit| MAX_ACTIVE
-    MAX_ACTIVE -->|change| CHANGE
-    MAX_ACTIVE -->|cancel| CANCELLED
-    CHANGE -->|restart| COMPLETED
+    BOOKING_FOR --> MAX_ACTIVE
+    MAX_ACTIVE --> CHANGE
+    MAX_ACTIVE --> CANCELLED
+    CHANGE --> COMPLETED
     
-    COMPLETED -->|restart| INIT
+    COMPLETED --> INIT
     
     style START fill:#ecebfd,stroke:#7e78cc
     style INIT fill:#ecebfd,stroke:#7e78cc

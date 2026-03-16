@@ -7,6 +7,7 @@ from src.llm.tasks import llm_change_target, llm_extract
 from src.nlu.extractors import (
     extract_date,
     extract_doctor_name,
+    is_greeting_intent,
     is_booking_intent,
     is_no,
     is_restart_intent,
@@ -175,15 +176,18 @@ def handle_init_state(fsm: "AppointmentFSM", text: str, lower: str) -> str:
 
 
 def handle_cancelled_state(fsm: "AppointmentFSM", lower: str) -> str:
-    if is_booking_intent(lower) or is_restart_intent(lower):
-        fsm._reset_all(cancelled=False)
-        fsm.state = "ASK_NAME"
-        return fsm._respond(fsm._msg("ask_name"))
     fsm._reset_all(cancelled=False)
-    existing_reply = fsm._existing_booking_entry_response()
-    if existing_reply:
-        return fsm._respond(existing_reply, allow_polish=False)
-    return fsm._respond(fsm._msg("clarify_intent"), allow_polish=False)
+    normalized = (lower or "").strip()
+    if normalized == "1" or is_booking_intent(normalized) or is_restart_intent(normalized):
+        fsm.pending_init_intent = "BOOK_APPOINTMENT"
+    elif normalized == "2":
+        fsm.pending_init_intent = "CHECK_AVAILABILITY"
+    elif is_greeting_intent(normalized):
+        fsm.pending_init_intent = "GREETING"
+    else:
+        fsm.pending_init_intent = "OTHER"
+    fsm.state = "ASK_LANGUAGE"
+    return fsm._respond(fsm._language_selection_prompt(), allow_polish=False)
 
 
 def handle_availability_date_state(fsm: "AppointmentFSM", lower: str) -> str:
@@ -300,22 +304,18 @@ def handle_change_field_state(fsm: "AppointmentFSM", text: str, lower: str) -> s
 
 
 def handle_completed_state(fsm: "AppointmentFSM", lower: str) -> str:
-    existing_reply = fsm._existing_booking_entry_response()
-    if existing_reply:
-        return fsm._respond(existing_reply)
-    if is_booking_intent(lower) or is_restart_intent(lower):
-        fsm._reset_all(cancelled=False)
-        fsm.state = "ASK_BOOKING_FOR"
-        return fsm._respond(
-            fsm._welcome_booking_start()
-            + "\n"
-            + fsm._msg("intent_ack")
-            + "\n\n"
-            + fsm._with_back(fsm._msg("ask_booking_for"), option_count=2),
-            allow_polish=False,
-        )
     fsm._reset_all(cancelled=False)
-    return fsm._respond(fsm._msg("clarify_intent"), allow_polish=False)
+    normalized = (lower or "").strip()
+    if normalized == "1" or is_booking_intent(normalized) or is_restart_intent(normalized):
+        fsm.pending_init_intent = "BOOK_APPOINTMENT"
+    elif normalized == "2":
+        fsm.pending_init_intent = "CHECK_AVAILABILITY"
+    elif is_greeting_intent(normalized):
+        fsm.pending_init_intent = "GREETING"
+    else:
+        fsm.pending_init_intent = "OTHER"
+    fsm.state = "ASK_LANGUAGE"
+    return fsm._respond(fsm._language_selection_prompt(), allow_polish=False)
 
 
 def handle_ask_date_state(fsm: "AppointmentFSM", lower: str) -> str:

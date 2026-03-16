@@ -361,6 +361,7 @@ async def health_queue() -> dict:
 def _qr_page_html(*, doctor_id: int, clinic_id: int, doctor_name: str, clinic_name: str) -> str:
     doctor_name_safe = html_escape.escape(doctor_name or "Doctor")
     clinic_name_safe = html_escape.escape(clinic_name or "Clinic")
+    qr_base_url = (os.getenv("QR_BASE_URL", "") or "").strip().rstrip("/")
     return f"""<!doctype html>
 <html lang="en">
 <head>
@@ -561,6 +562,8 @@ def _qr_page_html(*, doctor_id: int, clinic_id: int, doctor_name: str, clinic_na
 
     document.getElementById("checkinForm").addEventListener("submit", async (e) => {{
       e.preventDefault();
+      const qrBaseUrl = {json.dumps(qr_base_url)};
+      const submitUrl = qrBaseUrl ? `${{qrBaseUrl}}/qr/checkin/submit` : "/qr/checkin/submit";
       const result = document.getElementById("result");
       const btn = document.getElementById("submitBtn");
       btn.disabled = true;
@@ -574,7 +577,7 @@ def _qr_page_html(*, doctor_id: int, clinic_id: int, doctor_name: str, clinic_na
           phone_number: document.getElementById("phoneNumber").value,
           language: document.getElementById("language").value,
         }};
-        const resp = await fetch("/qr/checkin/submit", {{
+        const resp = await fetch(submitUrl, {{
           method: "POST",
           headers: {{ "Content-Type": "application/json" }},
           body: JSON.stringify(payload),

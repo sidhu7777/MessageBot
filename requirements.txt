@@ -4,7 +4,7 @@ python-multipart
 
 twilio
 python-dotenv
-mysql-connector-python-8.4.0
+mysql-connector-python==8.0.33
 
 httpx
 openpyxl

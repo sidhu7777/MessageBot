@@ -122,78 +122,62 @@ def render_fsm():
         _add_box(ax, x, y, w, h, label, fc=fc, ec=ec, fontsize=10, weight="bold" if bold else "normal")
 
     _add_arrow(ax, *port("start", "bottom"), *port("init", "top"), fontsize=8)
-    _add_arrow(ax, *port("init", "bottom"), *port("booking_for", "top"), "hello / hi / booking intent", fontsize=8)
-    _add_arrow(ax, *port("booking_for", "bottom"), *port("name", "top"), "self / other", fontsize=8)
-    _add_arrow(ax, *port("name", "bottom"), *port("phone", "top"), "valid name", fontsize=8)
-    _add_arrow(ax, *port("phone", "bottom"), *port("clinic", "top"), "valid phone", fontsize=8)
-    _add_arrow(ax, *port("clinic", "bottom"), *port("date", "top"), "pick clinic", fontsize=8)
-    _add_arrow(ax, *port("date", "bottom"), *port("time", "top"), "pick date", fontsize=8)
-    _add_arrow(ax, *port("time", "bottom"), *port("confirm", "top"), "pick time", fontsize=8)
-    _add_arrow(ax, *port("confirm", "bottom"), *port("completed", "top"), "confirm", fontsize=8)
+    _add_arrow(ax, *port("init", "bottom"), *port("booking_for", "top"), fontsize=8)
+    _add_arrow(ax, *port("booking_for", "bottom"), *port("name", "top"), fontsize=8)
+    _add_arrow(ax, *port("name", "bottom"), *port("phone", "top"), fontsize=8)
+    _add_arrow(ax, *port("phone", "bottom"), *port("clinic", "top"), fontsize=8)
+    _add_arrow(ax, *port("clinic", "bottom"), *port("date", "top"), fontsize=8)
+    _add_arrow(ax, *port("date", "bottom"), *port("time", "top"), fontsize=8)
+    _add_arrow(ax, *port("time", "bottom"), *port("confirm", "top"), fontsize=8)
+    _add_arrow(ax, *port("confirm", "bottom"), *port("completed", "top"), fontsize=8)
 
     _add_elbow_arrow(
         ax,
         [port("init", "right"), (11.5, port("init", "right")[1]), (13.0, port("avail_date", "left")[1]), port("avail_date", "left")],
-        "availability / 2",
         fontsize=8,
-        label_pos=(11.9, 13.25),
     )
-    _add_arrow(ax, *port("avail_date", "bottom"), *port("avail_details", "top"), "pick date", fontsize=8)
+    _add_arrow(ax, *port("avail_date", "bottom"), *port("avail_details", "top"), fontsize=8)
     _add_elbow_arrow(
         ax,
         [port("avail_details", "left"), (12.2, port("avail_details", "left")[1]), (11.2, port("booking_for", "right")[1]), port("booking_for", "right")],
-        "book from availability",
         fontsize=8,
-        label_pos=(11.9, 10.95),
     )
 
     _add_elbow_arrow(
         ax,
         [port("init", "right"), (16.7, port("init", "right")[1]), (16.7, port("existing_action", "top")[1] + 0.5), port("existing_action", "top")],
-        "existing booking",
         fontsize=8,
-        label_pos=(16.9, 10.0),
     )
-    _add_arrow(ax, *port("existing_action", "bottom"), *port("existing_pick", "top"), "pick action", fontsize=8)
-    _add_arrow(ax, *port("existing_pick", "bottom"), *port("confirm_reschedule", "top"), "reschedule", fontsize=8)
+    _add_arrow(ax, *port("existing_action", "bottom"), *port("existing_pick", "top"), fontsize=8)
+    _add_arrow(ax, *port("existing_pick", "bottom"), *port("confirm_reschedule", "top"), fontsize=8)
     _add_elbow_arrow(
         ax,
         [port("confirm_reschedule", "left"), (12.3, port("confirm_reschedule", "left")[1]), (11.0, port("completed", "right")[1]), port("completed", "right")],
-        "confirm reschedule",
         fontsize=8,
-        label_pos=(12.0, 3.15),
     )
     _add_elbow_arrow(
         ax,
         [port("existing_pick", "left"), (12.6, port("existing_pick", "left")[1]), (11.4, port("completed", "right")[1]), port("completed", "right")],
-        "cancel selected",
         fontsize=8,
-        label_pos=(12.4, 4.9),
     )
 
     _add_elbow_arrow(
         ax,
         [port("booking_for", "left"), (5.7, port("booking_for", "left")[1]), (5.7, port("max_active", "right")[1]), port("max_active", "right")],
-        "multiple bookings limit",
         fontsize=8,
-        label_pos=(5.1, 11.15),
     )
-    _add_arrow(ax, *port("max_active", "bottom"), *port("change", "top"), "change field", fontsize=8)
-    _add_arrow(ax, *port("change", "bottom"), *port("cancelled", "top"), "cancel", fontsize=8)
+    _add_arrow(ax, *port("max_active", "bottom"), *port("change", "top"), fontsize=8)
+    _add_arrow(ax, *port("change", "bottom"), *port("cancelled", "top"), fontsize=8)
     _add_elbow_arrow(
         ax,
         [port("change", "right"), (5.9, port("change", "right")[1]), (7.4, port("clinic", "left")[1]), port("clinic", "left")],
-        "reset / continue",
         fontsize=8,
-        label_pos=(6.2, 8.9),
     )
 
     _add_elbow_arrow(
         ax,
         [port("completed", "left"), (6.1, port("completed", "left")[1]), (6.1, 12.0), (7.9, 12.0), (7.9, port("init", "left")[1]), port("init", "left")],
-        "restart / new booking",
         fontsize=8,
-        label_pos=(5.5, 6.9),
     )
 
     ax.text(9, 14.65, "Appointment Booking FSM - Updated And Clean Layout", fontsize=14, weight="bold", ha="center")
@@ -569,72 +553,18 @@ def render_code_responsibility():
 
     _add_arrow(ax, *port("main", "right"), *port("session", "left"))
     _add_arrow(ax, *port("webhooks", "right"), *port("fsm", "left"))
-    _add_elbow_arrow(
-        ax,
-        [port("webhooks", "right"), (5.5, 9.1), (5.5, 12.35), (10.9, 12.35), port("turnq", "top")],
-        "queue handoff",
-        fontsize=8,
-        label_pos=(8.1, 12.6),
-    )
+    _add_arrow(ax, *port("webhooks", "right"), *port("turnq", "top"), "queue handoff", fontsize=8)
     _add_arrow(ax, *port("fsm", "bottom"), *port("handlers", "top"))
     _add_arrow(ax, *port("kafka_runtime", "bottom"), *port("delivery", "top"))
-    _add_elbow_arrow(
-        ax,
-        [port("turnq", "right"), (14.5, 11.0), (15.25, 11.0), port("bookrepo", "left")],
-        "booking writes",
-        fontsize=8,
-        label_pos=(14.7, 11.25),
-    )
-    _add_elbow_arrow(
-        ax,
-        [port("kafka_runtime", "right"), (14.4, 9.1), (15.25, 9.1), port("schedrepo", "left")],
-        "availability sync",
-        fontsize=8,
-        label_pos=(14.5, 9.35),
-    )
-    _add_elbow_arrow(
-        ax,
-        [port("delivery", "right"), (14.4, 6.8), (15.25, 6.8), port("convrepo", "left")],
-        "delivery state",
-        fontsize=8,
-        label_pos=(14.5, 7.05),
-    )
+    _add_arrow(ax, *port("turnq", "right"), *port("bookrepo", "left"), "booking writes", fontsize=8)
+    _add_arrow(ax, *port("kafka_runtime", "right"), *port("schedrepo", "left"), "availability sync", fontsize=8)
+    _add_arrow(ax, *port("delivery", "right"), *port("convrepo", "left"), "delivery state", fontsize=8)
 
-    _add_elbow_arrow(
-        ax,
-        [port("handlers", "right"), (9.7, 6.8), (9.7, 12.9), (16.4, 12.9), (16.4, port("bookrepo", "top")[1] + 0.05), port("bookrepo", "top")],
-        "booking queries",
-        fontsize=8,
-        label_pos=(13.2, 13.15),
-    )
-    _add_elbow_arrow(
-        ax,
-        [port("handlers", "right"), (9.4, 6.8), (9.4, 8.0), (15.3, 8.0), (15.3, 9.7), port("schedrepo", "top")],
-        "availability queries",
-        fontsize=8,
-        label_pos=(12.9, 8.25),
-    )
-    _add_elbow_arrow(
-        ax,
-        [port("nlu", "right"), (10.0, 4.5), (10.0, 3.0), (15.4, 3.0), (15.4, 4.5), port("db", "left")],
-        "LLM / NLU support",
-        fontsize=8,
-        label_pos=(12.4, 3.25),
-    )
-    _add_elbow_arrow(
-        ax,
-        [port("session", "right"), (10.1, 11.0), (10.1, 13.35), (16.8, 13.35), port("bookrepo", "top")],
-        "session persistence",
-        fontsize=8,
-        label_pos=(13.4, 13.6),
-    )
-    _add_elbow_arrow(
-        ax,
-        [port("background", "right"), (14.8, 4.5), (15.8, 4.5), port("db", "left")],
-        "worker writes",
-        fontsize=8,
-        label_pos=(15.0, 4.8),
-    )
+    _add_arrow(ax, *port("handlers", "right"), *port("bookrepo", "top"), "booking queries", fontsize=8)
+    _add_arrow(ax, *port("handlers", "right"), *port("schedrepo", "top"), "availability queries", fontsize=8)
+    _add_arrow(ax, *port("nlu", "right"), *port("db", "left"), "LLM / NLU support", fontsize=8)
+    _add_arrow(ax, *port("session", "right"), *port("bookrepo", "top"), "session persistence", fontsize=8)
+    _add_arrow(ax, *port("background", "right"), *port("db", "left"), "worker writes", fontsize=8)
 
     ax.text(1.1, 1.0, "Purpose: show which code area owns which responsibility. This is a code/module view, not a DB ERD or runtime sequence diagram.", fontsize=10, color="#555")
     ax.set_title("Code / Module Responsibility Map", fontsize=18, weight="bold", pad=18)

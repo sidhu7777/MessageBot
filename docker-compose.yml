@@ -1,4 +1,72 @@
 services:
+  app:
+    build: .
+    container_name: message-bot-app
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    environment:
+      REDIS_HOST: "redis"
+      KAFKA_BOOTSTRAP_SERVERS: "kafka:9092"
+      OLLAMA_BASE_URL: "http://ollama:11434"
+      OLLAMA_AUTO_START: "false"
+      OLLAMA_AUTO_PULL: "false"
+    depends_on:
+      kafka:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      ollama-pull:
+        condition: service_completed_successfully
+    volumes:
+      - ./logs:/app/logs
+      - ./data:/app/data
+
+  redis:
+    image: redis:7-alpine
+    container_name: message-bot-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  ollama:
+    image: ollama/ollama:latest
+    container_name: message-bot-ollama
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama:/root/.ollama
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 15s
+      timeout: 5s
+      retries: 20
+
+  ollama-pull:
+    image: ollama/ollama:latest
+    container_name: message-bot-ollama-pull
+    depends_on:
+      ollama:
+        condition: service_started
+    environment:
+      OLLAMA_HOST: "http://ollama:11434"
+    volumes:
+      - ollama:/root/.ollama
+    restart: on-failure
+    entrypoint:
+      [
+        "/bin/sh",
+        "-c",
+        "for i in $(seq 1 120); do wget -qO- http://ollama:11434/api/tags >/dev/null 2>&1 && break; sleep 2; done; ollama pull ${LLM_MODEL_NAME:-qwen3:0.6b}"
+      ]
+
   kafka:
     image: apache/kafka:3.8.0
     container_name: message-bot-kafka
@@ -41,3 +109,5 @@ services:
 
 volumes:
   kafka_data:
+  redis_data:
+  ollama:
