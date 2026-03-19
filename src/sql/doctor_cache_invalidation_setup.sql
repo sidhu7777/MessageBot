@@ -13,6 +13,7 @@ BEGIN
     DECLARE has_doctors INT DEFAULT 0;
     DECLARE has_dcs INT DEFAULT 0;
     DECLARE has_clinics INT DEFAULT 0;
+    DECLARE has_patients INT DEFAULT 0;
     DECLARE has_appointment INT DEFAULT 0;
 
     CREATE TABLE IF NOT EXISTS doctor_cache_invalidation_queue (
@@ -52,6 +53,10 @@ BEGIN
     SELECT COUNT(*) INTO has_clinics
     FROM INFORMATION_SCHEMA.TABLES
     WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'clinics';
+
+    SELECT COUNT(*) INTO has_patients
+    FROM INFORMATION_SCHEMA.TABLES
+    WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'patients';
 
     SELECT COUNT(*) INTO has_appointment
     FROM INFORMATION_SCHEMA.TABLES
@@ -144,6 +149,36 @@ BEGIN
             FOR EACH ROW
             INSERT INTO doctor_cache_invalidation_queue(entity_type, clinic_id, admin_id)
             VALUES (''CLINIC'', OLD.clinic_id, OLD.admin_id)
+        '; PREPARE s FROM @sql; EXECUTE s; DEALLOCATE PREPARE s;
+    END IF;
+
+    IF has_patients > 0 THEN
+        SET @sql = 'DROP TRIGGER IF EXISTS trg_patients_cache_inv_ai'; PREPARE s FROM @sql; EXECUTE s; DEALLOCATE PREPARE s;
+        SET @sql = 'DROP TRIGGER IF EXISTS trg_patients_cache_inv_au'; PREPARE s FROM @sql; EXECUTE s; DEALLOCATE PREPARE s;
+        SET @sql = 'DROP TRIGGER IF EXISTS trg_patients_cache_inv_ad'; PREPARE s FROM @sql; EXECUTE s; DEALLOCATE PREPARE s;
+
+        SET @sql = '
+            CREATE TRIGGER trg_patients_cache_inv_ai
+            AFTER INSERT ON patients
+            FOR EACH ROW
+            INSERT INTO doctor_cache_invalidation_queue(entity_type, doctor_id, admin_id)
+            VALUES (''PATIENT'', NEW.doctor_id, NEW.admin_id)
+        '; PREPARE s FROM @sql; EXECUTE s; DEALLOCATE PREPARE s;
+
+        SET @sql = '
+            CREATE TRIGGER trg_patients_cache_inv_au
+            AFTER UPDATE ON patients
+            FOR EACH ROW
+            INSERT INTO doctor_cache_invalidation_queue(entity_type, doctor_id, admin_id, old_doctor_id, old_admin_id)
+            VALUES (''PATIENT'', NEW.doctor_id, NEW.admin_id, OLD.doctor_id, OLD.admin_id)
+        '; PREPARE s FROM @sql; EXECUTE s; DEALLOCATE PREPARE s;
+
+        SET @sql = '
+            CREATE TRIGGER trg_patients_cache_inv_ad
+            AFTER DELETE ON patients
+            FOR EACH ROW
+            INSERT INTO doctor_cache_invalidation_queue(entity_type, doctor_id, admin_id, old_doctor_id, old_admin_id)
+            VALUES (''PATIENT'', OLD.doctor_id, OLD.admin_id, OLD.doctor_id, OLD.admin_id)
         '; PREPARE s FROM @sql; EXECUTE s; DEALLOCATE PREPARE s;
     END IF;
 

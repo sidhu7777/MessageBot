@@ -495,6 +495,7 @@ def register_webhook_routes(
             from_number,
             text,
         )
+        logger.info("TELEGRAM_CHAT_ID=%s", telegram_user_id)
 
         if inbound_sid:
             dedup_sid = f"TG{telegram_user_id}:{inbound_sid}"

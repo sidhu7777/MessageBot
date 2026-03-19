@@ -358,9 +358,31 @@ async def health_queue() -> dict:
     }
 
 
-def _qr_page_html(*, doctor_id: int, clinic_id: int, doctor_name: str, clinic_name: str) -> str:
+def _qr_page_html(
+    *,
+    doctor_id: int,
+    clinic_id: int,
+    doctor_name: str,
+    clinic_name: str,
+    result_message: str | None = None,
+    result_status: str | None = None,
+    patient_name: str = "",
+    phone_number: str = "",
+    language: str = "en",
+) -> str:
     doctor_name_safe = html_escape.escape(doctor_name or "Doctor")
     clinic_name_safe = html_escape.escape(clinic_name or "Clinic")
+    patient_name_safe = html_escape.escape(patient_name or "")
+    phone_number_safe = html_escape.escape(phone_number or "")
+    result_message_safe = html_escape.escape(result_message or "")
+    lang = language if language in {"en", "hi", "hinglish"} else "en"
+    result_class = ""
+    if result_status == "booked":
+        result_class = " ok"
+    elif result_status in {"overflow", "active_booking"}:
+        result_class = " warn"
+    elif result_status:
+        result_class = " err"
     qr_base_url = (os.getenv("QR_BASE_URL", "") or "").strip().rstrip("/")
     return f"""<!doctype html>
 <html lang="en">
@@ -493,27 +515,27 @@ def _qr_page_html(*, doctor_id: int, clinic_id: int, doctor_name: str, clinic_na
       <h1 id="title">Welcome to Dr. {doctor_name_safe} clinic</h1>
       <p class="subtitle" id="subtitle">Clinic: {clinic_name_safe}</p>
     </div>
-    <form class="form-wrap" id="checkinForm">
+    <form class="form-wrap" id="checkinForm" method="post" action="/qr/checkin/submit?doctor_id={doctor_id}&clinic_id={clinic_id}">
       <label>
         <span id="langLabel">Select language</span>
-        <select id="language">
-          <option value="en">English</option>
-          <option value="hi">हिंदी</option>
-          <option value="hinglish">Hinglish</option>
+        <select id="language" name="language">
+          <option value="en"{" selected" if lang == "en" else ""}>English</option>
+          <option value="hi"{" selected" if lang == "hi" else ""}>हिंदी</option>
+          <option value="hinglish"{" selected" if lang == "hinglish" else ""}>Hinglish</option>
         </select>
       </label>
       <div class="grid">
         <label>
           <span id="nameLabel">Full Name</span>
-          <input id="patientName" maxlength="120" required />
+          <input id="patientName" name="patient_name" maxlength="120" value="{patient_name_safe}" required />
         </label>
         <label>
           <span id="phoneLabel">Phone Number</span>
-          <input id="phoneNumber" maxlength="20" required />
+          <input id="phoneNumber" name="phone_number" maxlength="20" value="{phone_number_safe}" required />
         </label>
       </div>
       <button id="submitBtn" type="submit">Submit</button>
-      <div id="result" class="result"></div>
+      <div id="result" class="result{result_class}">{result_message_safe}</div>
       <input type="hidden" id="doctorId" value="{doctor_id}" />
       <input type="hidden" id="clinicId" value="{clinic_id}" />
     </form>
@@ -558,12 +580,13 @@ def _qr_page_html(*, doctor_id: int, clinic_id: int, doctor_name: str, clinic_na
     }}
 
     document.getElementById("language").addEventListener("change", (e) => applyLanguage(e.target.value));
-    applyLanguage("en");
+    applyLanguage(document.getElementById("language").value || "en");
 
-    document.getElementById("checkinForm").addEventListener("submit", async (e) => {{
+    const checkinForm = document.getElementById("checkinForm");
+    checkinForm.addEventListener("submit", async (e) => {{
       e.preventDefault();
-      const qrBaseUrl = {json.dumps(qr_base_url)};
-      const submitUrl = qrBaseUrl ? `${{qrBaseUrl}}/qr/checkin/submit` : "/qr/checkin/submit";
+      e.stopPropagation();
+      const submitUrl = "/qr/checkin/submit";
       const result = document.getElementById("result");
       const btn = document.getElementById("submitBtn");
       btn.disabled = true;
@@ -577,12 +600,26 @@ def _qr_page_html(*, doctor_id: int, clinic_id: int, doctor_name: str, clinic_na
           phone_number: document.getElementById("phoneNumber").value,
           language: document.getElementById("language").value,
         }};
+        if (!payload.doctor_id || !payload.clinic_id) {{
+          result.classList.add("err");
+          result.textContent = "Error: Doctor or clinic ID missing.";
+          btn.disabled = false;
+          return;
+        }}
         const resp = await fetch(submitUrl, {{
           method: "POST",
           headers: {{ "Content-Type": "application/json" }},
           body: JSON.stringify(payload),
         }});
-        const data = await resp.json();
+        let data;
+        try {{
+          data = await resp.json();
+        }} catch {{
+          result.classList.add("err");
+          result.textContent = "Server error. Please try again.";
+          btn.disabled = false;
+          return;
+        }}
         const renderResultMessage = (message) => {{
           const safe = String(message || "Done.")
             .replace(/&/g, "&amp;")
@@ -596,7 +633,7 @@ def _qr_page_html(*, doctor_id: int, clinic_id: int, doctor_name: str, clinic_na
         }};
         if (!resp.ok) {{
           result.classList.add("err");
-          result.textContent = data.detail || "Request failed.";
+          result.textContent = data.detail || data.message || "Request failed.";
       }} else {{
           const status = data.status || "";
           if (status === "booked") result.classList.add("ok");
@@ -610,16 +647,23 @@ def _qr_page_html(*, doctor_id: int, clinic_id: int, doctor_name: str, clinic_na
       }} finally {{
         btn.disabled = false;
       }}
-    }});
+    }}, true);
   </script>
 </body>
 </html>"""
 
 
 @app.get("/qr/checkin", response_class=HTMLResponse)
-async def qr_checkin_page(doctor_id: int, clinic_id: int):
+async def qr_checkin_page(doctor_id: int | None = None, clinic_id: int | None = None):
     if not qr_checkin_service:
         return HTMLResponse("<h3>QR check-in is not configured.</h3>", status_code=503)
+    if not doctor_id or not clinic_id:
+        return HTMLResponse(
+            """<h3>QR check-in link is missing required parameters.</h3>
+<p>Please scan the correct QR code or open a URL like:</p>
+<p><code>/qr/checkin?doctor_id=1&amp;clinic_id=5</code></p>""",
+            status_code=400,
+        )
     doctor_name, clinic_name = "Doctor", "Clinic"
     try:
         doctor_name, clinic_name = await asyncio.wait_for(
@@ -651,10 +695,15 @@ async def qr_checkin_page(doctor_id: int, clinic_id: int):
 async def qr_checkin_submit(request: Request):
     if not qr_checkin_service:
         return JSONResponse({"detail": "QR check-in is not configured."}, status_code=503)
+    payload: dict[str, object] = {}
     try:
         payload = await request.json()
     except Exception:
-        return JSONResponse({"detail": "Invalid QR check-in request payload."}, status_code=400)
+        try:
+            form = await request.form()
+            payload = dict(form)
+        except Exception:
+            return JSONResponse({"detail": "Invalid QR check-in request payload."}, status_code=400)
 
     patient_name = str(payload.get("patient_name") or "").strip()
     phone_number = str(payload.get("phone_number") or "").strip()
@@ -668,8 +717,10 @@ async def qr_checkin_submit(request: Request):
         phone=phone_number,
     )
     try:
-        doctor_id = int(payload.get("doctor_id"))
-        clinic_id = int(payload.get("clinic_id"))
+        doctor_raw = payload.get("doctor_id") or request.query_params.get("doctor_id")
+        clinic_raw = payload.get("clinic_id") or request.query_params.get("clinic_id")
+        doctor_id = int(doctor_raw)
+        clinic_id = int(clinic_raw)
     except Exception:
         log_event(
             qr_chat_id,
@@ -708,6 +759,22 @@ async def qr_checkin_submit(request: Request):
             phone_number,
             result.status,
             result.message,
+        )
+    accept_header = (request.headers.get("accept") or "").lower()
+    if "text/html" in accept_header and "application/json" not in accept_header:
+        return HTMLResponse(
+            _qr_page_html(
+                doctor_id=doctor_id,
+                clinic_id=clinic_id,
+                doctor_name=result.doctor_name or "Doctor",
+                clinic_name=result.clinic_name or "Clinic",
+                result_message=result.message,
+                result_status=result.status,
+                patient_name=patient_name,
+                phone_number=phone_number,
+                language=str(payload.get("language") or "en"),
+            ),
+            status_code=status_code,
         )
     return JSONResponse(
         {

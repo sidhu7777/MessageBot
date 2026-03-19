@@ -2,6 +2,7 @@ services:
   app:
     build: .
     container_name: message-bot-app
+    restart: unless-stopped
     ports:
       - "8000:8000"
     env_file:
@@ -17,8 +18,6 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
-      ollama-pull:
-        condition: service_completed_successfully
     volumes:
       - ./logs:/app/logs
       - ./data:/app/data
@@ -26,6 +25,7 @@ services:
   redis:
     image: redis:7-alpine
     container_name: message-bot-redis
+    restart: unless-stopped
     ports:
       - "6379:6379"
     volumes:
@@ -39,10 +39,18 @@ services:
   ollama:
     image: ollama/ollama:latest
     container_name: message-bot-ollama
+    restart: unless-stopped
     ports:
       - "11434:11434"
     volumes:
       - ollama:/root/.ollama
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
     healthcheck:
       test: ["CMD", "ollama", "list"]
       interval: 15s
@@ -55,6 +63,8 @@ services:
     depends_on:
       ollama:
         condition: service_started
+    env_file:
+      - .env
     environment:
       OLLAMA_HOST: "http://ollama:11434"
     volumes:
@@ -64,12 +74,13 @@ services:
       [
         "/bin/sh",
         "-c",
-        "for i in $(seq 1 120); do wget -qO- http://ollama:11434/api/tags >/dev/null 2>&1 && break; sleep 2; done; ollama pull ${LLM_MODEL_NAME:-qwen3:0.6b}"
+        "MODEL=\"$${LLM_MODEL_NAME:-qwen3:0.6b}\"; TAGS=$$(wget -qO- http://ollama:11434/api/tags 2>/dev/null || true); if echo \"$$TAGS\" | grep -q \"\\\"name\\\":\\\"$$MODEL\\\"\"; then echo \"Model $$MODEL already present; skipping pull.\"; exit 0; fi; if [ -z \"$$TAGS\" ]; then echo \"Ollama not ready; skipping pull.\"; exit 0; fi; ollama pull \"$$MODEL\""
       ]
 
   kafka:
     image: apache/kafka:3.8.0
     container_name: message-bot-kafka
+    restart: unless-stopped
     ports:
       - "9094:9094"
     environment:
@@ -98,6 +109,7 @@ services:
   kafka-ui:
     image: provectuslabs/kafka-ui:latest
     container_name: message-bot-kafka-ui
+    restart: unless-stopped
     depends_on:
       kafka:
         condition: service_healthy

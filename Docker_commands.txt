@@ -1,0 +1,7 @@
+# to see vm cpu usuage 
+
+top
+
+#
+
+

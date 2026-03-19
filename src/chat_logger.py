@@ -20,13 +20,28 @@ Usage (anywhere in the codebase):
 """
 
 import os
+import shutil
 import threading
-from datetime import datetime
+from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 from pathlib import Path
 from typing import Optional
 
 # Root log directory â€” project_root/logs/
 _LOGS_ROOT = Path(__file__).resolve().parent.parent / "logs"
+_LOG_TZ_NAME = (os.getenv("LOG_TIMEZONE") or os.getenv("TZ") or "UTC").strip() or "UTC"
+try:
+    _LOG_TZ = ZoneInfo(_LOG_TZ_NAME)
+except Exception:
+    _LOG_TZ = ZoneInfo("UTC")
+    _LOG_TZ_NAME = "UTC"
+
+_LOG_RETENTION_ENABLED = (os.getenv("LOG_RETENTION_ENABLED") or "false").strip().lower() in {"1", "true", "yes", "y"}
+try:
+    _LOG_RETENTION_DAYS = max(1, int(os.getenv("LOG_RETENTION_DAYS", "15")))
+except Exception:
+    _LOG_RETENTION_DAYS = 15
+_last_retention_check_date: str | None = None
 
 # Open file handles keyed by "YYYY-MM-DD:chat_id".
 # Line-buffered so each write is immediately flushed to disk.
@@ -49,7 +64,7 @@ def _safe_chat_id(chat_id: str) -> str:
 
 def _get_file_handle(chat_id: str):
     """Return (or open) the line-buffered log file for this chat_id + today."""
-    date_str = datetime.now().strftime("%Y-%m-%d")
+    date_str = datetime.now(_LOG_TZ).strftime("%Y-%m-%d")
     key = f"{date_str}:{chat_id}"
 
     with _handles_lock:
@@ -111,7 +126,8 @@ def log_event(chat_id: str, event: str, **kwargs) -> None:
         [14:32:01.246] TURN_END                  total_ms=122 save_ms=8
     """
     try:
-        now = datetime.now().strftime("%H:%M:%S.%f")[:-3]  # HH:MM:SS.mmm
+        _maybe_apply_log_retention()
+        now = datetime.now(_LOG_TZ).strftime("%H:%M:%S.%f")[:-3]  # HH:MM:SS.mmm
         parts = []
         for k, v in kwargs.items():
             if v is None:
@@ -130,3 +146,26 @@ def log_event(chat_id: str, event: str, **kwargs) -> None:
     except Exception:
         # Logging must never crash the bot.
         pass
+
+
+def _maybe_apply_log_retention() -> None:
+    global _last_retention_check_date
+    if not _LOG_RETENTION_ENABLED:
+        return
+    today = datetime.now(_LOG_TZ).strftime("%Y-%m-%d")
+    if _last_retention_check_date == today:
+        return
+    _last_retention_check_date = today
+    cutoff = datetime.now(_LOG_TZ) - timedelta(days=_LOG_RETENTION_DAYS)
+    try:
+        for child in _LOGS_ROOT.iterdir():
+            if not child.is_dir():
+                continue
+            try:
+                dir_date = datetime.strptime(child.name, "%Y-%m-%d").replace(tzinfo=_LOG_TZ)
+            except Exception:
+                continue
+            if dir_date < cutoff:
+                shutil.rmtree(child, ignore_errors=True)
+    except Exception:
+        return

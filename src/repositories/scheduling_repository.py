@@ -676,6 +676,32 @@ class SchedulingRepository:
                 VALUES ('CLINIC', OLD.clinic_id, OLD.admin_id)
                 """,
             }
+            if self._table_exists("patients"):
+                trigger_ddls.update(
+                    {
+                        "trg_patients_cache_inv_ai": """
+                        CREATE TRIGGER trg_patients_cache_inv_ai
+                        AFTER INSERT ON patients
+                        FOR EACH ROW
+                        INSERT INTO doctor_cache_invalidation_queue(entity_type, doctor_id, admin_id)
+                        VALUES ('PATIENT', NEW.doctor_id, NEW.admin_id)
+                        """,
+                        "trg_patients_cache_inv_au": """
+                        CREATE TRIGGER trg_patients_cache_inv_au
+                        AFTER UPDATE ON patients
+                        FOR EACH ROW
+                        INSERT INTO doctor_cache_invalidation_queue(entity_type, doctor_id, admin_id, old_doctor_id, old_admin_id)
+                        VALUES ('PATIENT', NEW.doctor_id, NEW.admin_id, OLD.doctor_id, OLD.admin_id)
+                        """,
+                        "trg_patients_cache_inv_ad": """
+                        CREATE TRIGGER trg_patients_cache_inv_ad
+                        AFTER DELETE ON patients
+                        FOR EACH ROW
+                        INSERT INTO doctor_cache_invalidation_queue(entity_type, doctor_id, admin_id, old_doctor_id, old_admin_id)
+                        VALUES ('PATIENT', OLD.doctor_id, OLD.admin_id, OLD.doctor_id, OLD.admin_id)
+                        """,
+                    }
+                )
             if self._table_exists("appointment"):
                 trigger_ddls.update(
                     {
@@ -881,8 +907,17 @@ class SchedulingRepository:
             conn.close()
 
     def process_cache_invalidation_event(self, event: CacheInvalidationEvent) -> None:
-        if (event.entity_type or "").strip().upper() == "APPOINTMENT":
+        entity_type = (event.entity_type or "").strip().upper()
+        if entity_type == "APPOINTMENT":
             self._process_appointment_cache_event(event)
+            return
+        if entity_type == "PATIENT":
+            self._invalidate_patient_cache(admin_id=event.admin_id, doctor_id=event.doctor_id)
+            if (
+                (event.old_admin_id is not None or event.old_doctor_id is not None)
+                and (event.old_admin_id != event.admin_id or event.old_doctor_id != event.doctor_id)
+            ):
+                self._invalidate_patient_cache(admin_id=event.old_admin_id, doctor_id=event.old_doctor_id)
             return
         doctor_ids: list[int] = []
         if event.doctor_id is not None:
@@ -929,6 +964,29 @@ class SchedulingRepository:
                 slot_time=new_time,
                 make_available=False,
             )
+
+    def _invalidate_patient_cache(self, *, admin_id: Optional[int], doctor_id: Optional[int]) -> None:
+        if not self.redis_client:
+            return
+        admin_key = str(int(admin_id)) if admin_id is not None else "na"
+        doctor_key = str(int(doctor_id)) if doctor_id is not None else "na"
+        patterns = (
+            f"{self._cache_key_prefix}:patient:phone:{admin_key}:{doctor_key}:*",
+            f"{self._cache_key_prefix}:patient:chat:{admin_key}:{doctor_key}:*",
+        )
+        keys: list[str] = []
+        for pattern in patterns:
+            try:
+                for key in self.redis_client.scan_iter(match=pattern, count=50):
+                    keys.append(str(key))
+            except Exception:
+                continue
+        if not keys:
+            return
+        try:
+            self.redis_client.delete(*list(dict.fromkeys(keys)))
+        except Exception:
+            return
 
     def default_doctor_id(self, admin_id: Optional[int] = None) -> Optional[int]:
         conn = self._connect()
@@ -1032,7 +1090,7 @@ class SchedulingRepository:
                     """
                 )
                 cols = {str(r["COLUMN_NAME"]).lower() for r in cur.fetchall()}
-                candidate_cols = ["username", "telegram_username", "telegram_bot_username"]
+                candidate_cols = ["telegram_userid", "username", "telegram_username", "telegram_bot_username"]
                 self._cached_username_col = next((c for c in candidate_cols if c in cols), None)
             username_col = self._cached_username_col
             if not username_col:
@@ -1056,6 +1114,47 @@ class SchedulingRepository:
             )
             row = cur.fetchone()
             return int(row["doctor_id"]) if row else None
+        finally:
+            cur.close()
+            conn.close()
+
+    def default_doctor_id_by_chat_id(
+        self,
+        chat_id: str,
+        admin_id: Optional[int] = None,
+    ) -> Optional[int]:
+        """Look up doctor_id by Telegram chat_id from doctors table directly."""
+        target = (chat_id or "").strip()
+        if target.lower().startswith("telegram:"):
+            target = target[len("telegram:") :].strip()
+        if not target:
+            return None
+        conn = self._connect()
+        cur = conn.cursor(dictionary=True)
+        try:
+            params: list[object] = [target]
+            admin_sql = ""
+            if admin_id is not None:
+                admin_sql = "AND d.admin_id = %s"
+                params.append(admin_id)
+            # Query doctors table directly for matching chat_id
+            cur.execute(
+                f"""
+                SELECT d.doctor_id
+                FROM doctors d
+                WHERE d.status = 'ACTIVE'
+                  AND d.chat_id = %s
+                  {admin_sql}
+                LIMIT 1
+                """,
+                tuple(params),
+            )
+            row = cur.fetchone()
+            if row:
+                return int(row["doctor_id"])
+            return None
+        except Exception:
+            return None
         finally:
             cur.close()
             conn.close()

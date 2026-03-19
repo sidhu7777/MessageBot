@@ -219,6 +219,15 @@ def handle_availability_details_state(fsm: "AppointmentFSM", text: str, lower: s
         fsm.state = "ASK_BOOKING_FOR"
         return fsm._respond(fsm._msg("intent_ack") + "\n\n" + fsm._with_back(fsm._msg("ask_booking_for"), option_count=2))
 
+    # Allow numeric date selection even in details state (e.g., user replies "1" or "2").
+    normalized = (lower or "").strip()
+    if normalized.isdigit() and fsm.availability_date_options_cache:
+        idx = int(normalized)
+        if 1 <= idx <= len(fsm.availability_date_options_cache):
+            selected_date = fsm.availability_date_options_cache[idx - 1]
+            fsm.context.availability_date = selected_date
+            return fsm._respond(fsm._availability_reply(selected_date))
+
     doctor_name = extract_doctor_name(text)
     if doctor_name:
         fsm.context.availability_doctor = doctor_name

@@ -74,7 +74,8 @@ def get_message(response_language: str, key: str, **kwargs: object) -> str:
         ),
         "availability_generic_noted": (
             "Noted. You want doctor availability on {availability_date}.\n"
-            "Please share doctor name if you want doctor-specific availability."
+            "Please share doctor name if you want doctor-specific availability.\n\n"
+            "Press \"0\" to go back."
         ),
         "availability_result_available_header": "Doctor availability on {availability_date}:",
         "availability_result_next_header": "No slots available on {availability_date}.\nNext available dates:",
@@ -82,8 +83,8 @@ def get_message(response_language: str, key: str, **kwargs: object) -> str:
         "availability_result_actions": '\n\n1. Book appointment\n0. Go back',
         "availability_result_actions_back": '\n\n1. Book appointment\nPress "0" to go back.',
         "empty_input": "Please send a message so I can assist you.",
-        "abusive_language": "I can help only with appointment tasks. Please use respectful language.",
-        "abusive_language_final": "Please contact the clinic directly for further assistance.",
+        "abusive_language": "I can help only with appointment tasks. Please use respectful language. If you continue with rude language, your account will be blocked.",
+        "abusive_language_final": "Your account has been blocked due to disrespectful language. Please contact the clinic directly for further assistance.",
         "no_intent": (
             "To begin, please say 'I need to book an appointment'."
         ),
@@ -312,7 +313,8 @@ def get_message(response_language: str, key: str, **kwargs: object) -> str:
         ),
         "availability_generic_noted": (
             "नोट किया गया। आप {availability_date} के लिए डॉक्टर की उपलब्धता पूछ रहे हैं।\n"
-            "यदि आप किसी विशेष डॉक्टर की उपलब्धता चाहते हैं, तो कृपया डॉक्टर का नाम बताएं।"
+            "यदि आप किसी विशेष डॉक्टर की उपलब्धता चाहते हैं, तो कृपया डॉक्टर का नाम बताएं।\n\n"
+            "\"0\" दबाकर वापस जाएं।"
         ),
         "availability_result_available_header": "{availability_date} के लिए डॉक्टर की उपलब्धता:",
         "availability_result_next_header": "{availability_date} को कोई स्लॉट उपलब्ध नहीं है।\nअगली उपलब्ध तारीखें:",
@@ -320,8 +322,8 @@ def get_message(response_language: str, key: str, **kwargs: object) -> str:
         "availability_result_actions": '\n\n1. अपॉइंटमेंट बुक करें\n0. वापस जाएं',
         "availability_result_actions_back": '\n\n1. अपॉइंटमेंट बुक करें\n"0" दबाकर वापस जाएं।',
         "empty_input": "कृपया संदेश भेजें ताकि मैं आपकी मदद कर सकूँ।",
-        "abusive_language": "मैं केवल अपॉइंटमेंट संबंधित मदद कर सकता हूँ। कृपया सम्मानजनक भाषा का प्रयोग करें।",
-        "abusive_language_final": "कृपया आगे की मदद के लिए सीधे क्लिनिक से संपर्क करें।",
+        "abusive_language": "मैं केवल अपॉइंटमेंट संबंधित मदद कर सकता हूँ। कृपया सम्मानजनक भाषा का प्रयोग करें। अगर आप फिर से असभ्य भाषा का प्रयोग करते हैं, तो आपका खाता अवरुद्ध कर दिया जाएगा।",
+        "abusive_language_final": "आपका खाता असभ्य भाषा के कारण ब्लॉक कर दिया गया है। कृपया आगे की मदद के लिए सीधे क्लिनिक से संपर्क करें।",
         "no_intent": "शुरू करने के लिए कृपया लिखें: 'मुझे अपॉइंटमेंट बुक करनी है'।",
         "clarify_intent": (
             "कृपया एक विकल्प चुनें:\n"
@@ -532,7 +534,8 @@ def get_message(response_language: str, key: str, **kwargs: object) -> str:
         ),
         "availability_generic_noted": (
             "Noted. Aap {availability_date} ke liye doctor availability pooch rahe hain.\n"
-            "Agar doctor-specific availability chahiye, to doctor name share kariye."
+            "Agar doctor-specific availability chahiye, to doctor name share kariye.\n\n"
+            "Press \"0\" to go back."
         ),
         "availability_result_available_header": "Doctor availability on {availability_date}:",
         "availability_result_next_header": "{availability_date} par koi slot available nahi hai.\nNext available dates:",
@@ -540,8 +543,8 @@ def get_message(response_language: str, key: str, **kwargs: object) -> str:
         "availability_result_actions": '\n\n1. Appointment book kariye\n0. Go back',
         "availability_result_actions_back": '\n\n1. Appointment book kariye\nPress "0" to go back.',
         "empty_input": "Please message bhejiye taaki main help kar sakoon.",
-        "abusive_language": "Main sirf appointment related help kar sakta hoon. Please respectful language use kariye.",
-        "abusive_language_final": "Aage ki help ke liye please clinic ko directly contact kariye.",
+        "abusive_language": "Main sirf appointment related help kar sakta hoon. Please respectful language use kariye. Agar aap fir se rude language use karenge, to aapka account block ho jayega.",
+        "abusive_language_final": "Aapka account disrespectful language ke kaaran block kar diya gaya hai. Aage ki help ke liye please clinic ko directly contact kariye.",
         "no_intent": "Start karne ke liye please likhiye: 'I need to book an appointment'.",
         "clarify_intent": (
             "Please ek option choose kariye:\n"
@@ -766,4 +769,3 @@ def get_message(response_language: str, key: str, **kwargs: object) -> str:
     if key in {"db_save_ok", "reschedule_confirmed"}:
         message = _emphasize_patient_id_line(message)
     return message
-

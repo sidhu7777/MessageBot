@@ -1,4 +1,6 @@
 import logging
+import os
+import time
 import re
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
@@ -883,7 +885,22 @@ class AppointmentFSM:
                 self.admin_id = None
         if self.doctor_id is None and self.scheduling_repository:
             try:
-                if self.bot_whatsapp_number:
+                # For Telegram channel: look up doctor by chat_id (dynamic from incoming message)
+                if self._is_telegram_channel():
+                    raw_chat = (self.chat_phone_number or "").strip()
+                    if raw_chat:
+                        self.doctor_id = self.scheduling_repository.default_doctor_id_by_chat_id(
+                            chat_id=raw_chat,
+                            admin_id=self.admin_id,
+                        )
+                        if self.doctor_id is None:
+                            # Fallback: some deployments don't set/align admin_id on doctors.
+                            self.doctor_id = self.scheduling_repository.default_doctor_id_by_chat_id(
+                                chat_id=raw_chat,
+                                admin_id=None,
+                            )
+                # For WhatsApp or if Telegram lookup failed: use bot channel identity
+                if self.doctor_id is None and self.bot_whatsapp_number:
                     marker = "telegram_username:"
                     if self.bot_whatsapp_number.startswith(marker):
                         username = self.bot_whatsapp_number[len(marker) :].strip()
@@ -898,10 +915,12 @@ class AppointmentFSM:
                         )
                 # Safety: when channel number is configured but does not match any doctor,
                 # do not silently route to another doctor.
-                elif self.doctor_id is None:
+                if self.doctor_id is None:
                     self.doctor_id = self.scheduling_repository.default_doctor_id(admin_id=self.admin_id)
             except Exception:
-                self.doctor_id = None
+                # Don't wipe an already-resolved doctor_id on transient errors.
+                if self.doctor_id is None:
+                    self.doctor_id = None
 
     def _hydrate_known_patient_name(self) -> None:
         if self.known_patient_name:
@@ -1251,6 +1270,26 @@ class AppointmentFSM:
 
     def _availability_reply(self, slot_date: str) -> str:
         self._ensure_actor_defaults()
+        if self.scheduling_repository and not self.doctor_id and self._is_telegram_channel():
+            try:
+                raw_chat = (self.chat_phone_number or "").strip()
+                if raw_chat:
+                    self.doctor_id = self.scheduling_repository.default_doctor_id_by_chat_id(
+                        chat_id=raw_chat,
+                        admin_id=self.admin_id,
+                    )
+                    if self.doctor_id is None:
+                        self.doctor_id = self.scheduling_repository.default_doctor_id_by_chat_id(
+                            chat_id=raw_chat,
+                            admin_id=None,
+                        )
+            except Exception:
+                pass
+        if self.scheduling_repository and self.doctor_id is None:
+            try:
+                self.doctor_id = self.scheduling_repository.default_doctor_id(admin_id=self.admin_id)
+            except Exception:
+                pass
         if not self.scheduling_repository or not self.doctor_id:
             if self.context.availability_doctor:
                 return self._msg(
@@ -1260,68 +1299,64 @@ class AppointmentFSM:
                 )
             return self._msg("availability_generic_noted", availability_date=slot_date)
 
+        # Redis-primary path: fetch one snapshot and derive all clinic/date/time output.
+        snapshot = None
         try:
-            # Redis-primary path: fetch one snapshot and derive all clinic/date/time output.
-            # Repository keeps DB fallback if cache is missing/invalid.
+            snapshot = self.scheduling_repository._load_cached_availability(
+                doctor_id=self.doctor_id,
+                admin_id=self.admin_id,
+            )
+        except Exception:
+            snapshot = None
+        if not snapshot:
             snapshot = self.scheduling_repository.get_availability_snapshot(
                 doctor_id=self.doctor_id,
                 admin_id=self.admin_id,
             )
-            clinics_payload = list((snapshot or {}).get("clinics") or [])
-            if not clinics_payload:
-                return self._msg("no_clinic_available")
 
-            dates_by_clinic = dict((snapshot or {}).get("dates_by_clinic") or {})
-            times_by_clinic_date = dict((snapshot or {}).get("times_by_clinic_date") or {})
+        clinics_payload = list((snapshot or {}).get("clinics") or [])
+        if not clinics_payload:
+            return self._msg("no_clinic_available")
 
-            available_lines: list[str] = []
-            next_lines: list[str] = []
-            for row in clinics_payload[:10]:
-                clinic_id = int(row.get("clinic_id") or 0)
-                clinic_name = str(row.get("clinic_name") or "-")
-                clinic_key = str(clinic_id)
-                clinic_dates = list(dates_by_clinic.get(clinic_key) or [])
-                if slot_date in clinic_dates:
-                    times = list(times_by_clinic_date.get(f"{clinic_key}|{slot_date}") or [])
-                    if times:
-                        count = len(times)
-                        if count == 1:
-                            slot_label = f"1 slot at {self._format_time_for_display(times[0])}"
-                        else:
-                            slot_label = (
-                                f"{count} slots ("
-                                f"{self._format_time_for_display(times[0])} - {self._format_time_for_display(times[-1])})"
-                            )
-                        available_lines.append(f"- {clinic_name}: {slot_label}")
+        dates_by_clinic = dict((snapshot or {}).get("dates_by_clinic") or {})
+        times_by_clinic_date = dict((snapshot or {}).get("times_by_clinic_date") or {})
+
+        available_lines: list[str] = []
+        next_lines: list[str] = []
+        for row in clinics_payload[:10]:
+            clinic_id = int(row.get("clinic_id") or 0)
+            clinic_name = str(row.get("clinic_name") or "-")
+            clinic_key = str(clinic_id)
+            clinic_dates = list(dates_by_clinic.get(clinic_key) or [])
+            if slot_date in clinic_dates:
+                times = list(times_by_clinic_date.get(f"{clinic_key}|{slot_date}") or [])
+                if times:
+                    if len(times) == 1:
+                        slot_label = f"{self._format_time_for_display(times[0])}"
                     else:
-                        available_lines.append(f"- {clinic_name}: Available")
-                elif clinic_dates:
-                    next_lines.append(f"- {clinic_name}: {clinic_dates[0]}")
+                        slot_label = (
+                            f"{self._format_time_for_display(times[0])} - "
+                            f"{self._format_time_for_display(times[-1])}"
+                        )
+                    available_lines.append(f"- {clinic_name}: {slot_label}")
+                else:
+                    available_lines.append(f"- {clinic_name}: Available")
+            elif clinic_dates:
+                next_lines.append(f"- {clinic_name}: {clinic_dates[0]}")
 
-            if available_lines:
-                return (
-                    self._msg("availability_result_available_header", availability_date=slot_date)
-                    + "\n"
-                    + "\n".join(available_lines)
-                    + self._msg("availability_result_actions")
-                )
-
-            if next_lines:
-                return (
-                    self._msg("availability_result_next_header", availability_date=slot_date)
-                    + "\n"
-                    + "\n".join(next_lines)
-                    + self._msg("availability_result_actions_back")
-                )
-            return self._msg("availability_result_none", availability_date=slot_date)
-        except Exception:
-            if self.context.availability_doctor:
-                return self._msg(
-                    "availability_noted",
-                    availability_doctor=self.context.availability_doctor,
-                    availability_date=slot_date,
-                )
+        if available_lines:
             return (
-                f"Noted. You want doctor availability on {slot_date}.\n"
-                "Please share doctor name if you want doctor-specific availability."
+                self._msg("availability_result_available_header", availability_date=slot_date)
+                + "\n"
+                + "\n".join(available_lines)
+                + self._msg("availability_result_actions")
             )
+
+        if next_lines:
+            return (
+                self._msg("availability_result_next_header", availability_date=slot_date)
+                + "\n"
+                + "\n".join(next_lines)
+                + self._msg("availability_result_actions_back")
+            )
+        return self._msg("availability_result_none", availability_date=slot_date)
