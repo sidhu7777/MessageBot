@@ -506,18 +506,62 @@ def _qr_page_html(
     .ok {{ color: var(--ok); }}
     .warn {{ color: var(--warn); }}
     .err {{ color: var(--danger); }}
+    .modal-backdrop {{
+      position: fixed;
+      inset: 0;
+      background: rgba(15, 23, 42, 0.48);
+      display: none;
+      align-items: center;
+      justify-content: center;
+      padding: 20px;
+      z-index: 1000;
+    }}
+    .modal-backdrop.open {{
+      display: flex;
+    }}
+    .modal {{
+      width: min(100%, 420px);
+      background: #ffffff;
+      border-radius: 20px;
+      box-shadow: 0 24px 60px rgba(15, 23, 42, 0.24);
+      overflow: hidden;
+      border: 1px solid #dce9e2;
+    }}
+    .modal-head {{
+      padding: 20px 22px 10px 22px;
+      background: linear-gradient(180deg, #effaf6 0%, #ffffff 100%);
+    }}
+    .modal-title {{
+      margin: 0;
+      font-size: 22px;
+      line-height: 1.2;
+    }}
+    .modal-message {{
+      margin: 8px 0 0 0;
+      color: var(--text);
+      font-size: 28px;
+      line-height: 1.35;
+      font-weight: 800;
+    }}
+    .modal-actions {{
+      padding: 22px;
+    }}
+    .modal-actions button {{
+      width: 100%;
+      margin-top: 0;
+    }}
   </style>
 </head>
 <body>
   <section class="card">
     <div class="hero">
-      <span class="kicker" id="kicker">QR Check-in</span>
+      <span class="kicker" id="kicker">Book Your Appointment</span>
       <h1 id="title">Welcome to Dr. {doctor_name_safe} clinic</h1>
       <p class="subtitle" id="subtitle">Clinic: {clinic_name_safe}</p>
     </div>
     <form class="form-wrap" id="checkinForm" method="post" action="/qr/checkin/submit?doctor_id={doctor_id}&clinic_id={clinic_id}">
       <label>
-        <span id="langLabel">Select language</span>
+        <span id="langLabel">Select language / भाषा चुनें</span>
         <select id="language" name="language">
           <option value="en"{" selected" if lang == "en" else ""}>English</option>
           <option value="hi"{" selected" if lang == "hi" else ""}>हिंदी</option>
@@ -540,46 +584,119 @@ def _qr_page_html(
       <input type="hidden" id="clinicId" value="{clinic_id}" />
     </form>
   </section>
+  <div id="confirmModal" class="modal-backdrop" aria-hidden="true">
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
+      <div class="modal-head">
+        <h2 id="modalTitle" class="modal-title">Appointment Approved</h2>
+        <p id="modalMessage" class="modal-message"></p>
+      </div>
+      <div class="modal-actions">
+        <button id="modalOkBtn" type="button">OK</button>
+      </div>
+    </div>
+  </div>
 
   <script>
     const t = {{
       en: {{
+        kicker: "Book Your Appointment",
         title: "Welcome to Dr. {doctor_name_safe} clinic",
         subtitle: "Clinic: {clinic_name_safe}",
-        langLabel: "Select language",
+        langLabel: "Select language / भाषा चुनें",
         nameLabel: "Full Name",
         phoneLabel: "Phone Number",
         submit: "Submit",
+        submitting: "Submitting...",
+        missingIds: "Error: Doctor or clinic ID missing.",
+        serverError: "Server error. Please try again.",
+        requestFailed: "Request failed.",
+        unavailable: "Unable to submit right now. Please try again.",
+        popupTitle: "Appointment Approved",
+        popupMessage: "Appointment confirmed.",
+        popupToken: "Token ID",
+        popupOk: "OK",
       }},
       hi: {{
+        kicker: "अपनी अपॉइंटमेंट बुक करें",
         title: "Dr. {doctor_name_safe} क्लिनिक में आपका स्वागत है",
         subtitle: "क्लिनिक: {clinic_name_safe}",
         langLabel: "भाषा चुनें",
         nameLabel: "पूरा नाम",
         phoneLabel: "फोन नंबर",
         submit: "जमा करें",
+        submitting: "जमा किया जा रहा है...",
+        missingIds: "त्रुटि: डॉक्टर या क्लिनिक आईडी उपलब्ध नहीं है।",
+        serverError: "सर्वर त्रुटि। कृपया फिर से प्रयास करें।",
+        requestFailed: "अनुरोध विफल रहा।",
+        unavailable: "अभी सबमिट नहीं हो सका। कृपया फिर से प्रयास करें।",
+        popupTitle: "अपॉइंटमेंट स्वीकृत",
+        popupMessage: "अपॉइंटमेंट कन्फर्म हो गई।",
+        popupToken: "टोकन आईडी",
+        popupOk: "ठीक है",
       }},
       hinglish: {{
+        kicker: "Apni Appointment Book Kariye",
         title: "Dr. {doctor_name_safe} clinic mein aapka swagat hai",
         subtitle: "Clinic: {clinic_name_safe}",
         langLabel: "Language select kariye",
         nameLabel: "Full Name",
         phoneLabel: "Phone Number",
         submit: "Submit kariye",
+        submitting: "Submit ho raha hai...",
+        missingIds: "Error: Doctor ya clinic ID missing hai.",
+        serverError: "Server error. Please phir se try kariye.",
+        requestFailed: "Request fail ho gaya.",
+        unavailable: "Abhi submit nahi ho saka. Please phir se try kariye.",
+        popupTitle: "Appointment Approved",
+        popupMessage: "Appointment confirm ho gayi.",
+        popupToken: "Token ID",
+        popupOk: "OK",
       }},
     }};
 
+    function getText(lang) {{
+      return t[lang] || t.en;
+    }}
+
     function applyLanguage(lang) {{
-      const d = t[lang] || t.en;
+      const d = getText(lang);
+      document.getElementById("kicker").textContent = d.kicker;
       document.getElementById("title").textContent = d.title;
       document.getElementById("subtitle").textContent = d.subtitle;
       document.getElementById("langLabel").textContent = d.langLabel;
       document.getElementById("nameLabel").textContent = d.nameLabel;
       document.getElementById("phoneLabel").textContent = d.phoneLabel;
       document.getElementById("submitBtn").textContent = d.submit;
+      document.getElementById("modalTitle").textContent = d.popupTitle;
+      document.getElementById("modalMessage").textContent = d.popupMessage;
+      document.getElementById("modalOkBtn").textContent = d.popupOk;
+    }}
+
+    function closeConfirmationPopup() {{
+      const modal = document.getElementById("confirmModal");
+      modal.classList.remove("open");
+      modal.setAttribute("aria-hidden", "true");
+    }}
+
+    function showConfirmationPopup(data, payload) {{
+      const d = getText(payload.language);
+      const modal = document.getElementById("confirmModal");
+      document.getElementById("modalTitle").textContent = d.popupTitle;
+      const safeMessage = String(data.message || d.popupMessage)
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/(Token ID:\s*\d+\.?)/gi, "<strong>$1</strong>");
+      document.getElementById("modalMessage").innerHTML = safeMessage;
+      modal.classList.add("open");
+      modal.setAttribute("aria-hidden", "false");
     }}
 
     document.getElementById("language").addEventListener("change", (e) => applyLanguage(e.target.value));
+    document.getElementById("modalOkBtn").addEventListener("click", closeConfirmationPopup);
+    document.getElementById("confirmModal").addEventListener("click", (e) => {{
+      if (e.target.id === "confirmModal") closeConfirmationPopup();
+    }});
     applyLanguage(document.getElementById("language").value || "en");
 
     const checkinForm = document.getElementById("checkinForm");
@@ -589,9 +706,11 @@ def _qr_page_html(
       const submitUrl = "/qr/checkin/submit";
       const result = document.getElementById("result");
       const btn = document.getElementById("submitBtn");
+      const selectedLang = document.getElementById("language").value || "en";
+      const d = getText(selectedLang);
       btn.disabled = true;
       result.className = "result";
-      result.textContent = "Submitting...";
+      result.textContent = d.submitting;
       try {{
         const payload = {{
           doctor_id: Number(document.getElementById("doctorId").value),
@@ -602,7 +721,7 @@ def _qr_page_html(
         }};
         if (!payload.doctor_id || !payload.clinic_id) {{
           result.classList.add("err");
-          result.textContent = "Error: Doctor or clinic ID missing.";
+          result.textContent = d.missingIds;
           btn.disabled = false;
           return;
         }}
@@ -616,7 +735,7 @@ def _qr_page_html(
           data = await resp.json();
         }} catch {{
           result.classList.add("err");
-          result.textContent = "Server error. Please try again.";
+          result.textContent = d.serverError;
           btn.disabled = false;
           return;
         }}
@@ -626,24 +745,27 @@ def _qr_page_html(
             .replace(/</g, "&lt;")
             .replace(/>/g, "&gt;");
           const withBold = safe.replace(
-            /(Patient ID:\s*\d+\.?)/gi,
+            /(Token ID:\s*\d+\.?)/gi,
             "<strong>$1</strong>"
           );
-          result.innerHTML = withBold.replace(/\n/g, "<br>");
+          result.innerHTML = withBold.replace(/\\n/g, "<br>");
         }};
         if (!resp.ok) {{
           result.classList.add("err");
-          result.textContent = data.detail || data.message || "Request failed.";
-      }} else {{
+          result.textContent = data.detail || data.message || d.requestFailed;
+        }} else {{
           const status = data.status || "";
           if (status === "booked") result.classList.add("ok");
           else if (status === "overflow" || status === "active_booking") result.classList.add("warn");
           else result.classList.add("err");
           renderResultMessage(data.message || "Done.");
+          if (status === "booked" || status === "active_booking") {{
+            showConfirmationPopup(data, payload);
+          }}
         }}
       }} catch (_err) {{
         result.classList.add("err");
-        result.textContent = "Unable to submit right now. Please try again.";
+        result.textContent = d.unavailable;
       }} finally {{
         btn.disabled = false;
       }}
@@ -737,6 +859,7 @@ async def qr_checkin_submit(request: Request):
         clinic_id=clinic_id,
         patient_name=patient_name,
         phone=phone_number,
+        language=str(payload.get("language") or "en"),
     )
     status_code = 200 if result.status in {"booked", "overflow", "active_booking"} else 400
     event_name = "QR_SUBMIT_SUCCEEDED" if status_code == 200 else "QR_SUBMIT_FAILED"

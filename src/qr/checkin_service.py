@@ -25,11 +25,91 @@ class QrCheckinService:
         self.scheduling_repository = scheduling_repository
 
     @staticmethod
+    def _normalize_language(language: str) -> str:
+        lang = (language or "").strip().lower()
+        return lang if lang in {"en", "hi", "hinglish"} else "en"
+
+    def _msg(self, language: str, key: str, **kwargs: Any) -> str:
+        lang = self._normalize_language(language)
+        templates = {
+            "booking_db_not_configured": {
+                "en": "Booking database is not configured.",
+                "hi": "बुकिंग डेटाबेस कॉन्फ़िगर नहीं है।",
+                "hinglish": "Booking database configure nahi hai.",
+            },
+            "enter_patient_name": {
+                "en": "Please enter patient name.",
+                "hi": "कृपया मरीज का नाम दर्ज करें।",
+                "hinglish": "Please patient name enter kariye.",
+            },
+            "enter_valid_phone": {
+                "en": "Please enter a valid phone number.",
+                "hi": "कृपया सही फोन नंबर दर्ज करें।",
+                "hinglish": "Please valid phone number enter kariye.",
+            },
+            "doctor_admin_not_configured": {
+                "en": "Doctor/admin mapping is not configured.",
+                "hi": "डॉक्टर/एडमिन मैपिंग कॉन्फ़िगर नहीं है।",
+                "hinglish": "Doctor/admin mapping configure nahi hai.",
+            },
+            "active_booking": {
+                "en": "You already have an active booking (#{booking_number}){suffix}",
+                "hi": "आपकी पहले से एक सक्रिय बुकिंग (#{booking_number}) है{suffix}",
+                "hinglish": "Aapki pehle se ek active booking (#{booking_number}) hai{suffix}",
+            },
+            "active_booking_suffix": {
+                "en": " on {slot_date} {slot_time}.",
+                "hi": " {slot_date} {slot_time} पर।",
+                "hinglish": " {slot_date} {slot_time} par.",
+            },
+            "active_booking_suffix_empty": {
+                "en": ".",
+                "hi": "।",
+                "hinglish": ".",
+            },
+            "appointment_confirmed": {
+                "en": "Appointment confirmed. Token ID: {booking_number}{suffix}",
+                "hi": "अपॉइंटमेंट कन्फर्म हो गई। Token ID: {booking_number}{suffix}",
+                "hinglish": "Appointment confirm ho gayi. Token ID: {booking_number}{suffix}",
+            },
+            "appointment_confirmed_suffix": {
+                "en": " on {slot_date} {slot_time}.",
+                "hi": " {slot_date} {slot_time} पर।",
+                "hinglish": " {slot_date} {slot_time} par.",
+            },
+            "appointment_confirmed_suffix_empty": {
+                "en": ".",
+                "hi": "।",
+                "hinglish": ".",
+            },
+            "unable_confirm_qr": {
+                "en": "Unable to confirm QR booking: {error}",
+                "hi": "QR बुकिंग कन्फर्म नहीं हो सकी: {error}",
+                "hinglish": "QR booking confirm nahi ho saki: {error}",
+            },
+        }
+        template = templates[key][lang]
+        return template.format(**kwargs)
+
+    @staticmethod
     def _normalize_phone(value: str) -> str:
         raw = (value or "").strip().lower()
         if raw.startswith("whatsapp:"):
             raw = raw[len("whatsapp:") :]
         return "".join(ch for ch in raw if ch.isdigit())
+
+    @staticmethod
+    def _format_time_12h(value: str) -> str:
+        text = str(value or "").strip()
+        if not text:
+            return ""
+        for fmt in ("%H:%M:%S", "%H:%M", "%I:%M %p"):
+            try:
+                parsed = datetime.strptime(text.upper(), fmt)
+                return parsed.strftime("%I:%M %p").lstrip("0")
+            except ValueError:
+                continue
+        return text
 
     def ensure_schema(self) -> None:
         if not self.booking_repository:
@@ -146,7 +226,7 @@ class QrCheckinService:
                         a.appointment_id,
                         p.booking_id AS booking_number,
                         DATE_FORMAT(a.appointment_date, '%Y-%m-%d') AS slot_date,
-                        TIME_FORMAT(a.start_time, '%H:%i') AS slot_time
+                        TIME_FORMAT(a.start_time, '%h:%i %p') AS slot_time
                     FROM {appointment_table} a
                     JOIN patients p ON p.patient_id = a.patient_id
                     WHERE a.admin_id = %s
@@ -167,7 +247,7 @@ class QrCheckinService:
                         a.appointment_id,
                         p.booking_id AS booking_number,
                         DATE_FORMAT(s.slot_date, '%Y-%m-%d') AS slot_date,
-                        TIME_FORMAT(s.slot_time, '%H:%i') AS slot_time
+                        TIME_FORMAT(s.slot_time, '%h:%i %p') AS slot_time
                     FROM {appointment_table} a
                     JOIN patients p ON p.patient_id = a.patient_id
                     LEFT JOIN slots s ON s.slot_id = a.slot_id
@@ -367,7 +447,7 @@ class QrCheckinService:
                     (next_booking_id, patient_id),
                 )
             conn.commit()
-            return appointment_id, next_booking_id, today.isoformat(), start_time.strftime("%H:%M")
+            return appointment_id, next_booking_id, today.isoformat(), start_time.strftime("%I:%M %p").lstrip("0")
         except Exception:
             conn.rollback()
             raise
@@ -408,7 +488,7 @@ class QrCheckinService:
             existing = cur.fetchone()
             if existing:
                 est = existing.get("estimated_time")
-                est_text = est.strftime("%H:%M") if est else ""
+                est_text = est.strftime("%I:%M %p").lstrip("0") if est else ""
                 conn.commit()
                 return int(existing.get("queue_position") or 1), est_text
 
@@ -446,7 +526,7 @@ class QrCheckinService:
                 ),
             )
             conn.commit()
-            return next_pos, estimate_dt.strftime("%H:%M")
+            return next_pos, estimate_dt.strftime("%I:%M %p").lstrip("0")
         except Exception:
             conn.rollback()
             raise
@@ -454,20 +534,29 @@ class QrCheckinService:
             cur.close()
             conn.close()
 
-    def process_checkin(self, *, doctor_id: int, clinic_id: int, patient_name: str, phone: str) -> QrCheckinResult:
+    def process_checkin(
+        self,
+        *,
+        doctor_id: int,
+        clinic_id: int,
+        patient_name: str,
+        phone: str,
+        language: str = "en",
+    ) -> QrCheckinResult:
+        language = self._normalize_language(language)
         if not self.booking_repository or not self.scheduling_repository:
-            return QrCheckinResult(status="error", message="Booking database is not configured.")
+            return QrCheckinResult(status="error", message=self._msg(language, "booking_db_not_configured"))
 
         normalized_phone = self._normalize_phone(phone)
         cleaned_name = " ".join((patient_name or "").strip().split())
         if not cleaned_name:
-            return QrCheckinResult(status="error", message="Please enter patient name.")
+            return QrCheckinResult(status="error", message=self._msg(language, "enter_patient_name"))
         if len(normalized_phone) < 10 or len(normalized_phone) > 15:
-            return QrCheckinResult(status="error", message="Please enter a valid phone number.")
+            return QrCheckinResult(status="error", message=self._msg(language, "enter_valid_phone"))
 
         admin_id = self._resolve_admin_id(doctor_id)
         if not admin_id:
-            return QrCheckinResult(status="error", message="Doctor/admin mapping is not configured.")
+            return QrCheckinResult(status="error", message=self._msg(language, "doctor_admin_not_configured"))
 
         doctor_name, clinic_name = self.resolve_doctor_and_clinic(doctor_id=doctor_id, clinic_id=clinic_id)
 
@@ -480,13 +569,15 @@ class QrCheckinService:
         if active:
             booking_number = active.get("booking_number") or active.get("appointment_id")
             slot_date = str(active.get("slot_date") or "")
-            slot_time = str(active.get("slot_time") or "")
+            slot_time = self._format_time_12h(active.get("slot_time") or "")
+            suffix = (
+                self._msg(language, "active_booking_suffix", slot_date=slot_date, slot_time=slot_time)
+                if slot_date or slot_time
+                else self._msg(language, "active_booking_suffix_empty")
+            )
             return QrCheckinResult(
                 status="active_booking",
-                message=(
-                    f"You already have an active booking (#{booking_number})"
-                    + (f" on {slot_date} {slot_time}." if slot_date or slot_time else ".")
-                ),
+                message=self._msg(language, "active_booking", booking_number=booking_number, suffix=suffix),
                 booking_id=int(active.get("appointment_id") or 0) or None,
                 appointment_date=slot_date,
                 appointment_time=slot_time,
@@ -500,6 +591,7 @@ class QrCheckinService:
             admin_id=admin_id,
         )
         if slot_date and slot_time:
+            display_slot_time = self._format_time_12h(slot_time)
             context = SimpleNamespace(
                 patient_name=cleaned_name,
                 phone_number=normalized_phone,
@@ -521,12 +613,17 @@ class QrCheckinService:
             )
             if save.ok:
                 number = save.queue_number if save.queue_number is not None else save.appointment_id
+                suffix = (
+                    self._msg(language, "appointment_confirmed_suffix", slot_date=slot_date, slot_time=display_slot_time)
+                    if slot_date or display_slot_time
+                    else self._msg(language, "appointment_confirmed_suffix_empty")
+                )
                 return QrCheckinResult(
                     status="booked",
-                    message=f"Appointment confirmed. Patient ID: {number}.",
-                    booking_id=save.appointment_id,
+                    message=self._msg(language, "appointment_confirmed", booking_number=number, suffix=suffix),
+                    booking_id=number,
                     appointment_date=slot_date,
-                    appointment_time=slot_time,
+                    appointment_time=display_slot_time,
                     clinic_name=clinic_name,
                     doctor_name=doctor_name,
                 )
@@ -540,11 +637,19 @@ class QrCheckinService:
                 phone=normalized_phone,
             )
         except Exception as exc:
-            return QrCheckinResult(status="error", message=f"Unable to confirm QR booking: {exc}")
+            return QrCheckinResult(
+                status="error",
+                message=self._msg(language, "unable_confirm_qr", error=exc),
+            )
+        suffix = (
+            self._msg(language, "appointment_confirmed_suffix", slot_date=overflow_date, slot_time=overflow_time)
+            if overflow_date or overflow_time
+            else self._msg(language, "appointment_confirmed_suffix_empty")
+        )
         return QrCheckinResult(
             status="booked",
-            message=f"Appointment confirmed. Patient ID: {booking_number}.",
-            booking_id=appointment_id,
+            message=self._msg(language, "appointment_confirmed", booking_number=booking_number, suffix=suffix),
+            booking_id=booking_number,
             appointment_date=overflow_date,
             appointment_time=overflow_time,
             clinic_name=clinic_name,
