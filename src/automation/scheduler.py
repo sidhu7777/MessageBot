@@ -13,6 +13,7 @@ from openpyxl.styles import Font
 
 from src.repositories.booking_repository import BookingRepository
 from src.repositories.notification_repository import NotificationEvent
+from src.runtime.account_scope import build_scoped_user_id
 from src.runtime.kafka_notification_bridge import KafkaNotificationBridge
 
 
@@ -94,6 +95,7 @@ class AutomationScheduler:
         doctor_reminder_lead_minutes: int = 10,
         doctor_reminder_window_seconds: int = 30,
         doctor_reminder_lead_minutes_list: Optional[list] = None,
+        resolve_channel_account_id_fn: Optional[Callable[[str, int], Optional[int]]] = None,
         notification_bridge: Optional[KafkaNotificationBridge] = None,
     ) -> None:
         self._booking_repository = booking_repository
@@ -114,6 +116,7 @@ class AutomationScheduler:
         self._stop = threading.Event()
         self._threads: list[threading.Thread] = []
         self._worker_id = f"scheduler-{os.getpid()}-{uuid.uuid4().hex[:8]}"
+        self._resolve_channel_account_id_fn = resolve_channel_account_id_fn
         self._notification_bridge = notification_bridge
         self._metrics_lock = threading.Lock()
         self._metrics = {
@@ -422,12 +425,31 @@ class AutomationScheduler:
                 )
                 return False
 
+            channel = (event.channel or "").strip().lower()
+            doctor_id = int(event.doctor_id) if getattr(event, "doctor_id", None) is not None else None
+            channel_account_id: Optional[int] = None
+            if (
+                self._resolve_channel_account_id_fn
+                and doctor_id is not None
+                and channel in {"telegram", "whatsapp"}
+            ):
+                try:
+                    resolved = self._resolve_channel_account_id_fn(channel, doctor_id)
+                    if resolved is not None:
+                        channel_account_id = int(resolved)
+                        to_number = build_scoped_user_id(channel_account_id, to_number)
+                except Exception:
+                    channel_account_id = None
+
             text = self._event_message_text(event)
             provider_sid = self._send_message_fn(to_number, text)
             self._booking_repository.mark_notification_event_status(
                 notification_id=event.notification_id,
                 status="SENT",
                 provider_message_sid=str(provider_sid or ""),
+                channel_account_id=channel_account_id,
+                doctor_id=doctor_id,
+                admin_id=event.admin_id,
             )
             return True
         except Exception as exc:

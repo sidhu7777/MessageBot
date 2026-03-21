@@ -4,23 +4,24 @@ import os
 import time
 import threading
 import uuid
-import html as html_escape
-import asyncio
 from contextlib import asynccontextmanager
 from threading import Lock
 from typing import Dict, Optional, Tuple
 
-from fastapi import FastAPI, Request
-from fastapi.concurrency import run_in_threadpool
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi import FastAPI
 from twilio.rest import Client
 from twilio.request_validator import RequestValidator
 from dotenv import load_dotenv
 
 from src.automation import AutomationScheduler
+from src.api.qr_routes import register_qr_routes
 from src.api.webhooks import register_webhook_routes
 from src.config import load_settings
-from src.db_store import conversation_repository_from_env, repositories_from_env
+from src.db_store import (
+    channel_account_repository_from_env,
+    conversation_repository_from_env,
+    repositories_from_env,
+)
 from src.llm.client import LLMClient
 from src.ollama_runtime import OllamaStartupError, ensure_ollama_ready
 from src.runtime import PersistentMessageSidStore, TurnQueueProcessor, TurnTask
@@ -57,6 +58,7 @@ llm_client = LLMClient(
 )
 booking_repository, scheduling_repository = repositories_from_env()
 conversation_repository = conversation_repository_from_env()
+channel_account_repository = channel_account_repository_from_env()
 qr_checkin_service = (
     QrCheckinService(booking_repository=booking_repository, scheduling_repository=scheduling_repository)
     if booking_repository and scheduling_repository
@@ -86,6 +88,7 @@ channel_delivery = ChannelDelivery(
     logger=LOGGER,
     log_event_fn=log_event,
     extract_chat_id_fn=extract_chat_id,
+    channel_account_lookup_fn=lambda account_id: _lookup_channel_account_credentials(account_id),
 )
 # Use striped locks (fixed-size pool) to avoid unbounded per-user lock growth.
 _user_lock_stripes_count = max(64, int(os.getenv("USER_LOCK_STRIPES", "4096")))
@@ -103,10 +106,11 @@ _overflow_turn_map: dict[str, int] = {}
 _overflow_turn_map_lock = Lock()
 _user_bot_identity: Dict[str, str] = {}
 _user_bot_identity_lock = Lock()
+_user_route_context: Dict[str, dict] = {}
+_user_route_context_lock = Lock()
 # Maximum number of per-user entries kept in the identity/generation dicts.
 # Protects against unbounded memory growth with many unique users.
 _PER_USER_DICT_MAX = max(5000, int(os.getenv("PER_USER_DICT_MAX", "20000")))
-_qr_page_lookup_timeout_seconds = max(0.2, float(os.getenv("QR_PAGE_LOOKUP_TIMEOUT_SECONDS", "2.0")))
 
 
 def _evict_dict_if_needed(d: dict, lock: Lock) -> None:
@@ -164,6 +168,65 @@ def _get_user_bot_identity(user_id: str) -> str:
     with _user_bot_identity_lock:
         return str(_user_bot_identity.get(uid) or "")
 
+
+def _set_user_route_context(user_id: str, context: dict) -> None:
+    uid = (user_id or "").strip()
+    if not uid:
+        return
+    with _user_route_context_lock:
+        if context:
+            _user_route_context[uid] = dict(context)
+        else:
+            _user_route_context.pop(uid, None)
+    _evict_dict_if_needed(_user_route_context, _user_route_context_lock)
+
+
+def _get_user_route_context(user_id: str) -> dict:
+    uid = (user_id or "").strip()
+    if not uid:
+        return {}
+    with _user_route_context_lock:
+        return dict(_user_route_context.get(uid) or {})
+
+
+def _lookup_channel_account_credentials(channel_account_id: int) -> dict:
+    if not channel_account_repository:
+        return {}
+    try:
+        account = channel_account_repository.get_account_by_id(int(channel_account_id))
+        if not account:
+            return {}
+        creds = account.credentials()
+        if not isinstance(creds, dict):
+            creds = {}
+        result = dict(creds)
+        result["_provider"] = str(account.provider or "").strip().lower()
+        result["_channel"] = str(account.channel or "").strip().lower()
+        result["provider"] = result.get("provider") or result["_provider"]
+        result["sender_identity"] = str(account.sender_identity or "").strip()
+        if account.provider == "telegram":
+            token = str(result.get("telegram_bot_token") or "").strip()
+            if token:
+                result["telegram_bot_token"] = token
+        return result
+    except Exception:
+        return {}
+
+
+def _resolve_channel_account_id_for_doctor(channel: str, doctor_id: int) -> Optional[int]:
+    if not channel_account_repository:
+        return None
+    try:
+        account = channel_account_repository.resolve_account_for_doctor(
+            channel=(channel or "").strip().lower(),
+            doctor_id=int(doctor_id),
+        )
+        if not account:
+            return None
+        return int(account.channel_account_id)
+    except Exception:
+        return None
+
 _base_turn_processor = TurnQueueProcessor(
     worker_count=max(1, settings.queue_worker_count),
     max_queue_size=max(1, settings.queue_max_size),
@@ -213,6 +276,7 @@ automation_scheduler = AutomationScheduler(
     doctor_reminder_lead_minutes=settings.doctor_reminder_lead_minutes,
     doctor_reminder_window_seconds=settings.doctor_reminder_window_seconds,
     doctor_reminder_lead_minutes_list=_doctor_reminder_lead_minutes_list,
+    resolve_channel_account_id_fn=lambda channel, doctor_id: _resolve_channel_account_id_for_doctor(channel, doctor_id),
 )
 automation_scheduler._notification_bridge = KafkaNotificationBridge(
     settings=settings,
@@ -358,562 +422,12 @@ async def health_queue() -> dict:
     }
 
 
-def _qr_page_html(
-    *,
-    doctor_id: int,
-    clinic_id: int,
-    doctor_name: str,
-    clinic_name: str,
-    result_message: str | None = None,
-    result_status: str | None = None,
-    patient_name: str = "",
-    phone_number: str = "",
-    language: str = "en",
-) -> str:
-    doctor_name_safe = html_escape.escape(doctor_name or "Doctor")
-    clinic_name_safe = html_escape.escape(clinic_name or "Clinic")
-    patient_name_safe = html_escape.escape(patient_name or "")
-    phone_number_safe = html_escape.escape(phone_number or "")
-    result_message_safe = html_escape.escape(result_message or "")
-    lang = language if language in {"en", "hi", "hinglish"} else "en"
-    result_class = ""
-    if result_status == "booked":
-        result_class = " ok"
-    elif result_status in {"overflow", "active_booking"}:
-        result_class = " warn"
-    elif result_status:
-        result_class = " err"
-    qr_base_url = (os.getenv("QR_BASE_URL", "") or "").strip().rstrip("/")
-    return f"""<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Clinic QR Check-in</title>
-  <style>
-    :root {{
-      --bg: linear-gradient(140deg, #f6f7f2 0%, #e5efe0 60%, #d7e7dc 100%);
-      --card: #ffffff;
-      --ink: #1d2a23;
-      --muted: #5b6e62;
-      --accent: #0f766e;
-      --accent-soft: #d3f2ee;
-      --ok: #0a7a4f;
-      --warn: #a85810;
-      --danger: #9f2d2d;
-    }}
-    * {{ box-sizing: border-box; }}
-    body {{
-      margin: 0;
-      font-family: "Segoe UI", Tahoma, sans-serif;
-      color: var(--ink);
-      background: var(--bg);
-      min-height: 100vh;
-      display: grid;
-      place-items: center;
-      padding: 18px;
-    }}
-    .card {{
-      width: min(760px, 100%);
-      background: var(--card);
-      border-radius: 20px;
-      box-shadow: 0 20px 50px rgba(8, 38, 34, 0.14);
-      overflow: hidden;
-      border: 1px solid #e4efe8;
-    }}
-    .hero {{
-      padding: 28px 24px 12px 24px;
-      background:
-        radial-gradient(circle at 85% 15%, #c5f3ea 0, rgba(197,243,234,0) 46%),
-        radial-gradient(circle at 20% 0%, #ebf9f4 0, rgba(235,249,244,0) 52%);
-    }}
-    .kicker {{
-      display: inline-block;
-      background: var(--accent-soft);
-      color: #0d645d;
-      border-radius: 999px;
-      padding: 6px 12px;
-      font-size: 12px;
-      font-weight: 600;
-      letter-spacing: 0.04em;
-      text-transform: uppercase;
-    }}
-    h1 {{
-      margin: 12px 0 8px 0;
-      font-size: 28px;
-      line-height: 1.2;
-    }}
-    .subtitle {{
-      margin: 0;
-      color: var(--muted);
-      font-size: 15px;
-    }}
-    .form-wrap {{
-      padding: 20px 24px 24px 24px;
-      display: grid;
-      gap: 14px;
-    }}
-    label {{
-      display: grid;
-      gap: 6px;
-      font-weight: 600;
-      font-size: 14px;
-    }}
-    select, input {{
-      width: 100%;
-      border: 1px solid #ceded5;
-      border-radius: 12px;
-      padding: 12px 12px;
-      font-size: 15px;
-      outline: none;
-      transition: border-color .2s, box-shadow .2s;
-    }}
-    select:focus, input:focus {{
-      border-color: var(--accent);
-      box-shadow: 0 0 0 3px rgba(15,118,110,0.13);
-    }}
-    .grid {{
-      display: grid;
-      gap: 12px;
-    }}
-    @media (min-width: 640px) {{
-      .grid {{ grid-template-columns: 1fr 1fr; }}
-    }}
-    button {{
-      margin-top: 4px;
-      border: 0;
-      border-radius: 12px;
-      padding: 12px 16px;
-      color: white;
-      background: linear-gradient(135deg, #0f766e, #0b5a53);
-      font-size: 15px;
-      font-weight: 700;
-      cursor: pointer;
-    }}
-    button:disabled {{
-      opacity: .7;
-      cursor: not-allowed;
-    }}
-    .result {{
-      border: 1px solid #dce9e2;
-      background: #f8fcfa;
-      border-radius: 12px;
-      padding: 12px;
-      min-height: 50px;
-      font-size: 14px;
-      white-space: pre-wrap;
-    }}
-    .ok {{ color: var(--ok); }}
-    .warn {{ color: var(--warn); }}
-    .err {{ color: var(--danger); }}
-    .modal-backdrop {{
-      position: fixed;
-      inset: 0;
-      background: rgba(15, 23, 42, 0.48);
-      display: none;
-      align-items: center;
-      justify-content: center;
-      padding: 20px;
-      z-index: 1000;
-    }}
-    .modal-backdrop.open {{
-      display: flex;
-    }}
-    .modal {{
-      width: min(100%, 420px);
-      background: #ffffff;
-      border-radius: 20px;
-      box-shadow: 0 24px 60px rgba(15, 23, 42, 0.24);
-      overflow: hidden;
-      border: 1px solid #dce9e2;
-    }}
-    .modal-head {{
-      padding: 20px 22px 10px 22px;
-      background: linear-gradient(180deg, #effaf6 0%, #ffffff 100%);
-    }}
-    .modal-title {{
-      margin: 0;
-      font-size: 22px;
-      line-height: 1.2;
-    }}
-    .modal-message {{
-      margin: 8px 0 0 0;
-      color: var(--text);
-      font-size: 28px;
-      line-height: 1.35;
-      font-weight: 800;
-    }}
-    .modal-actions {{
-      padding: 22px;
-    }}
-    .modal-actions button {{
-      width: 100%;
-      margin-top: 0;
-    }}
-  </style>
-</head>
-<body>
-  <section class="card">
-    <div class="hero">
-      <span class="kicker" id="kicker">Book Your Appointment</span>
-      <h1 id="title">Welcome to Dr. {doctor_name_safe} clinic</h1>
-      <p class="subtitle" id="subtitle">Clinic: {clinic_name_safe}</p>
-    </div>
-    <form class="form-wrap" id="checkinForm" method="post" action="/qr/checkin/submit?doctor_id={doctor_id}&clinic_id={clinic_id}">
-      <label>
-        <span id="langLabel">Select language / भाषा चुनें</span>
-        <select id="language" name="language">
-          <option value="en"{" selected" if lang == "en" else ""}>English</option>
-          <option value="hi"{" selected" if lang == "hi" else ""}>हिंदी</option>
-          <option value="hinglish"{" selected" if lang == "hinglish" else ""}>Hinglish</option>
-        </select>
-      </label>
-      <div class="grid">
-        <label>
-          <span id="nameLabel">Full Name</span>
-          <input id="patientName" name="patient_name" maxlength="120" value="{patient_name_safe}" required />
-        </label>
-        <label>
-          <span id="phoneLabel">Phone Number</span>
-          <input id="phoneNumber" name="phone_number" maxlength="20" value="{phone_number_safe}" required />
-        </label>
-      </div>
-      <button id="submitBtn" type="submit">Submit</button>
-      <div id="result" class="result{result_class}">{result_message_safe}</div>
-      <input type="hidden" id="doctorId" value="{doctor_id}" />
-      <input type="hidden" id="clinicId" value="{clinic_id}" />
-    </form>
-  </section>
-  <div id="confirmModal" class="modal-backdrop" aria-hidden="true">
-    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
-      <div class="modal-head">
-        <h2 id="modalTitle" class="modal-title">Appointment Approved</h2>
-        <p id="modalMessage" class="modal-message"></p>
-      </div>
-      <div class="modal-actions">
-        <button id="modalOkBtn" type="button">OK</button>
-      </div>
-    </div>
-  </div>
-
-  <script>
-    const t = {{
-      en: {{
-        kicker: "Book Your Appointment",
-        title: "Welcome to Dr. {doctor_name_safe} clinic",
-        subtitle: "Clinic: {clinic_name_safe}",
-        langLabel: "Select language / भाषा चुनें",
-        nameLabel: "Full Name",
-        phoneLabel: "Phone Number",
-        submit: "Submit",
-        submitting: "Submitting...",
-        missingIds: "Error: Doctor or clinic ID missing.",
-        serverError: "Server error. Please try again.",
-        requestFailed: "Request failed.",
-        unavailable: "Unable to submit right now. Please try again.",
-        popupTitle: "Appointment Approved",
-        popupMessage: "Appointment confirmed.",
-        popupToken: "Token ID",
-        popupOk: "OK",
-      }},
-      hi: {{
-        kicker: "अपनी अपॉइंटमेंट बुक करें",
-        title: "Dr. {doctor_name_safe} क्लिनिक में आपका स्वागत है",
-        subtitle: "क्लिनिक: {clinic_name_safe}",
-        langLabel: "भाषा चुनें",
-        nameLabel: "पूरा नाम",
-        phoneLabel: "फोन नंबर",
-        submit: "जमा करें",
-        submitting: "जमा किया जा रहा है...",
-        missingIds: "त्रुटि: डॉक्टर या क्लिनिक आईडी उपलब्ध नहीं है।",
-        serverError: "सर्वर त्रुटि। कृपया फिर से प्रयास करें।",
-        requestFailed: "अनुरोध विफल रहा।",
-        unavailable: "अभी सबमिट नहीं हो सका। कृपया फिर से प्रयास करें।",
-        popupTitle: "अपॉइंटमेंट स्वीकृत",
-        popupMessage: "अपॉइंटमेंट कन्फर्म हो गई।",
-        popupToken: "टोकन आईडी",
-        popupOk: "ठीक है",
-      }},
-      hinglish: {{
-        kicker: "Apni Appointment Book Kariye",
-        title: "Dr. {doctor_name_safe} clinic mein aapka swagat hai",
-        subtitle: "Clinic: {clinic_name_safe}",
-        langLabel: "Language select kariye",
-        nameLabel: "Full Name",
-        phoneLabel: "Phone Number",
-        submit: "Submit kariye",
-        submitting: "Submit ho raha hai...",
-        missingIds: "Error: Doctor ya clinic ID missing hai.",
-        serverError: "Server error. Please phir se try kariye.",
-        requestFailed: "Request fail ho gaya.",
-        unavailable: "Abhi submit nahi ho saka. Please phir se try kariye.",
-        popupTitle: "Appointment Approved",
-        popupMessage: "Appointment confirm ho gayi.",
-        popupToken: "Token ID",
-        popupOk: "OK",
-      }},
-    }};
-
-    function getText(lang) {{
-      return t[lang] || t.en;
-    }}
-
-    function applyLanguage(lang) {{
-      const d = getText(lang);
-      document.getElementById("kicker").textContent = d.kicker;
-      document.getElementById("title").textContent = d.title;
-      document.getElementById("subtitle").textContent = d.subtitle;
-      document.getElementById("langLabel").textContent = d.langLabel;
-      document.getElementById("nameLabel").textContent = d.nameLabel;
-      document.getElementById("phoneLabel").textContent = d.phoneLabel;
-      document.getElementById("submitBtn").textContent = d.submit;
-      document.getElementById("modalTitle").textContent = d.popupTitle;
-      document.getElementById("modalMessage").textContent = d.popupMessage;
-      document.getElementById("modalOkBtn").textContent = d.popupOk;
-    }}
-
-    function closeConfirmationPopup() {{
-      const modal = document.getElementById("confirmModal");
-      modal.classList.remove("open");
-      modal.setAttribute("aria-hidden", "true");
-    }}
-
-    function showConfirmationPopup(data, payload) {{
-      const d = getText(payload.language);
-      const modal = document.getElementById("confirmModal");
-      document.getElementById("modalTitle").textContent = d.popupTitle;
-      const safeMessage = String(data.message || d.popupMessage)
-        .replace(/&/g, "&amp;")
-        .replace(/</g, "&lt;")
-        .replace(/>/g, "&gt;")
-        .replace(/(Token ID:\s*\d+\.?)/gi, "<strong>$1</strong>");
-      document.getElementById("modalMessage").innerHTML = safeMessage;
-      modal.classList.add("open");
-      modal.setAttribute("aria-hidden", "false");
-    }}
-
-    document.getElementById("language").addEventListener("change", (e) => applyLanguage(e.target.value));
-    document.getElementById("modalOkBtn").addEventListener("click", closeConfirmationPopup);
-    document.getElementById("confirmModal").addEventListener("click", (e) => {{
-      if (e.target.id === "confirmModal") closeConfirmationPopup();
-    }});
-    applyLanguage(document.getElementById("language").value || "en");
-
-    const checkinForm = document.getElementById("checkinForm");
-    checkinForm.addEventListener("submit", async (e) => {{
-      e.preventDefault();
-      e.stopPropagation();
-      const submitUrl = "/qr/checkin/submit";
-      const result = document.getElementById("result");
-      const btn = document.getElementById("submitBtn");
-      const selectedLang = document.getElementById("language").value || "en";
-      const d = getText(selectedLang);
-      btn.disabled = true;
-      result.className = "result";
-      result.textContent = d.submitting;
-      try {{
-        const payload = {{
-          doctor_id: Number(document.getElementById("doctorId").value),
-          clinic_id: Number(document.getElementById("clinicId").value),
-          patient_name: document.getElementById("patientName").value,
-          phone_number: document.getElementById("phoneNumber").value,
-          language: document.getElementById("language").value,
-        }};
-        if (!payload.doctor_id || !payload.clinic_id) {{
-          result.classList.add("err");
-          result.textContent = d.missingIds;
-          btn.disabled = false;
-          return;
-        }}
-        const resp = await fetch(submitUrl, {{
-          method: "POST",
-          headers: {{ "Content-Type": "application/json" }},
-          body: JSON.stringify(payload),
-        }});
-        let data;
-        try {{
-          data = await resp.json();
-        }} catch {{
-          result.classList.add("err");
-          result.textContent = d.serverError;
-          btn.disabled = false;
-          return;
-        }}
-        const renderResultMessage = (message) => {{
-          const safe = String(message || "Done.")
-            .replace(/&/g, "&amp;")
-            .replace(/</g, "&lt;")
-            .replace(/>/g, "&gt;");
-          const withBold = safe.replace(
-            /(Token ID:\s*\d+\.?)/gi,
-            "<strong>$1</strong>"
-          );
-          result.innerHTML = withBold.replace(/\\n/g, "<br>");
-        }};
-        if (!resp.ok) {{
-          result.classList.add("err");
-          result.textContent = data.detail || data.message || d.requestFailed;
-        }} else {{
-          const status = data.status || "";
-          if (status === "booked") result.classList.add("ok");
-          else if (status === "overflow" || status === "active_booking") result.classList.add("warn");
-          else result.classList.add("err");
-          renderResultMessage(data.message || "Done.");
-          if (status === "booked" || status === "active_booking") {{
-            showConfirmationPopup(data, payload);
-          }}
-        }}
-      }} catch (_err) {{
-        result.classList.add("err");
-        result.textContent = d.unavailable;
-      }} finally {{
-        btn.disabled = false;
-      }}
-    }}, true);
-  </script>
-</body>
-</html>"""
-
-
-@app.get("/qr/checkin", response_class=HTMLResponse)
-async def qr_checkin_page(doctor_id: int | None = None, clinic_id: int | None = None):
-    if not qr_checkin_service:
-        return HTMLResponse("<h3>QR check-in is not configured.</h3>", status_code=503)
-    if not doctor_id or not clinic_id:
-        return HTMLResponse(
-            """<h3>QR check-in link is missing required parameters.</h3>
-<p>Please scan the correct QR code or open a URL like:</p>
-<p><code>/qr/checkin?doctor_id=1&amp;clinic_id=5</code></p>""",
-            status_code=400,
-        )
-    doctor_name, clinic_name = "Doctor", "Clinic"
-    try:
-        doctor_name, clinic_name = await asyncio.wait_for(
-            run_in_threadpool(
-                qr_checkin_service.resolve_doctor_and_clinic,
-                doctor_id=doctor_id,
-                clinic_id=clinic_id,
-            ),
-            timeout=_qr_page_lookup_timeout_seconds,
-        )
-    except Exception as exc:
-        LOGGER.warning(
-            "QR page name lookup fallback doctor_id=%s clinic_id=%s error=%s",
-            doctor_id,
-            clinic_id,
-            exc,
-        )
-    return HTMLResponse(
-        _qr_page_html(
-            doctor_id=doctor_id,
-            clinic_id=clinic_id,
-            doctor_name=doctor_name,
-            clinic_name=clinic_name,
-        )
-    )
-
-
-@app.post("/qr/checkin/submit")
-async def qr_checkin_submit(request: Request):
-    if not qr_checkin_service:
-        return JSONResponse({"detail": "QR check-in is not configured."}, status_code=503)
-    payload: dict[str, object] = {}
-    try:
-        payload = await request.json()
-    except Exception:
-        try:
-            form = await request.form()
-            payload = dict(form)
-        except Exception:
-            return JSONResponse({"detail": "Invalid QR check-in request payload."}, status_code=400)
-
-    patient_name = str(payload.get("patient_name") or "").strip()
-    phone_number = str(payload.get("phone_number") or "").strip()
-    qr_chat_id = f"qr_{''.join(ch for ch in phone_number if ch.isdigit()) or 'unknown'}"
-    log_event(
-        qr_chat_id,
-        "QR_SUBMIT_RECEIVED",
-        doctor_id=payload.get("doctor_id"),
-        clinic_id=payload.get("clinic_id"),
-        patient_name=patient_name[:80],
-        phone=phone_number,
-    )
-    try:
-        doctor_raw = payload.get("doctor_id") or request.query_params.get("doctor_id")
-        clinic_raw = payload.get("clinic_id") or request.query_params.get("clinic_id")
-        doctor_id = int(doctor_raw)
-        clinic_id = int(clinic_raw)
-    except Exception:
-        log_event(
-            qr_chat_id,
-            "QR_SUBMIT_REJECTED",
-            reason="invalid_doctor_or_clinic_id",
-            doctor_id=payload.get("doctor_id"),
-            clinic_id=payload.get("clinic_id"),
-        )
-        return JSONResponse({"detail": "Invalid doctor_id/clinic_id."}, status_code=400)
-
-    result = await run_in_threadpool(
-        qr_checkin_service.process_checkin,
-        doctor_id=doctor_id,
-        clinic_id=clinic_id,
-        patient_name=patient_name,
-        phone=phone_number,
-        language=str(payload.get("language") or "en"),
-    )
-    status_code = 200 if result.status in {"booked", "overflow", "active_booking"} else 400
-    event_name = "QR_SUBMIT_SUCCEEDED" if status_code == 200 else "QR_SUBMIT_FAILED"
-    log_event(
-        qr_chat_id,
-        event_name,
-        status=result.status,
-        message=result.message[:120],
-        booking_id=result.booking_id,
-        appointment_date=result.appointment_date,
-        appointment_time=result.appointment_time,
-        clinic_name=result.clinic_name,
-        doctor_name=result.doctor_name,
-    )
-    if status_code != 200:
-        LOGGER.warning(
-            "QR submit failed doctor_id=%s clinic_id=%s phone=%s status=%s message=%s",
-            doctor_id,
-            clinic_id,
-            phone_number,
-            result.status,
-            result.message,
-        )
-    accept_header = (request.headers.get("accept") or "").lower()
-    if "text/html" in accept_header and "application/json" not in accept_header:
-        return HTMLResponse(
-            _qr_page_html(
-                doctor_id=doctor_id,
-                clinic_id=clinic_id,
-                doctor_name=result.doctor_name or "Doctor",
-                clinic_name=result.clinic_name or "Clinic",
-                result_message=result.message,
-                result_status=result.status,
-                patient_name=patient_name,
-                phone_number=phone_number,
-                language=str(payload.get("language") or "en"),
-            ),
-            status_code=status_code,
-        )
-    return JSONResponse(
-        {
-            "status": result.status,
-            "message": result.message,
-            "detail": result.message,
-            "booking_id": result.booking_id,
-            "appointment_date": result.appointment_date,
-            "appointment_time": result.appointment_time,
-            "queue_position": result.queue_position,
-            "estimated_time": result.estimated_time,
-            "clinic_name": result.clinic_name,
-            "doctor_name": result.doctor_name,
-        },
-        status_code=status_code,
-    )
+register_qr_routes(
+    app,
+    qr_checkin_service=qr_checkin_service,
+    logger=LOGGER,
+    log_event_fn=log_event,
+)
 
 
 register_webhook_routes(
@@ -926,9 +440,12 @@ register_webhook_routes(
     twilio_client=lambda: twilio_client,
     turn_processor=lambda: turn_processor,
     booking_repository=lambda: booking_repository,
+    channel_account_repository=lambda: channel_account_repository,
     user_processing_guard=lambda: _user_processing_guard,
     user_turn_buffer=lambda: _user_turn_buffer,
+    route_cache_client=lambda: _redis_client,
     set_user_bot_identity=_set_user_bot_identity,
+    set_user_route_context=_set_user_route_context,
     submit_next_buffered_turn=lambda from_number: _submit_next_buffered_turn(from_number),
     get_telegram_bot_username=lambda: _telegram_bot_username_runtime,
 )
@@ -945,6 +462,25 @@ def _process_turn(from_number: str, body: str) -> Tuple[str, str, object]:
         _t_turn = time.perf_counter()
         fsm = session_manager.get_or_create(from_number)
         _pre_state = fsm.state
+        route_ctx = _get_user_route_context(from_number)
+        if route_ctx:
+            incoming_channel_account_id = (
+                int(route_ctx["channel_account_id"]) if route_ctx.get("channel_account_id") is not None else None
+            )
+            incoming_doctor_id = int(route_ctx["doctor_id"]) if route_ctx.get("doctor_id") is not None else None
+            incoming_admin_id = int(route_ctx["admin_id"]) if route_ctx.get("admin_id") is not None else None
+            incoming_channel_provider = str(route_ctx.get("channel_provider") or "").strip()
+
+            # Lock routing to first resolved account/doctor for the active session.
+            # Prevents accidental reassignment during an in-flight conversation.
+            if fsm.channel_account_id is None and incoming_channel_account_id is not None:
+                fsm.channel_account_id = incoming_channel_account_id
+            if fsm.doctor_id is None and incoming_doctor_id is not None:
+                fsm.doctor_id = incoming_doctor_id
+            if fsm.admin_id is None and incoming_admin_id is not None:
+                fsm.admin_id = incoming_admin_id
+            if not fsm.channel_provider and incoming_channel_provider:
+                fsm.channel_provider = incoming_channel_provider
         identity = _get_user_bot_identity(from_number)
         if identity:
             fsm.bot_whatsapp_number = identity

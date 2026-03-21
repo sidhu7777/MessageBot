@@ -21,6 +21,8 @@ class NotificationEvent:
     patient_telegram_chat_id: str
     meta_json: str
     admin_id: Optional[int]
+    doctor_id: Optional[int] = None
+    channel_account_id: Optional[int] = None
     attempt_count: int = 0
 
 

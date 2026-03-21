@@ -769,3 +769,89 @@ def get_message(response_language: str, key: str, **kwargs: object) -> str:
     if key in {"db_save_ok", "reschedule_confirmed"}:
         message = _emphasize_patient_id_line(message)
     return message
+
+
+_QR_MESSAGES = {
+    "en": {
+        "qr_not_configured": "<h3>QR check-in is not configured.</h3>",
+        "qr_not_configured_plain": "QR check-in is not configured.",
+        "qr_missing_params": (
+            "<h3>QR check-in link is missing required parameters.</h3>"
+            "<p>Please scan the correct QR code or open a URL like:</p>"
+            "<p><code>/qr/checkin?doctor_id=1&amp;clinic_id=5</code></p>"
+        ),
+        "qr_invalid_payload": "Invalid QR check-in request payload.",
+        "qr_invalid_ids": "Invalid doctor_id/clinic_id.",
+        "qr_db_not_configured": "Booking database is not configured.",
+        "qr_enter_patient_name": "Please enter patient name.",
+        "qr_enter_valid_phone": "Please enter a valid phone number.",
+        "qr_doctor_admin_missing": "Doctor/admin mapping is not configured.",
+        "qr_active_booking": "You already have an active booking (#{booking_number}){slot_suffix}",
+        "qr_confirmed_token": "Appointment confirmed.\nToken ID: {token_id}.",
+        "qr_estimated_time": "Estimated Time: {estimated_time}.",
+        "qr_unable_confirm": "Unable to confirm QR booking: {error}",
+    },
+    "hi": {
+        "qr_not_configured": "<h3>QR चेक-इन कॉन्फ़िगर नहीं है।</h3>",
+        "qr_not_configured_plain": "QR चेक-इन कॉन्फ़िगर नहीं है।",
+        "qr_missing_params": (
+            "<h3>QR चेक-इन लिंक में ज़रूरी पैरामीटर नहीं हैं।</h3>"
+            "<p>कृपया सही QR कोड स्कैन करें या यह URL खोलें:</p>"
+            "<p><code>/qr/checkin?doctor_id=1&amp;clinic_id=5</code></p>"
+        ),
+        "qr_invalid_payload": "अमान्य QR चेक-इन रिक्वेस्ट पेलोड।",
+        "qr_invalid_ids": "अमान्य doctor_id/clinic_id।",
+        "qr_db_not_configured": "बुकिंग डेटाबेस कॉन्फ़िगर नहीं है।",
+        "qr_enter_patient_name": "कृपया मरीज का नाम दर्ज करें।",
+        "qr_enter_valid_phone": "कृपया वैध फोन नंबर दर्ज करें।",
+        "qr_doctor_admin_missing": "डॉक्टर/एडमिन मैपिंग कॉन्फ़िगर नहीं है।",
+        "qr_active_booking": "आपकी एक सक्रिय बुकिंग पहले से है (#{booking_number}){slot_suffix}",
+        "qr_confirmed_token": "अपॉइंटमेंट कन्फर्म हो गई।\nToken ID: {token_id}.",
+        "qr_estimated_time": "अनुमानित समय: {estimated_time}.",
+        "qr_unable_confirm": "QR बुकिंग कन्फर्म नहीं हो पाई: {error}",
+    },
+    "hinglish": {
+        "qr_not_configured": "<h3>QR check-in configure nahi hai.</h3>",
+        "qr_not_configured_plain": "QR check-in configure nahi hai.",
+        "qr_missing_params": (
+            "<h3>QR check-in link mein required parameters missing hain.</h3>"
+            "<p>Please sahi QR code scan kariye ya yeh URL open kariye:</p>"
+            "<p><code>/qr/checkin?doctor_id=1&amp;clinic_id=5</code></p>"
+        ),
+        "qr_invalid_payload": "Invalid QR check-in request payload.",
+        "qr_invalid_ids": "Invalid doctor_id/clinic_id.",
+        "qr_db_not_configured": "Booking database configure nahi hai.",
+        "qr_enter_patient_name": "Please patient name enter kariye.",
+        "qr_enter_valid_phone": "Please valid phone number enter kariye.",
+        "qr_doctor_admin_missing": "Doctor/admin mapping configure nahi hai.",
+        "qr_active_booking": "Aapki ek active booking pehle se hai (#{booking_number}){slot_suffix}",
+        "qr_confirmed_token": "Appointment confirm ho gayi.\nToken ID: {token_id}.",
+        "qr_estimated_time": "Estimated Time: {estimated_time}.",
+        "qr_unable_confirm": "QR booking confirm nahi ho payi: {error}",
+    },
+}
+
+
+def get_qr_message(response_language: str, key: str, **kwargs: object) -> str:
+    lang = str(response_language or "en").lower()
+    if lang not in _QR_MESSAGES:
+        lang = "en"
+    source = _QR_MESSAGES[lang]
+    template = source.get(key, _QR_MESSAGES["en"].get(key, key))
+
+    if key == "qr_active_booking":
+        slot_date = str(kwargs.get("slot_date") or "").strip()
+        slot_time = str(kwargs.get("slot_time") or "").strip()
+        if slot_date or slot_time:
+            if lang == "hi":
+                slot_suffix = f" ({slot_date} {slot_time}) पर।".replace("  ", " ").replace("( ", "(").replace(" )", ")")
+            elif lang == "hinglish":
+                slot_suffix = f" on {slot_date} {slot_time}.".replace("  ", " ").replace(" .", ".")
+            else:
+                slot_suffix = f" on {slot_date} {slot_time}.".replace("  ", " ").replace(" .", ".")
+        else:
+            slot_suffix = "."
+        kwargs = dict(kwargs)
+        kwargs["slot_suffix"] = slot_suffix
+
+    return template.format(**kwargs)

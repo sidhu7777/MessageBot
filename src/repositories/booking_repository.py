@@ -290,6 +290,8 @@ class BookingRepository:
         status: str = "PENDING",
         error_text: str = "",
         admin_id: Optional[int] = None,
+        doctor_id: Optional[int] = None,
+        channel_account_id: Optional[int] = None,
         meta_json: str = "",
     ) -> None:
         _log_notification_event(
@@ -301,6 +303,8 @@ class BookingRepository:
             status=status,
             error_text=error_text,
             admin_id=admin_id,
+            doctor_id=doctor_id,
+            channel_account_id=channel_account_id,
             meta_json=meta_json,
         )
 
@@ -313,6 +317,8 @@ class BookingRepository:
         status: str = "PENDING",
         error_text: str = "",
         admin_id: Optional[int] = None,
+        doctor_id: Optional[int] = None,
+        channel_account_id: Optional[int] = None,
         meta_json: str = "",
     ) -> None:
         self.log_notification_event(
@@ -323,6 +329,8 @@ class BookingRepository:
             status=status,
             error_text=error_text,
             admin_id=admin_id,
+            doctor_id=doctor_id,
+            channel_account_id=channel_account_id,
             meta_json=meta_json,
         )
 
@@ -346,6 +354,9 @@ class BookingRepository:
         status: str,
         error_text: str = "",
         provider_message_sid: str = "",
+        channel_account_id: Optional[int] = None,
+        doctor_id: Optional[int] = None,
+        admin_id: Optional[int] = None,
     ) -> None:
         _mark_notification_event_status(
             self,
@@ -353,6 +364,9 @@ class BookingRepository:
             status=status,
             error_text=error_text,
             provider_message_sid=provider_message_sid,
+            channel_account_id=channel_account_id,
+            doctor_id=doctor_id,
+            admin_id=admin_id,
         )
 
     def claim_pending_notification_events(
@@ -398,6 +412,9 @@ class BookingRepository:
         error_code: str = "",
         error_message: str = "",
         payload_json: str = "",
+        channel_account_id: Optional[int] = None,
+        doctor_id: Optional[int] = None,
+        admin_id: Optional[int] = None,
     ) -> None:
         _upsert_delivery_status(
             self,
@@ -410,6 +427,9 @@ class BookingRepository:
             error_code=error_code,
             error_message=error_message,
             payload_json=payload_json,
+            channel_account_id=channel_account_id,
+            doctor_id=doctor_id,
+            admin_id=admin_id,
         )
 
     def notification_queue_stats(self) -> dict:

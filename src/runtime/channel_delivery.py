@@ -4,9 +4,11 @@ import re
 import os
 import time
 import uuid
-from typing import Any, Callable
+from typing import Any, Callable, Optional
 from urllib import error as urlerror
 from urllib import request as urlrequest
+
+from src.runtime.account_scope import parse_scoped_user_id
 
 
 class ChannelDelivery:
@@ -17,18 +19,110 @@ class ChannelDelivery:
         logger: Any,
         log_event_fn: Callable[..., None],
         extract_chat_id_fn: Callable[[str], str],
+        channel_account_lookup_fn: Optional[Callable[[int], dict]] = None,
     ) -> None:
         self.settings = settings
         self.twilio_client = twilio_client
         self.logger = logger
         self.log_event_fn = log_event_fn
         self.extract_chat_id_fn = extract_chat_id_fn
+        self.channel_account_lookup_fn = channel_account_lookup_fn
+
+    def _resolve_account(self, scoped_user_id: str) -> dict:
+        account_id, _ = parse_scoped_user_id(scoped_user_id)
+        if account_id is None or not self.channel_account_lookup_fn:
+            return {}
+        try:
+            account = self.channel_account_lookup_fn(account_id) or {}
+            if isinstance(account, dict):
+                return account
+        except Exception:
+            pass
+        return {}
+
+    @staticmethod
+    def _account_value(account: dict, *keys: str) -> str:
+        for key in keys:
+            value = account.get(key)
+            text = str(value or "").strip()
+            if text:
+                return text
+        return ""
+
+    def _provider_for_account(self, account: dict) -> str:
+        account_provider = self._account_value(account, "provider", "_provider").lower()
+        if account_provider in {"meta", "infobip", "twilio"}:
+            return account_provider
+        configured = (getattr(self.settings, "whatsapp_provider", "") or "").strip().lower()
+        if configured in {"meta", "infobip", "twilio"}:
+            return configured
+        # auto mode:
+        # prefer explicit account credentials when present, otherwise env credentials.
+        if self._has_meta_credentials(account):
+            return "meta"
+        if self._has_infobip_credentials(account):
+            return "infobip"
+        if self._has_twilio_credentials(account):
+            return "twilio"
+        if (getattr(self.settings, "whatsapp_api_token", "") or "").strip() and (
+            getattr(self.settings, "whatsapp_phone_number_id", "") or ""
+        ).strip():
+            return "meta"
+        if (getattr(self.settings, "infobip_api_key", "") or "").strip() and (
+            getattr(self.settings, "infobip_base_url", "") or ""
+        ).strip() and (getattr(self.settings, "infobip_whatsapp_number", "") or "").strip():
+            return "infobip"
+        return "twilio"
+
+    def _has_meta_credentials(self, account: dict) -> bool:
+        token = self._account_value(account, "whatsapp_api_token", "meta_access_token")
+        phone_number_id = self._account_value(account, "whatsapp_phone_number_id", "meta_phone_number_id")
+        return bool(token and phone_number_id)
+
+    def _has_infobip_credentials(self, account: dict) -> bool:
+        api_key = self._account_value(account, "infobip_api_key")
+        base_url = self._account_value(account, "infobip_base_url")
+        sender = self._account_value(account, "infobip_whatsapp_number", "infobip_sender", "whatsapp_from")
+        return bool(api_key and base_url and sender)
+
+    def _has_twilio_credentials(self, account: dict) -> bool:
+        account_sid = self._account_value(account, "twilio_account_sid")
+        auth_token = self._account_value(account, "twilio_auth_token")
+        return bool(account_sid and auth_token)
+
+    def _twilio_client_for_account(self, account: dict) -> Any:
+        account_sid = self._account_value(account, "twilio_account_sid")
+        auth_token = self._account_value(account, "twilio_auth_token")
+        if account_sid and auth_token:
+            try:
+                from twilio.rest import Client as TwilioClient
+
+                return TwilioClient(account_sid, auth_token)
+            except Exception:
+                self.logger.warning("Failed to create per-account Twilio client; falling back to global client.")
+        return self.twilio_client
+
+    def _twilio_from_number(self, account: dict) -> str:
+        return self._account_value(account, "twilio_whatsapp_from", "whatsapp_from") or str(
+            getattr(self.settings, "twilio_whatsapp_from", "") or ""
+        ).strip()
+
+    def _twilio_status_callback_url(self, account: dict) -> str:
+        return self._account_value(account, "twilio_status_callback_url") or str(
+            getattr(self.settings, "twilio_status_callback_url", "") or ""
+        ).strip()
+
+    @staticmethod
+    def _raw_destination(scoped_user_id: str) -> str:
+        _account_id, raw = parse_scoped_user_id(scoped_user_id)
+        return raw
 
     def send_channel_response(self, to_number: str, reply_text: str, fsm_state: str, fsm, inbound_sid: str = "") -> None:
         if not (reply_text or "").strip():
             self.logger.info("Reply suppressed for sid=%s to=%s (empty/silent response).", inbound_sid or "-", to_number)
             return
-        if (to_number or "").strip().lower().startswith("telegram:"):
+        raw_to = self._raw_destination(to_number)
+        if (raw_to or "").strip().lower().startswith("telegram:"):
             self.send_plain_channel_message(to_number=to_number, body=reply_text, inbound_sid=inbound_sid)
             return
         self.send_whatsapp_response(
@@ -40,8 +134,11 @@ class ChannelDelivery:
         )
 
     def send_whatsapp_response(self, to_number: str, reply_text: str, fsm_state: str, fsm, inbound_sid: str = "") -> None:
-        if self._use_infobip_whatsapp():
-            sid = self._send_infobip_whatsapp_text(to_number=to_number, body=reply_text)
+        account = self._resolve_account(to_number)
+        raw_to = self._raw_destination(to_number)
+        provider = self._provider_for_account(account)
+        if provider == "infobip":
+            sid = self._send_infobip_whatsapp_text(to_number=raw_to, body=reply_text, account=account)
             self.logger.info(
                 "Sent Infobip WhatsApp response sid=%s inbound_sid=%s state=%s",
                 sid,
@@ -49,8 +146,8 @@ class ChannelDelivery:
                 fsm_state,
             )
             return
-        if self._use_meta_whatsapp():
-            sid = self._send_meta_whatsapp_text(to_number=to_number, body=reply_text)
+        if provider == "meta":
+            sid = self._send_meta_whatsapp_text(to_number=raw_to, body=reply_text, account=account)
             self.logger.info(
                 "Sent Meta WhatsApp response sid=%s inbound_sid=%s state=%s",
                 sid,
@@ -58,7 +155,9 @@ class ChannelDelivery:
                 fsm_state,
             )
             return
-        if not self.twilio_client:
+        twilio_client = self._twilio_client_for_account(account)
+        twilio_from = self._twilio_from_number(account)
+        if not twilio_client or not twilio_from:
             return
 
         template_sid = self.template_for_state(fsm_state)
@@ -67,13 +166,17 @@ class ChannelDelivery:
         try:
             if template_sid:
                 kwargs = {
-                    "from_": self.settings.twilio_whatsapp_from,
-                    "to": to_number,
+                    "from_": twilio_from,
+                    "to": raw_to,
                     "content_sid": template_sid,
                 }
                 if content_variables:
                     kwargs["content_variables"] = json.dumps(content_variables, ensure_ascii=False)
-                sid = self.send_with_retries(kwargs)
+                sid = self.send_with_retries(
+                    kwargs,
+                    client=twilio_client,
+                    status_callback_url=self._twilio_status_callback_url(account),
+                )
                 self.logger.info(
                     "Sent template response sid=%s inbound_sid=%s state=%s template_sid=%s",
                     sid,
@@ -85,10 +188,12 @@ class ChannelDelivery:
 
             sid = self.send_with_retries(
                 {
-                    "from_": self.settings.twilio_whatsapp_from,
-                    "to": to_number,
+                    "from_": twilio_from,
+                    "to": raw_to,
                     "body": reply_text,
-                }
+                },
+                client=twilio_client,
+                status_callback_url=self._twilio_status_callback_url(account),
             )
             self.logger.info(
                 "Sent plain REST response sid=%s inbound_sid=%s state=%s",
@@ -101,7 +206,9 @@ class ChannelDelivery:
             raise
 
     def send_plain_channel_message(self, to_number: str, body: str, inbound_sid: str = "") -> str:
-        if (to_number or "").strip().lower().startswith("telegram:"):
+        account = self._resolve_account(to_number)
+        raw_to = self._raw_destination(to_number)
+        if (raw_to or "").strip().lower().startswith("telegram:"):
             t_send = time.perf_counter()
             self.send_telegram_message(to_number=to_number, body=body, inbound_sid=inbound_sid)
             send_ms = int((time.perf_counter() - t_send) * 1000)
@@ -110,26 +217,34 @@ class ChannelDelivery:
             except Exception:
                 pass
             return "telegram"
-        if self._use_infobip_whatsapp():
-            sid = self._send_infobip_whatsapp_text(to_number=to_number, body=body)
+        provider = self._provider_for_account(account)
+        if provider == "infobip":
+            sid = self._send_infobip_whatsapp_text(to_number=raw_to, body=body, account=account)
             self.logger.info("Sent Infobip safe processing message sid=%s inbound_sid=%s to=%s", sid, inbound_sid or "-", to_number)
             return sid
-        if self._use_meta_whatsapp():
-            sid = self._send_meta_whatsapp_text(to_number=to_number, body=body)
+        if provider == "meta":
+            sid = self._send_meta_whatsapp_text(to_number=raw_to, body=body, account=account)
             self.logger.info("Sent Meta safe processing message sid=%s inbound_sid=%s to=%s", sid, inbound_sid or "-", to_number)
             return sid
+        twilio_client = self._twilio_client_for_account(account)
+        twilio_from = self._twilio_from_number(account)
+        if not twilio_client or not twilio_from:
+            raise RuntimeError("Twilio client or sender number is not configured for this channel account.")
         sid = self.send_with_retries(
             {
-                "from_": self.settings.twilio_whatsapp_from,
-                "to": to_number,
+                "from_": twilio_from,
+                "to": raw_to,
                 "body": body,
-            }
+            },
+            client=twilio_client,
+            status_callback_url=self._twilio_status_callback_url(account),
         )
         self.logger.info("Sent safe processing message sid=%s inbound_sid=%s to=%s", sid, inbound_sid or "-", to_number)
         return sid
 
     def send_plain_channel_document(self, to_number: str, file_path: str, caption: str = "", inbound_sid: str = "") -> None:
-        if (to_number or "").strip().lower().startswith("telegram:"):
+        raw_to = self._raw_destination(to_number)
+        if (raw_to or "").strip().lower().startswith("telegram:"):
             self.send_telegram_document(
                 to_number=to_number,
                 file_path=file_path,
@@ -147,7 +262,11 @@ class ChannelDelivery:
         msg = f"{msg}\nReport file: {os.path.basename(file_path)}"
         self.send_plain_channel_message(to_number=to_number, body=msg, inbound_sid=inbound_sid)
 
-    def _use_meta_whatsapp(self) -> bool:
+    def _use_meta_whatsapp(self, account: Optional[dict] = None) -> bool:
+        account = account or {}
+        provider = self._provider_for_account(account)
+        if provider == "meta":
+            return True
         provider = (getattr(self.settings, "whatsapp_provider", "") or "").strip().lower()
         if provider == "meta":
             return True
@@ -160,7 +279,11 @@ class ChannelDelivery:
         # auto mode: prefer Meta when both required values are present
         return bool(token and phone_number_id)
 
-    def _use_infobip_whatsapp(self) -> bool:
+    def _use_infobip_whatsapp(self, account: Optional[dict] = None) -> bool:
+        account = account or {}
+        provider = self._provider_for_account(account)
+        if provider == "infobip":
+            return True
         provider = (getattr(self.settings, "whatsapp_provider", "") or "").strip().lower()
         if provider == "infobip":
             return True
@@ -172,17 +295,23 @@ class ChannelDelivery:
         # auto mode: allow Infobip when credentials are present.
         return bool(api_key and base_url and sender)
 
-    def _infobip_whatsapp_messages_url(self) -> str:
-        raw_base = (getattr(self.settings, "infobip_base_url", "") or "").strip().rstrip("/")
+    def _infobip_whatsapp_messages_url(self, account: Optional[dict] = None) -> str:
+        account = account or {}
+        raw_base = self._account_value(account, "infobip_base_url") or (getattr(self.settings, "infobip_base_url", "") or "").strip().rstrip("/")
         if not raw_base:
             raise RuntimeError("INFOBIP_BASE_URL is not configured.")
         if "://" not in raw_base:
             raw_base = f"https://{raw_base}"
         return f"{raw_base}/whatsapp/1/message/text"
 
-    def _meta_graph_messages_url(self) -> str:
-        version = (getattr(self.settings, "whatsapp_graph_api_version", "") or "v21.0").strip()
-        phone_number_id = (getattr(self.settings, "whatsapp_phone_number_id", "") or "").strip()
+    def _meta_graph_messages_url(self, account: Optional[dict] = None) -> str:
+        account = account or {}
+        version = self._account_value(account, "whatsapp_graph_api_version", "meta_graph_api_version") or (
+            getattr(self.settings, "whatsapp_graph_api_version", "") or "v21.0"
+        ).strip()
+        phone_number_id = self._account_value(account, "whatsapp_phone_number_id", "meta_phone_number_id") or (
+            getattr(self.settings, "whatsapp_phone_number_id", "") or ""
+        ).strip()
         return f"https://graph.facebook.com/{version}/{phone_number_id}/messages"
 
     @staticmethod
@@ -193,11 +322,16 @@ class ChannelDelivery:
         digits = re.sub(r"\D+", "", raw)
         return digits
 
-    def _send_meta_whatsapp_text(self, to_number: str, body: str) -> str:
-        token = (getattr(self.settings, "whatsapp_api_token", "") or "").strip()
+    def _send_meta_whatsapp_text(self, to_number: str, body: str, account: Optional[dict] = None) -> str:
+        account = account or {}
+        token = self._account_value(account, "whatsapp_api_token", "meta_access_token") or (
+            getattr(self.settings, "whatsapp_api_token", "") or ""
+        ).strip()
         if not token:
             raise RuntimeError("WHATSAPP_API_TOKEN/WHATSAPP_BOT_TOKEN is not configured.")
-        phone_number_id = (getattr(self.settings, "whatsapp_phone_number_id", "") or "").strip()
+        phone_number_id = self._account_value(account, "whatsapp_phone_number_id", "meta_phone_number_id") or (
+            getattr(self.settings, "whatsapp_phone_number_id", "") or ""
+        ).strip()
         if not phone_number_id:
             raise RuntimeError("WHATSAPP_PHONE_NUMBER_ID is not configured.")
         to_digits = self._normalize_meta_to_number(to_number)
@@ -211,7 +345,7 @@ class ChannelDelivery:
             "text": {"preview_url": False, "body": body},
         }
         req = urlrequest.Request(
-            url=self._meta_graph_messages_url(),
+            url=self._meta_graph_messages_url(account=account),
             data=json.dumps(payload).encode("utf-8"),
             headers={
                 "Content-Type": "application/json",
@@ -233,11 +367,16 @@ class ChannelDelivery:
                     return msg_id
         return "-"
 
-    def _send_infobip_whatsapp_text(self, to_number: str, body: str) -> str:
-        api_key = (getattr(self.settings, "infobip_api_key", "") or "").strip()
+    def _send_infobip_whatsapp_text(self, to_number: str, body: str, account: Optional[dict] = None) -> str:
+        account = account or {}
+        api_key = self._account_value(account, "infobip_api_key") or (getattr(self.settings, "infobip_api_key", "") or "").strip()
         if not api_key:
             raise RuntimeError("INFOBIP_API_KEY is not configured.")
-        sender = self._normalize_meta_to_number(getattr(self.settings, "infobip_whatsapp_number", "") or "")
+        sender = self._normalize_meta_to_number(
+            self._account_value(account, "infobip_whatsapp_number", "infobip_sender", "whatsapp_from")
+            or getattr(self.settings, "infobip_whatsapp_number", "")
+            or ""
+        )
         if not sender:
             raise RuntimeError("INFOBIP_WHATSAPP_NUMBER is not configured.")
         to_digits = self._normalize_meta_to_number(to_number)
@@ -249,7 +388,7 @@ class ChannelDelivery:
             "content": {"text": body},
         }
         req = urlrequest.Request(
-            url=self._infobip_whatsapp_messages_url(),
+            url=self._infobip_whatsapp_messages_url(account=account),
             data=json.dumps(payload).encode("utf-8"),
             headers={
                 "Content-Type": "application/json",
@@ -276,12 +415,14 @@ class ChannelDelivery:
         return "-"
 
     def send_telegram_message(self, to_number: str, body: str, inbound_sid: str = "") -> None:
-        if not self.settings.telegram_bot_token:
+        account = self._resolve_account(to_number)
+        token = str(account.get("telegram_bot_token") or self.settings.telegram_bot_token or "").strip()
+        if not token:
             raise RuntimeError("TELEGRAM_BOT_TOKEN is not configured.")
-        chat_id = self.telegram_chat_id_from_user(to_number)
+        chat_id = self.telegram_chat_id_from_user(self._raw_destination(to_number))
         if not chat_id:
             raise RuntimeError(f"Invalid Telegram destination: {to_number}")
-        url = f"https://api.telegram.org/bot{self.settings.telegram_bot_token}/sendMessage"
+        url = f"https://api.telegram.org/bot{token}/sendMessage"
         payload = json.dumps(
             {
                 "chat_id": chat_id,
@@ -316,6 +457,11 @@ class ChannelDelivery:
     def _format_telegram_text(body: str) -> str:
         escaped = html.escape(body or "")
         escaped = re.sub(
+            r"\*(Token ID:\s*[^*\n]+)\*",
+            lambda match: f"<b>{match.group(1)}</b>",
+            escaped,
+        )
+        escaped = re.sub(
             r"\*(Patient ID:\s*[^*\n]+)\*",
             lambda match: f"<b>{match.group(1)}</b>",
             escaped,
@@ -326,21 +472,23 @@ class ChannelDelivery:
             escaped,
         )
         return re.sub(
-            r"\*(Patient ID:|रोगी आईडी:)\*",
+            r"\*(Token ID:|Patient ID:|रोगी आईडी:)\*",
             lambda match: f"<b>{match.group(1)}</b>",
             escaped,
         )
 
     def send_telegram_document(self, to_number: str, file_path: str, caption: str = "", inbound_sid: str = "") -> None:
-        if not self.settings.telegram_bot_token:
+        account = self._resolve_account(to_number)
+        token = str(account.get("telegram_bot_token") or self.settings.telegram_bot_token or "").strip()
+        if not token:
             raise RuntimeError("TELEGRAM_BOT_TOKEN is not configured.")
-        chat_id = self.telegram_chat_id_from_user(to_number)
+        chat_id = self.telegram_chat_id_from_user(self._raw_destination(to_number))
         if not chat_id:
             raise RuntimeError(f"Invalid Telegram destination: {to_number}")
         if not os.path.exists(file_path):
             raise RuntimeError(f"Report file not found: {file_path}")
 
-        url = f"https://api.telegram.org/bot{self.settings.telegram_bot_token}/sendDocument"
+        url = f"https://api.telegram.org/bot{token}/sendDocument"
         boundary = f"----CodexBoundary{uuid.uuid4().hex}"
         file_name = os.path.basename(file_path)
         with open(file_path, "rb") as handle:
@@ -416,17 +564,19 @@ class ChannelDelivery:
         except Exception:
             return ""
 
-    def send_with_retries(self, kwargs: dict) -> str:
-        if not self.twilio_client:
+    def send_with_retries(self, kwargs: dict, *, client: Any = None, status_callback_url: str = "") -> str:
+        twilio_client = client or self.twilio_client
+        if not twilio_client:
             return "-"
-        if self.settings.twilio_status_callback_url:
+        callback = (status_callback_url or "").strip() or str(getattr(self.settings, "twilio_status_callback_url", "") or "").strip()
+        if callback:
             kwargs = dict(kwargs)
-            kwargs["status_callback"] = self.settings.twilio_status_callback_url
+            kwargs["status_callback"] = callback
         last_exc = None
         total_attempts = max(1, self.settings.twilio_send_retries + 1)
         for attempt in range(1, total_attempts + 1):
             try:
-                message = self.twilio_client.messages.create(**kwargs)
+                message = twilio_client.messages.create(**kwargs)
                 return message.sid
             except Exception as exc:
                 last_exc = exc

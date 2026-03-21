@@ -13,6 +13,8 @@ def log_notification_event(
     status: str = "PENDING",
     error_text: str = "",
     admin_id: Optional[int] = None,
+    doctor_id: Optional[int] = None,
+    channel_account_id: Optional[int] = None,
     meta_json: str = "",
 ) -> None:
     if not appointment_id:
@@ -20,23 +22,51 @@ def log_notification_event(
     conn = repo._connect()
     cur = conn.cursor()
     try:
+        has_column = getattr(repo, "_column_exists", None)
+        has_log_channel_account = bool(callable(has_column) and has_column("appointment_notification_log", "channel_account_id"))
+        has_log_doctor = bool(callable(has_column) and has_column("appointment_notification_log", "doctor_id"))
+        normalized_status = (status or "").strip().upper() or "PENDING"
+        insert_cols = [
+            "appointment_id",
+            "event_type",
+            "channel",
+            "destination",
+            "status",
+            "error_text",
+            "meta_json",
+            "admin_id",
+            "sent_at",
+            "attempt_count",
+            "next_retry_at",
+        ]
+        params: list[object] = [
+            appointment_id,
+            (event_type or "").strip().upper(),
+            (channel or "").strip().lower() or "system",
+            (destination or "").strip(),
+            normalized_status,
+            (error_text or "").strip() or None,
+            (meta_json or "").strip() or None,
+            admin_id,
+        ]
+        sent_expr = "CASE WHEN %s = 'SENT' THEN CONVERT_TZ(UTC_TIMESTAMP(), '+00:00', '+05:30') ELSE NULL END"
+        params.append(normalized_status)
+        values_sql = ["%s"] * 8 + [sent_expr, "0", "NULL"]
+        if has_log_doctor:
+            insert_cols.append("doctor_id")
+            values_sql.append("%s")
+            params.append(int(doctor_id) if doctor_id is not None else None)
+        if has_log_channel_account:
+            insert_cols.append("channel_account_id")
+            values_sql.append("%s")
+            params.append(int(channel_account_id) if channel_account_id is not None else None)
         cur.execute(
-            """
+            f"""
             INSERT INTO appointment_notification_log
-            (appointment_id, event_type, channel, destination, status, error_text, meta_json, admin_id, sent_at, attempt_count, next_retry_at)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, CASE WHEN %s = 'SENT' THEN CONVERT_TZ(UTC_TIMESTAMP(), '+00:00', '+05:30') ELSE NULL END, 0, NULL)
+            ({", ".join(insert_cols)})
+            VALUES ({", ".join(values_sql)})
             """,
-            (
-                appointment_id,
-                (event_type or "").strip().upper(),
-                (channel or "").strip().lower() or "system",
-                (destination or "").strip(),
-                (status or "").strip().upper() or "PENDING",
-                (error_text or "").strip() or None,
-                (meta_json or "").strip() or None,
-                admin_id,
-                (status or "").strip().upper() or "PENDING",
-            ),
+            tuple(params),
         )
         conn.commit()
     finally:
@@ -58,6 +88,17 @@ def list_pending_notification_events(
         appointment_table = repo._appointment_table()
         chat_col = repo._first_existing_column("patients", ("telegram_chat_id", "telegram_user_id", "user_id"))
         chat_select = f"COALESCE(p.{chat_col}, '')" if chat_col else "''"
+        has_column = getattr(repo, "_column_exists", None)
+        doctor_select = (
+            "a.doctor_id AS doctor_id"
+            if callable(has_column) and has_column(appointment_table, "doctor_id")
+            else "NULL AS doctor_id"
+        )
+        channel_account_select = (
+            "l.channel_account_id AS channel_account_id"
+            if callable(has_column) and has_column("appointment_notification_log", "channel_account_id")
+            else "NULL AS channel_account_id"
+        )
 
         params: list[object] = []
         admin_sql = ""
@@ -78,6 +119,8 @@ def list_pending_notification_events(
                     COALESCE(l.attempt_count, 0) AS attempt_count,
                     COALESCE(l.meta_json, '') AS meta_json,
                     l.admin_id,
+                    {doctor_select},
+                    {channel_account_select},
                     COALESCE(p.full_name, '') AS patient_name,
                     COALESCE(c.clinic_name, '') AS clinic_name,
                     DATE_FORMAT(a.appointment_date, '%Y-%m-%d') AS slot_date,
@@ -111,6 +154,8 @@ def list_pending_notification_events(
                     COALESCE(l.attempt_count, 0) AS attempt_count,
                     COALESCE(l.meta_json, '') AS meta_json,
                     l.admin_id,
+                    {doctor_select},
+                    {channel_account_select},
                     COALESCE(p.full_name, '') AS patient_name,
                     COALESCE(c.clinic_name, '') AS clinic_name,
                     DATE_FORMAT(s.slot_date, '%Y-%m-%d') AS slot_date,
@@ -152,6 +197,8 @@ def list_pending_notification_events(
                     patient_telegram_chat_id=str(row.get("patient_telegram_chat_id") or ""),
                     meta_json=str(row.get("meta_json") or ""),
                     admin_id=int(row["admin_id"]) if row.get("admin_id") is not None else None,
+                    doctor_id=int(row["doctor_id"]) if row.get("doctor_id") is not None else None,
+                    channel_account_id=int(row["channel_account_id"]) if row.get("channel_account_id") is not None else None,
                     attempt_count=int(row.get("attempt_count") or 0),
                 )
             )
@@ -168,6 +215,9 @@ def mark_notification_event_status(
     status: str,
     error_text: str = "",
     provider_message_sid: str = "",
+    channel_account_id: Optional[int] = None,
+    doctor_id: Optional[int] = None,
+    admin_id: Optional[int] = None,
 ) -> None:
     if not notification_id:
         return
@@ -175,26 +225,42 @@ def mark_notification_event_status(
     conn = repo._connect()
     cur = conn.cursor()
     try:
+        has_column = getattr(repo, "_column_exists", None)
+        has_log_channel_account = bool(callable(has_column) and has_column("appointment_notification_log", "channel_account_id"))
+        has_log_doctor = bool(callable(has_column) and has_column("appointment_notification_log", "doctor_id"))
+        set_parts = [
+            "status = %s",
+            "error_text = %s",
+            "provider_message_sid = CASE WHEN %s = 'SENT' AND %s <> '' THEN %s ELSE provider_message_sid END",
+            "sent_at = CASE WHEN %s = 'SENT' THEN CONVERT_TZ(UTC_TIMESTAMP(), '+00:00', '+05:30') ELSE sent_at END",
+            "locked_at = NULL",
+            "lock_owner = NULL",
+        ]
+        params: list[object] = [
+            normalized,
+            (error_text or "").strip() or None,
+            normalized,
+            (provider_message_sid or "").strip(),
+            (provider_message_sid or "").strip(),
+            normalized,
+        ]
+        if has_log_channel_account and channel_account_id is not None:
+            set_parts.append("channel_account_id = %s")
+            params.append(int(channel_account_id))
+        if has_log_doctor and doctor_id is not None:
+            set_parts.append("doctor_id = %s")
+            params.append(int(doctor_id))
+        if admin_id is not None:
+            set_parts.append("admin_id = %s")
+            params.append(int(admin_id))
+        params.append(notification_id)
         cur.execute(
-            """
+            f"""
             UPDATE appointment_notification_log
-            SET status = %s,
-                error_text = %s,
-                provider_message_sid = CASE WHEN %s = 'SENT' AND %s <> '' THEN %s ELSE provider_message_sid END,
-                sent_at = CASE WHEN %s = 'SENT' THEN CONVERT_TZ(UTC_TIMESTAMP(), '+00:00', '+05:30') ELSE sent_at END,
-                locked_at = NULL,
-                lock_owner = NULL
+            SET {", ".join(set_parts)}
             WHERE notification_id = %s
             """,
-            (
-                normalized,
-                (error_text or "").strip() or None,
-                normalized,
-                (provider_message_sid or "").strip(),
-                (provider_message_sid or "").strip(),
-                normalized,
-                notification_id,
-            ),
+            tuple(params),
         )
         conn.commit()
     finally:
@@ -275,6 +341,17 @@ def claim_pending_notification_events(
         appointment_table = repo._appointment_table()
         chat_col = repo._first_existing_column("patients", ("telegram_chat_id", "telegram_user_id", "user_id"))
         chat_select = f"COALESCE(p.{chat_col}, '')" if chat_col else "''"
+        has_column = getattr(repo, "_column_exists", None)
+        doctor_select = (
+            "a.doctor_id AS doctor_id"
+            if callable(has_column) and has_column(appointment_table, "doctor_id")
+            else "NULL AS doctor_id"
+        )
+        channel_account_select = (
+            "l.channel_account_id AS channel_account_id"
+            if callable(has_column) and has_column("appointment_notification_log", "channel_account_id")
+            else "NULL AS channel_account_id"
+        )
 
         if repo._use_appointment_mode():
             cur.execute(
@@ -289,6 +366,8 @@ def claim_pending_notification_events(
                     COALESCE(l.attempt_count, 0) AS attempt_count,
                     COALESCE(l.meta_json, '') AS meta_json,
                     l.admin_id,
+                    {doctor_select},
+                    {channel_account_select},
                     COALESCE(p.full_name, '') AS patient_name,
                     COALESCE(c.clinic_name, '') AS clinic_name,
                     DATE_FORMAT(a.appointment_date, '%Y-%m-%d') AS slot_date,
@@ -317,6 +396,8 @@ def claim_pending_notification_events(
                     COALESCE(l.attempt_count, 0) AS attempt_count,
                     COALESCE(l.meta_json, '') AS meta_json,
                     l.admin_id,
+                    {doctor_select},
+                    {channel_account_select},
                     COALESCE(p.full_name, '') AS patient_name,
                     COALESCE(c.clinic_name, '') AS clinic_name,
                     DATE_FORMAT(s.slot_date, '%Y-%m-%d') AS slot_date,
@@ -356,6 +437,8 @@ def claim_pending_notification_events(
                     patient_telegram_chat_id=str(row.get("patient_telegram_chat_id") or ""),
                     meta_json=str(row.get("meta_json") or ""),
                     admin_id=int(row["admin_id"]) if row.get("admin_id") is not None else None,
+                    doctor_id=int(row["doctor_id"]) if row.get("doctor_id") is not None else None,
+                    channel_account_id=int(row["channel_account_id"]) if row.get("channel_account_id") is not None else None,
                     attempt_count=int(row.get("attempt_count") or 0),
                 )
             )
@@ -426,6 +509,9 @@ def upsert_delivery_status(
     error_code: str = "",
     error_message: str = "",
     payload_json: str = "",
+    channel_account_id: Optional[int] = None,
+    doctor_id: Optional[int] = None,
+    admin_id: Optional[int] = None,
 ) -> None:
     sid = (provider_message_sid or "").strip()
     if not sid:
@@ -433,43 +519,90 @@ def upsert_delivery_status(
     conn = repo._connect()
     cur = conn.cursor()
     try:
+        has_column = getattr(repo, "_column_exists", None)
+        has_status_channel_account = bool(callable(has_column) and has_column("message_delivery_status", "channel_account_id"))
+        has_status_doctor = bool(callable(has_column) and has_column("message_delivery_status", "doctor_id"))
+        has_status_admin = bool(callable(has_column) and has_column("message_delivery_status", "admin_id"))
+        has_log_channel_account = bool(callable(has_column) and has_column("appointment_notification_log", "channel_account_id"))
+        has_log_doctor = bool(callable(has_column) and has_column("appointment_notification_log", "doctor_id"))
+
+        insert_cols = [
+            "provider",
+            "provider_message_sid",
+            "channel",
+            "message_status",
+            "to_number",
+            "from_number",
+            "error_code",
+            "error_message",
+            "payload_json",
+        ]
+        insert_values: list[object] = [
+            (provider or "").strip().lower() or "unknown",
+            sid,
+            (channel or "").strip().lower() or "unknown",
+            (message_status or "").strip().upper() or "UNKNOWN",
+            (to_number or "").strip() or None,
+            (from_number or "").strip() or None,
+            (error_code or "").strip() or None,
+            (error_message or "").strip() or None,
+            (payload_json or "").strip() or None,
+        ]
+        update_parts = [
+            "message_status = VALUES(message_status)",
+            "to_number = VALUES(to_number)",
+            "from_number = VALUES(from_number)",
+            "error_code = VALUES(error_code)",
+            "error_message = VALUES(error_message)",
+            "payload_json = VALUES(payload_json)",
+            "updated_at = CONVERT_TZ(UTC_TIMESTAMP(), '+00:00', '+05:30')",
+        ]
+        if has_status_channel_account:
+            insert_cols.append("channel_account_id")
+            insert_values.append(int(channel_account_id) if channel_account_id is not None else None)
+            update_parts.append("channel_account_id = VALUES(channel_account_id)")
+        if has_status_doctor:
+            insert_cols.append("doctor_id")
+            insert_values.append(int(doctor_id) if doctor_id is not None else None)
+            update_parts.append("doctor_id = VALUES(doctor_id)")
+        if has_status_admin:
+            insert_cols.append("admin_id")
+            insert_values.append(int(admin_id) if admin_id is not None else None)
+            update_parts.append("admin_id = VALUES(admin_id)")
+
+        placeholders = ", ".join(["%s"] * len(insert_cols))
         cur.execute(
-            """
+            f"""
             INSERT INTO message_delivery_status
-            (provider, provider_message_sid, channel, message_status, to_number, from_number, error_code, error_message, payload_json)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+            ({", ".join(insert_cols)})
+            VALUES ({placeholders})
             ON DUPLICATE KEY UPDATE
-                message_status = VALUES(message_status),
-                to_number = VALUES(to_number),
-                from_number = VALUES(from_number),
-                error_code = VALUES(error_code),
-                error_message = VALUES(error_message),
-                payload_json = VALUES(payload_json),
-                updated_at = CONVERT_TZ(UTC_TIMESTAMP(), '+00:00', '+05:30')
+                {", ".join(update_parts)}
             """,
-            (
-                (provider or "").strip().lower() or "unknown",
-                sid,
-                (channel or "").strip().lower() or "unknown",
-                (message_status or "").strip().upper() or "UNKNOWN",
-                (to_number or "").strip() or None,
-                (from_number or "").strip() or None,
-                (error_code or "").strip() or None,
-                (error_message or "").strip() or None,
-                (payload_json or "").strip() or None,
-            ),
+            tuple(insert_values),
         )
+        update_log_parts = [
+            "delivery_status = %s",
+            "delivery_updated_at = CONVERT_TZ(UTC_TIMESTAMP(), '+00:00', '+05:30')",
+        ]
+        update_log_params: list[object] = [(message_status or "").strip().upper() or "UNKNOWN"]
+        if has_log_channel_account and channel_account_id is not None:
+            update_log_parts.append("channel_account_id = %s")
+            update_log_params.append(int(channel_account_id))
+        if has_log_doctor and doctor_id is not None:
+            update_log_parts.append("doctor_id = %s")
+            update_log_params.append(int(doctor_id))
+        if admin_id is not None:
+            update_log_parts.append("admin_id = %s")
+            update_log_params.append(int(admin_id))
+        update_log_params.append(sid)
         cur.execute(
-            """
+            f"""
             UPDATE appointment_notification_log
-            SET delivery_status = %s,
-                delivery_updated_at = CONVERT_TZ(UTC_TIMESTAMP(), '+00:00', '+05:30')
+            SET {", ".join(update_log_parts)}
             WHERE provider_message_sid = %s
             """,
-            (
-                (message_status or "").strip().upper() or "UNKNOWN",
-                sid,
-            ),
+            tuple(update_log_params),
         )
         conn.commit()
     finally:

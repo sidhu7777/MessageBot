@@ -4,6 +4,7 @@ from typing import Optional, Tuple
 from src.db.connection import MySQLConfig, parse_mysql_url
 from src.repositories.booking_repository import BookingRepository as CoreBookingRepository
 from src.repositories.booking_repository import BookingResult
+from src.repositories.channel_account_repository import ChannelAccountRepository
 from src.repositories.conversation_repository import ConversationRepository
 from src.repositories.scheduling_repository import SchedulingRepository
 
@@ -28,6 +29,13 @@ def conversation_repository_from_env() -> Optional[ConversationRepository]:
     return ConversationRepository(config)
 
 
+def channel_account_repository_from_env() -> Optional[ChannelAccountRepository]:
+    config = _config_from_env()
+    if not config:
+        return None
+    return ChannelAccountRepository(config)
+
+
 def _config_from_env() -> Optional[MySQLConfig]:
     database_url = os.getenv("DATABASE_URL", "").strip()
     if not database_url or not database_url.startswith("mysql+mysqlconnector://"):
@@ -40,7 +48,9 @@ __all__ = [
     "BookingResult",
     "SchedulingRepository",
     "ConversationRepository",
+    "ChannelAccountRepository",
     "repositories_from_env",
     "conversation_repository_from_env",
+    "channel_account_repository_from_env",
     "MySQLConfig",
 ]

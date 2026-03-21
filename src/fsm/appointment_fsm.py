@@ -121,6 +121,8 @@ class AppointmentFSM:
     in_edit_flow: bool = False
     doctor_id: Optional[int] = None
     admin_id: Optional[int] = None
+    channel_account_id: Optional[int] = None
+    channel_provider: Optional[str] = None
     clinic_options_cache: list[dict] = field(default_factory=list)
     date_options_cache: list[str] = field(default_factory=list)
     availability_date_options_cache: list[str] = field(default_factory=list)
@@ -878,49 +880,10 @@ class AppointmentFSM:
         return options.get(normalized)
 
     def _ensure_actor_defaults(self) -> None:
-        if self.admin_id is None and self.booking_repository:
-            try:
-                self.admin_id = self.booking_repository.default_admin_id()
-            except Exception:
-                self.admin_id = None
-        if self.doctor_id is None and self.scheduling_repository:
-            try:
-                # For Telegram channel: look up doctor by chat_id (dynamic from incoming message)
-                if self._is_telegram_channel():
-                    raw_chat = (self.chat_phone_number or "").strip()
-                    if raw_chat:
-                        self.doctor_id = self.scheduling_repository.default_doctor_id_by_chat_id(
-                            chat_id=raw_chat,
-                            admin_id=self.admin_id,
-                        )
-                        if self.doctor_id is None:
-                            # Fallback: some deployments don't set/align admin_id on doctors.
-                            self.doctor_id = self.scheduling_repository.default_doctor_id_by_chat_id(
-                                chat_id=raw_chat,
-                                admin_id=None,
-                            )
-                # For WhatsApp or if Telegram lookup failed: use bot channel identity
-                if self.doctor_id is None and self.bot_whatsapp_number:
-                    marker = "telegram_username:"
-                    if self.bot_whatsapp_number.startswith(marker):
-                        username = self.bot_whatsapp_number[len(marker) :].strip()
-                        self.doctor_id = self.scheduling_repository.default_doctor_id_by_username(
-                            username=username,
-                            admin_id=self.admin_id,
-                        )
-                    else:
-                        self.doctor_id = self.scheduling_repository.default_doctor_id_by_phone(
-                            phone_number=self.bot_whatsapp_number,
-                            admin_id=self.admin_id,
-                        )
-                # Safety: when channel number is configured but does not match any doctor,
-                # do not silently route to another doctor.
-                if self.doctor_id is None:
-                    self.doctor_id = self.scheduling_repository.default_doctor_id(admin_id=self.admin_id)
-            except Exception:
-                # Don't wipe an already-resolved doctor_id on transient errors.
-                if self.doctor_id is None:
-                    self.doctor_id = None
+        # Strict routing mode:
+        # Do not auto-fallback to global/default doctor or admin. Caller (webhook routing
+        # layer) must resolve doctor/admin/channel context and inject it before FSM handling.
+        return
 
     def _hydrate_known_patient_name(self) -> None:
         if self.known_patient_name:
@@ -1270,26 +1233,6 @@ class AppointmentFSM:
 
     def _availability_reply(self, slot_date: str) -> str:
         self._ensure_actor_defaults()
-        if self.scheduling_repository and not self.doctor_id and self._is_telegram_channel():
-            try:
-                raw_chat = (self.chat_phone_number or "").strip()
-                if raw_chat:
-                    self.doctor_id = self.scheduling_repository.default_doctor_id_by_chat_id(
-                        chat_id=raw_chat,
-                        admin_id=self.admin_id,
-                    )
-                    if self.doctor_id is None:
-                        self.doctor_id = self.scheduling_repository.default_doctor_id_by_chat_id(
-                            chat_id=raw_chat,
-                            admin_id=None,
-                        )
-            except Exception:
-                pass
-        if self.scheduling_repository and self.doctor_id is None:
-            try:
-                self.doctor_id = self.scheduling_repository.default_doctor_id(admin_id=self.admin_id)
-            except Exception:
-                pass
         if not self.scheduling_repository or not self.doctor_id:
             if self.context.availability_doctor:
                 return self._msg(

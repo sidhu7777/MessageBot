@@ -5,6 +5,7 @@ from datetime import datetime, timedelta
 from types import SimpleNamespace
 from typing import Any, Optional
 
+from src.messages.templates import get_qr_message
 
 @dataclass
 class QrCheckinResult:
@@ -543,20 +544,31 @@ class QrCheckinService:
         phone: str,
         language: str = "en",
     ) -> QrCheckinResult:
-        language = self._normalize_language(language)
         if not self.booking_repository or not self.scheduling_repository:
-            return QrCheckinResult(status="error", message=self._msg(language, "booking_db_not_configured"))
+            return QrCheckinResult(
+                status="error",
+                message=get_qr_message(language, "qr_db_not_configured"),
+            )
 
         normalized_phone = self._normalize_phone(phone)
         cleaned_name = " ".join((patient_name or "").strip().split())
         if not cleaned_name:
-            return QrCheckinResult(status="error", message=self._msg(language, "enter_patient_name"))
+            return QrCheckinResult(
+                status="error",
+                message=get_qr_message(language, "qr_enter_patient_name"),
+            )
         if len(normalized_phone) < 10 or len(normalized_phone) > 15:
-            return QrCheckinResult(status="error", message=self._msg(language, "enter_valid_phone"))
+            return QrCheckinResult(
+                status="error",
+                message=get_qr_message(language, "qr_enter_valid_phone"),
+            )
 
         admin_id = self._resolve_admin_id(doctor_id)
         if not admin_id:
-            return QrCheckinResult(status="error", message=self._msg(language, "doctor_admin_not_configured"))
+            return QrCheckinResult(
+                status="error",
+                message=get_qr_message(language, "qr_doctor_admin_missing"),
+            )
 
         doctor_name, clinic_name = self.resolve_doctor_and_clinic(doctor_id=doctor_id, clinic_id=clinic_id)
 
@@ -577,7 +589,13 @@ class QrCheckinService:
             )
             return QrCheckinResult(
                 status="active_booking",
-                message=self._msg(language, "active_booking", booking_number=booking_number, suffix=suffix),
+                message=get_qr_message(
+                    language,
+                    "qr_active_booking",
+                    booking_number=booking_number,
+                    slot_date=slot_date,
+                    slot_time=slot_time,
+                ),
                 booking_id=int(active.get("appointment_id") or 0) or None,
                 appointment_date=slot_date,
                 appointment_time=slot_time,
@@ -613,15 +631,17 @@ class QrCheckinService:
             )
             if save.ok:
                 number = save.queue_number if save.queue_number is not None else save.appointment_id
-                suffix = (
-                    self._msg(language, "appointment_confirmed_suffix", slot_date=slot_date, slot_time=display_slot_time)
-                    if slot_date or display_slot_time
-                    else self._msg(language, "appointment_confirmed_suffix_empty")
-                )
+                confirmation_message = get_qr_message(language, "qr_confirmed_token", token_id=number)
+                if slot_time:
+                    confirmation_message += "\n" + get_qr_message(
+                        language,
+                        "qr_estimated_time",
+                        estimated_time=slot_time,
+                    )
                 return QrCheckinResult(
                     status="booked",
-                    message=self._msg(language, "appointment_confirmed", booking_number=number, suffix=suffix),
-                    booking_id=number,
+                    message=confirmation_message,
+                    booking_id=save.appointment_id,
                     appointment_date=slot_date,
                     appointment_time=display_slot_time,
                     clinic_name=clinic_name,
@@ -639,17 +659,19 @@ class QrCheckinService:
         except Exception as exc:
             return QrCheckinResult(
                 status="error",
-                message=self._msg(language, "unable_confirm_qr", error=exc),
+                message=get_qr_message(language, "qr_unable_confirm", error=str(exc)),
             )
-        suffix = (
-            self._msg(language, "appointment_confirmed_suffix", slot_date=overflow_date, slot_time=overflow_time)
-            if overflow_date or overflow_time
-            else self._msg(language, "appointment_confirmed_suffix_empty")
-        )
+        overflow_message = get_qr_message(language, "qr_confirmed_token", token_id=booking_number)
+        if overflow_time:
+            overflow_message += "\n" + get_qr_message(
+                language,
+                "qr_estimated_time",
+                estimated_time=overflow_time,
+            )
         return QrCheckinResult(
             status="booked",
-            message=self._msg(language, "appointment_confirmed", booking_number=booking_number, suffix=suffix),
-            booking_id=booking_number,
+            message=overflow_message,
+            booking_id=appointment_id,
             appointment_date=overflow_date,
             appointment_time=overflow_time,
             clinic_name=clinic_name,

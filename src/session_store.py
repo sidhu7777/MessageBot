@@ -140,6 +140,8 @@ class SessionManager:
             "known_patient_name": fsm.known_patient_name,
             "pending_init_intent": fsm.pending_init_intent,
             "language_selected_by_user": bool(fsm.language_selected_by_user),
+            "channel_account_id": fsm.channel_account_id,
+            "channel_provider": fsm.channel_provider,
             "booking_for_self": fsm.booking_for_self,
             "selected_time_period": fsm.selected_time_period,
             "time_options_cache": list(fsm.time_options_cache or []),
@@ -197,6 +199,8 @@ class SessionManager:
             "in_edit_flow": bool(fsm.in_edit_flow),
             "doctor_id": fsm.doctor_id,
             "admin_id": fsm.admin_id,
+            "channel_account_id": fsm.channel_account_id,
+            "channel_provider": fsm.channel_provider,
         }
         payload.update(self._fsm_extra_dict(fsm))
         try:
@@ -228,6 +232,10 @@ class SessionManager:
             admin_id = snapshot.get("admin_id")
             fsm.doctor_id = int(doctor_id) if doctor_id is not None else None
             fsm.admin_id = int(admin_id) if admin_id is not None else None
+            channel_account_id = snapshot.get("channel_account_id")
+            fsm.channel_account_id = int(channel_account_id) if channel_account_id is not None else None
+            channel_provider = snapshot.get("channel_provider")
+            fsm.channel_provider = str(channel_provider) if channel_provider is not None else None
             known_patient_name = snapshot.get("known_patient_name")
             fsm.known_patient_name = str(known_patient_name) if known_patient_name else None
             pending_init_intent = snapshot.get("pending_init_intent")
