@@ -16,6 +16,7 @@ from src.llm.tasks import (
     llm_extract_booking_prefill,
 )
 from src.messages.templates import get_message
+from src.runtime.account_scope import parse_scoped_user_id
 from src.fsm.handlers.booking import (
     handle_ask_booking_for_state,
     handle_ask_clinic_state,
@@ -813,7 +814,8 @@ class AppointmentFSM:
         return None
 
     def _is_telegram_channel(self) -> bool:
-        raw = (self.chat_phone_number or "").strip().lower()
+        _channel_account_id, raw_user_id = parse_scoped_user_id(self.chat_phone_number or "")
+        raw = (raw_user_id or "").strip().lower()
         return raw.startswith("telegram:")
 
     def _is_telegram_start_command(self, lower_text: str) -> bool:

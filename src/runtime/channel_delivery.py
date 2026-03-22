@@ -49,6 +49,9 @@ class ChannelDelivery:
                 return text
         return ""
 
+    def _telegram_bot_token_for_account(self, account: dict) -> str:
+        return self._account_value(account, "telegram_bot_token")
+
     def _provider_for_account(self, account: dict) -> str:
         account_provider = self._account_value(account, "provider", "_provider").lower()
         if account_provider in {"meta", "infobip", "twilio"}:
@@ -416,9 +419,9 @@ class ChannelDelivery:
 
     def send_telegram_message(self, to_number: str, body: str, inbound_sid: str = "") -> None:
         account = self._resolve_account(to_number)
-        token = str(account.get("telegram_bot_token") or self.settings.telegram_bot_token or "").strip()
+        token = self._telegram_bot_token_for_account(account)
         if not token:
-            raise RuntimeError("TELEGRAM_BOT_TOKEN is not configured.")
+            raise RuntimeError("telegram_bot_token is not configured for the selected channel account.")
         chat_id = self.telegram_chat_id_from_user(self._raw_destination(to_number))
         if not chat_id:
             raise RuntimeError(f"Invalid Telegram destination: {to_number}")
@@ -479,9 +482,9 @@ class ChannelDelivery:
 
     def send_telegram_document(self, to_number: str, file_path: str, caption: str = "", inbound_sid: str = "") -> None:
         account = self._resolve_account(to_number)
-        token = str(account.get("telegram_bot_token") or self.settings.telegram_bot_token or "").strip()
+        token = self._telegram_bot_token_for_account(account)
         if not token:
-            raise RuntimeError("TELEGRAM_BOT_TOKEN is not configured.")
+            raise RuntimeError("telegram_bot_token is not configured for the selected channel account.")
         chat_id = self.telegram_chat_id_from_user(self._raw_destination(to_number))
         if not chat_id:
             raise RuntimeError(f"Invalid Telegram destination: {to_number}")
@@ -547,8 +550,8 @@ class ChannelDelivery:
             return raw[len("telegram:") :]
         return raw
 
-    def resolve_telegram_bot_username(self) -> str:
-        token = (self.settings.telegram_bot_token or "").strip()
+    def resolve_telegram_bot_username(self, account: Optional[dict] = None) -> str:
+        token = self._telegram_bot_token_for_account(account or {})
         if not token:
             return ""
         url = f"https://api.telegram.org/bot{token}/getMe"

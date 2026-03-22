@@ -341,12 +341,8 @@ async def startup_validation() -> None:
     if resolved_username:
         _telegram_bot_username_runtime = resolved_username
         LOGGER.info("Telegram bot username resolved dynamically: @%s", resolved_username)
-    elif settings.telegram_bot_username:
-        _telegram_bot_username_runtime = settings.telegram_bot_username
-        LOGGER.warning(
-            "Telegram bot username dynamic resolution failed; using TELEGRAM_BOT_USERNAME fallback: @%s",
-            settings.telegram_bot_username,
-        )
+    else:
+        LOGGER.info("Telegram bot username runtime resolution skipped; per-account sender identity is required.")
     if settings.llm_provider.lower() != "ollama":
         return
     try:

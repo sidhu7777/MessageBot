@@ -8,6 +8,7 @@ from zoneinfo import ZoneInfo
 _IST = ZoneInfo("Asia/Kolkata")
 
 from src.db.connection import MySQLConfig, connect_mysql
+from src.runtime.account_scope import parse_scoped_user_id
 from src.repositories.notification_ops import (
     claim_pending_notification_events as _claim_pending_notification_events,
     list_pending_notification_events as _list_pending_notification_events,
@@ -437,7 +438,8 @@ class BookingRepository:
 
     @staticmethod
     def _normalize_chat_user_id(value: str) -> str:
-        raw = (value or "").strip()
+        _channel_account_id, raw_user_id = parse_scoped_user_id(value or "")
+        raw = (raw_user_id or "").strip()
         if raw.startswith("telegram:"):
             raw = raw[len("telegram:") :].strip()
         return raw
@@ -851,5 +853,4 @@ class BookingRepository:
 
     def mark_reminder_failed(self, *, queue_id: int, error: str) -> None:
         _mark_reminder_failed(self, queue_id=queue_id, error=error)
-
 
