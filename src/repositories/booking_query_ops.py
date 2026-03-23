@@ -373,6 +373,11 @@ def find_active_appointment_by_phone_number(
         if not actual_admin_id:
             return None
         appointment_table = repo._appointment_table()
+        booking_select = (
+            "COALESCE(a.booking_id, p.booking_id)"
+            if repo._column_exists(appointment_table, "booking_id")
+            else "p.booking_id"
+        )
         phone_expr = repo._normalized_phone_sql_expr("p.phone")
         phone_filter_sql = f"AND ({phone_expr} = %s"
         params_phone: list[object] = [target]
@@ -393,7 +398,7 @@ def find_active_appointment_by_phone_number(
                     a.appointment_id,
                     a.clinic_id,
                     a.doctor_id,
-                    p.booking_id AS booking_number,
+                    {booking_select} AS booking_number,
                     c.clinic_name,
                     DATE_FORMAT(a.appointment_date, '%Y-%m-%d') AS slot_date,
                     TIME_FORMAT(a.start_time, '%H:%i') AS slot_time,
@@ -473,6 +478,11 @@ def list_active_appointments_by_phone_number(
         if not actual_admin_id:
             return []
         appointment_table = repo._appointment_table()
+        booking_select = (
+            "COALESCE(a.booking_id, p.booking_id)"
+            if repo._column_exists(appointment_table, "booking_id")
+            else "p.booking_id"
+        )
         phone_expr = repo._normalized_phone_sql_expr("p.phone")
         phone_filter_sql = f"AND ({phone_expr} = %s"
         params_phone: list[object] = [target]
@@ -493,6 +503,7 @@ def list_active_appointments_by_phone_number(
                     a.appointment_id,
                     a.clinic_id,
                     a.doctor_id,
+                    {booking_select} AS booking_number,
                     c.clinic_name,
                     DATE_FORMAT(a.appointment_date, '%Y-%m-%d') AS slot_date,
                     TIME_FORMAT(a.start_time, '%H:%i') AS slot_time,
@@ -521,7 +532,7 @@ def list_active_appointments_by_phone_number(
                     a.appointment_id,
                     a.clinic_id,
                     a.doctor_id,
-                    p.booking_id AS booking_number,
+                    {booking_select} AS booking_number,
                     c.clinic_name,
                     s.slot_date,
                     TIME_FORMAT(s.slot_time, '%H:%i') AS slot_time,
@@ -574,6 +585,11 @@ def list_active_appointments_by_chat_user_id(
             return []
 
         appointment_table = repo._appointment_table()
+        booking_select = (
+            "COALESCE(a.booking_id, p.booking_id)"
+            if repo._column_exists(appointment_table, "booking_id")
+            else "p.booking_id"
+        )
         params: list[object] = [actual_admin_id, target]
         doctor_sql = ""
         if doctor_id is not None:
@@ -587,7 +603,7 @@ def list_active_appointments_by_chat_user_id(
                     a.appointment_id,
                     a.clinic_id,
                     a.doctor_id,
-                    p.booking_id AS booking_number,
+                    {booking_select} AS booking_number,
                     c.clinic_name,
                     DATE_FORMAT(a.appointment_date, '%Y-%m-%d') AS slot_date,
                     TIME_FORMAT(a.start_time, '%H:%i') AS slot_time,
@@ -610,7 +626,7 @@ def list_active_appointments_by_chat_user_id(
                     a.appointment_id,
                     a.clinic_id,
                     a.doctor_id,
-                    p.booking_id AS booking_number,
+                    {booking_select} AS booking_number,
                     c.clinic_name,
                     s.slot_date,
                     TIME_FORMAT(s.slot_time, '%H:%i') AS slot_time,
@@ -639,4 +655,3 @@ def list_active_appointments_by_chat_user_id(
     finally:
         cur.close()
         conn.close()
-

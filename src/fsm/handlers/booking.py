@@ -99,7 +99,7 @@ def handle_ask_name_state(fsm: "AppointmentFSM", text: str, lower: str) -> str:
         if rerouted in {"GENERAL_QUERY", "OTHER", "CHECK_AVAILABILITY"}:
             fsm.state = "INIT"
             fsm.init_unclear_count = 1
-            return fsm._respond(fsm._msg("clarify_intent"), allow_polish=False)
+            return fsm._respond(fsm._main_menu_prompt(), allow_polish=False)
         return fsm._respond(fsm._msg("invalid_name"))
     fsm.context.patient_name = name
     fsm._ensure_actor_defaults()

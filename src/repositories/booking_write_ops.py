@@ -139,6 +139,7 @@ def reschedule_appointment_same_clinic(
             return BookingResult(False, "No admin configured.")
         appointment_table = repo._appointment_table()
         has_rescheduled_by = repo._column_exists(appointment_table, "rescheduled_by")
+        has_appointment_booking_col = repo._column_exists(appointment_table, "booking_id")
 
         if repo._use_appointment_mode():
             cur.execute(
@@ -249,6 +250,16 @@ def reschedule_appointment_same_clinic(
                     """,
                     (new_date, start_time, end_time, target_clinic_id, target_doctor_id, appointment_id, actual_admin_id),
                 )
+            if has_appointment_booking_col and requested_slot_number is not None:
+                cur.execute(
+                    f"""
+                    UPDATE {appointment_table}
+                    SET booking_id = %s
+                    WHERE appointment_id = %s
+                      AND admin_id = %s
+                    """,
+                    (requested_slot_number, appointment_id, actual_admin_id),
+                )
             if repo._column_exists("patients", "booking_id") and requested_slot_number is not None:
                 cur.execute(
                     """
@@ -352,6 +363,18 @@ def reschedule_appointment_same_clinic(
                 """,
                 (new_slot_id, new_doctor_id, new_clinic_id, appointment_id, actual_admin_id),
             )
+        if has_appointment_booking_col:
+            new_booking_id = repo.get_daily_queue_number(appointment_id)
+            if new_booking_id is not None:
+                cur.execute(
+                    f"""
+                    UPDATE {appointment_table}
+                    SET booking_id = %s
+                    WHERE appointment_id = %s
+                      AND admin_id = %s
+                    """,
+                    (new_booking_id, appointment_id, actual_admin_id),
+                )
         conn.commit()
         return BookingResult(
             True,
@@ -584,6 +607,7 @@ def save_confirmed_appointment(
 
         appointment_table = repo._appointment_table()
         has_notify_chat_col = repo._column_exists(appointment_table, "notify_telegram_chat_id")
+        has_appointment_booking_col = repo._column_exists(appointment_table, "booking_id")
 
         if repo._use_appointment_mode():
             resolved_doctor_id = int(doctor_id) if doctor_id is not None else None
@@ -682,6 +706,15 @@ def save_confirmed_appointment(
             )
             existing = cur.fetchone()
             if existing:
+                if has_appointment_booking_col and requested_slot_number is not None:
+                    cur.execute(
+                        f"""
+                        UPDATE {appointment_table}
+                        SET booking_id = %s
+                        WHERE appointment_id = %s
+                        """,
+                        (requested_slot_number, int(existing["appointment_id"])),
+                    )
                 if "booking_id" in patient_columns and requested_slot_number is not None:
                     cur.execute(
                         """
@@ -724,45 +757,91 @@ def save_confirmed_appointment(
                 slot_appointment_id = int(slot_owner["appointment_id"])
                 if slot_status in {"CANCELLED", "COMPLETED"}:
                     if has_notify_chat_col:
-                        cur.execute(
-                            f"""
-                            UPDATE {appointment_table}
-                            SET patient_id = %s,
-                                clinic_id = %s,
-                                admin_id = %s,
-                                end_time = %s,
-                                notify_telegram_chat_id = %s,
-                                status = 'BOOKED'
-                            WHERE appointment_id = %s
-                            """,
-                            (
-                                patient_id,
-                                int(context.clinic_id),
-                                actual_admin_id,
-                                requested_end,
-                                chat_user_id_value or None,
-                                slot_appointment_id,
-                            ),
-                        )
+                        if has_appointment_booking_col:
+                            cur.execute(
+                                f"""
+                                UPDATE {appointment_table}
+                                SET patient_id = %s,
+                                    clinic_id = %s,
+                                    admin_id = %s,
+                                    end_time = %s,
+                                    notify_telegram_chat_id = %s,
+                                    booking_id = %s,
+                                    status = 'BOOKED'
+                                WHERE appointment_id = %s
+                                """,
+                                (
+                                    patient_id,
+                                    int(context.clinic_id),
+                                    actual_admin_id,
+                                    requested_end,
+                                    chat_user_id_value or None,
+                                    requested_slot_number,
+                                    slot_appointment_id,
+                                ),
+                            )
+                        else:
+                            cur.execute(
+                                f"""
+                                UPDATE {appointment_table}
+                                SET patient_id = %s,
+                                    clinic_id = %s,
+                                    admin_id = %s,
+                                    end_time = %s,
+                                    notify_telegram_chat_id = %s,
+                                    status = 'BOOKED'
+                                WHERE appointment_id = %s
+                                """,
+                                (
+                                    patient_id,
+                                    int(context.clinic_id),
+                                    actual_admin_id,
+                                    requested_end,
+                                    chat_user_id_value or None,
+                                    slot_appointment_id,
+                                ),
+                            )
                     else:
-                        cur.execute(
-                            f"""
-                            UPDATE {appointment_table}
-                            SET patient_id = %s,
-                                clinic_id = %s,
-                                admin_id = %s,
-                                end_time = %s,
-                                status = 'BOOKED'
-                            WHERE appointment_id = %s
-                            """,
-                            (
-                                patient_id,
-                                int(context.clinic_id),
-                                actual_admin_id,
-                                requested_end,
-                                slot_appointment_id,
-                            ),
-                        )
+                        if has_appointment_booking_col:
+                            cur.execute(
+                                f"""
+                                UPDATE {appointment_table}
+                                SET patient_id = %s,
+                                    clinic_id = %s,
+                                    admin_id = %s,
+                                    end_time = %s,
+                                    booking_id = %s,
+                                    status = 'BOOKED'
+                                WHERE appointment_id = %s
+                                """,
+                                (
+                                    patient_id,
+                                    int(context.clinic_id),
+                                    actual_admin_id,
+                                    requested_end,
+                                    requested_slot_number,
+                                    slot_appointment_id,
+                                ),
+                            )
+                        else:
+                            cur.execute(
+                                f"""
+                                UPDATE {appointment_table}
+                                SET patient_id = %s,
+                                    clinic_id = %s,
+                                    admin_id = %s,
+                                    end_time = %s,
+                                    status = 'BOOKED'
+                                WHERE appointment_id = %s
+                                """,
+                                (
+                                    patient_id,
+                                    int(context.clinic_id),
+                                    actual_admin_id,
+                                    requested_end,
+                                    slot_appointment_id,
+                                ),
+                            )
                     if "booking_id" in patient_columns and requested_slot_number is not None:
                         cur.execute(
                             """
@@ -784,40 +863,79 @@ def save_confirmed_appointment(
 
             try:
                 if has_notify_chat_col:
-                    cur.execute(
-                        f"""
-                        INSERT INTO {appointment_table}
-                        (patient_id, doctor_id, clinic_id, admin_id, status, appointment_date, start_time, end_time, notify_telegram_chat_id)
-                        VALUES (%s, %s, %s, %s, 'BOOKED', %s, %s, %s, %s)
-                        """,
-                        (
-                            patient_id,
-                            resolved_doctor_id,
-                            int(context.clinic_id),
-                            actual_admin_id,
-                            context.appointment_date,
-                            requested_start,
-                            requested_end,
-                            chat_user_id_value or None,
-                        ),
-                    )
+                    if has_appointment_booking_col:
+                        cur.execute(
+                            f"""
+                            INSERT INTO {appointment_table}
+                            (patient_id, doctor_id, clinic_id, admin_id, status, appointment_date, start_time, end_time, notify_telegram_chat_id, booking_id)
+                            VALUES (%s, %s, %s, %s, 'BOOKED', %s, %s, %s, %s, %s)
+                            """,
+                            (
+                                patient_id,
+                                resolved_doctor_id,
+                                int(context.clinic_id),
+                                actual_admin_id,
+                                context.appointment_date,
+                                requested_start,
+                                requested_end,
+                                chat_user_id_value or None,
+                                requested_slot_number,
+                            ),
+                        )
+                    else:
+                        cur.execute(
+                            f"""
+                            INSERT INTO {appointment_table}
+                            (patient_id, doctor_id, clinic_id, admin_id, status, appointment_date, start_time, end_time, notify_telegram_chat_id)
+                            VALUES (%s, %s, %s, %s, 'BOOKED', %s, %s, %s, %s)
+                            """,
+                            (
+                                patient_id,
+                                resolved_doctor_id,
+                                int(context.clinic_id),
+                                actual_admin_id,
+                                context.appointment_date,
+                                requested_start,
+                                requested_end,
+                                chat_user_id_value or None,
+                            ),
+                        )
                 else:
-                    cur.execute(
-                        f"""
-                        INSERT INTO {appointment_table}
-                        (patient_id, doctor_id, clinic_id, admin_id, status, appointment_date, start_time, end_time)
-                        VALUES (%s, %s, %s, %s, 'BOOKED', %s, %s, %s)
-                        """,
-                        (
-                            patient_id,
-                            resolved_doctor_id,
-                            int(context.clinic_id),
-                            actual_admin_id,
-                            context.appointment_date,
-                            requested_start,
-                            requested_end,
-                        ),
-                    )
+                    if has_appointment_booking_col:
+                        cur.execute(
+                            f"""
+                            INSERT INTO {appointment_table}
+                            (patient_id, doctor_id, clinic_id, admin_id, status, appointment_date, start_time, end_time, booking_id)
+                            VALUES (%s, %s, %s, %s, 'BOOKED', %s, %s, %s, %s)
+                            """,
+                            (
+                                patient_id,
+                                resolved_doctor_id,
+                                int(context.clinic_id),
+                                actual_admin_id,
+                                context.appointment_date,
+                                requested_start,
+                                requested_end,
+                                requested_slot_number,
+                            ),
+                        )
+                    else:
+                        cur.execute(
+                            f"""
+                            INSERT INTO {appointment_table}
+                            (patient_id, doctor_id, clinic_id, admin_id, status, appointment_date, start_time, end_time)
+                            VALUES (%s, %s, %s, %s, 'BOOKED', %s, %s, %s)
+                            """,
+                            (
+                                patient_id,
+                                resolved_doctor_id,
+                                int(context.clinic_id),
+                                actual_admin_id,
+                                context.appointment_date,
+                                requested_start,
+                                requested_end,
+                            ),
+                        )
             except Exception as _insert_exc:
                 if "1062" not in str(_insert_exc) and "Duplicate entry" not in str(_insert_exc):
                     raise
@@ -890,6 +1008,17 @@ def save_confirmed_appointment(
                     """,
                     (chat_user_id_value, int(existing["appointment_id"])),
                 )
+            if has_appointment_booking_col:
+                existing_booking_id = repo.get_daily_queue_number(int(existing["appointment_id"]))
+                if existing_booking_id is not None:
+                    cur.execute(
+                        f"""
+                        UPDATE {appointment_table}
+                        SET booking_id = COALESCE(booking_id, %s)
+                        WHERE appointment_id = %s
+                        """,
+                        (existing_booking_id, int(existing["appointment_id"])),
+                    )
             conn.commit()
             appt_id = int(existing["appointment_id"])
             return BookingResult(
@@ -953,24 +1082,55 @@ def save_confirmed_appointment(
         )
 
         if has_notify_chat_col:
-            cur.execute(
-                f"""
-                INSERT INTO {appointment_table}
-                (patient_id, slot_id, doctor_id, clinic_id, admin_id, status, notify_telegram_chat_id)
-                VALUES (%s, %s, %s, %s, %s, 'BOOKED', %s)
-                """,
-                (patient_id, slot_id, doctor_id, clinic_id, actual_admin_id, chat_user_id_value or None),
-            )
+            if has_appointment_booking_col:
+                cur.execute(
+                    f"""
+                    INSERT INTO {appointment_table}
+                    (patient_id, slot_id, doctor_id, clinic_id, admin_id, status, notify_telegram_chat_id, booking_id)
+                    VALUES (%s, %s, %s, %s, %s, 'BOOKED', %s, NULL)
+                    """,
+                    (patient_id, slot_id, doctor_id, clinic_id, actual_admin_id, chat_user_id_value or None),
+                )
+            else:
+                cur.execute(
+                    f"""
+                    INSERT INTO {appointment_table}
+                    (patient_id, slot_id, doctor_id, clinic_id, admin_id, status, notify_telegram_chat_id)
+                    VALUES (%s, %s, %s, %s, %s, 'BOOKED', %s)
+                    """,
+                    (patient_id, slot_id, doctor_id, clinic_id, actual_admin_id, chat_user_id_value or None),
+                )
         else:
-            cur.execute(
-                f"""
-                INSERT INTO {appointment_table}
-                (patient_id, slot_id, doctor_id, clinic_id, admin_id, status)
-                VALUES (%s, %s, %s, %s, %s, 'BOOKED')
-                """,
-                (patient_id, slot_id, doctor_id, clinic_id, actual_admin_id),
-            )
+            if has_appointment_booking_col:
+                cur.execute(
+                    f"""
+                    INSERT INTO {appointment_table}
+                    (patient_id, slot_id, doctor_id, clinic_id, admin_id, status, booking_id)
+                    VALUES (%s, %s, %s, %s, %s, 'BOOKED', NULL)
+                    """,
+                    (patient_id, slot_id, doctor_id, clinic_id, actual_admin_id),
+                )
+            else:
+                cur.execute(
+                    f"""
+                    INSERT INTO {appointment_table}
+                    (patient_id, slot_id, doctor_id, clinic_id, admin_id, status)
+                    VALUES (%s, %s, %s, %s, %s, 'BOOKED')
+                    """,
+                    (patient_id, slot_id, doctor_id, clinic_id, actual_admin_id),
+                )
         appointment_id = int(cur.lastrowid)
+        if has_appointment_booking_col:
+            booking_id = repo.get_daily_queue_number(appointment_id)
+            if booking_id is not None:
+                cur.execute(
+                    f"""
+                    UPDATE {appointment_table}
+                    SET booking_id = %s
+                    WHERE appointment_id = %s
+                    """,
+                    (booking_id, appointment_id),
+                )
         conn.commit()
         return BookingResult(
             True,
@@ -984,4 +1144,3 @@ def save_confirmed_appointment(
     finally:
         cur.close()
         conn.close()
-

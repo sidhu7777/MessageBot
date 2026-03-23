@@ -24,6 +24,7 @@ appointment,created_at,timestamp
 appointment,start_time,time
 appointment,end_time,time
 appointment,appointment_date,date
+appointment,booking_id,int
 appointment,cancelled_by,varchar
 appointment,rescheduled_by,varchar
 appointment,notify_telegram_chat_id,bigint

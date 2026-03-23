@@ -20,6 +20,44 @@ def render_qr_page_html(
     phone_number_safe = html_escape.escape(phone_number or "")
     result_message_safe = html_escape.escape(result_message or "")
     lang = language if language in {"en", "hi", "hinglish"} else "en"
+    ui = {
+        "en": {
+            "kicker": "Book Your Appointment",
+            "title": f"Welcome to Dr. {doctor_name_safe} clinic",
+            "subtitle": f"Clinic: {clinic_name_safe}",
+            "name_label": "Full Name",
+            "phone_label": "Phone Number",
+            "submit": "Submit",
+            "modal_close": "Close",
+            "modal_ok": "Appointment Confirmed",
+            "modal_warn": "Booking Update",
+            "modal_err": "Booking Status",
+        },
+        "hi": {
+            "kicker": "अपॉइंटमेंट बुक करें",
+            "title": f"Dr. {doctor_name_safe} क्लिनिक में आपका स्वागत है",
+            "subtitle": f"क्लिनिक: {clinic_name_safe}",
+            "name_label": "पूरा नाम",
+            "phone_label": "फोन नंबर",
+            "submit": "सबमिट करें",
+            "modal_close": "बंद करें",
+            "modal_ok": "अपॉइंटमेंट कन्फर्म हुई",
+            "modal_warn": "बुकिंग अपडेट",
+            "modal_err": "बुकिंग स्थिति",
+        },
+        "hinglish": {
+            "kicker": "Book Your Appointment",
+            "title": f"Dr. {doctor_name_safe} clinic mein aapka swagat hai",
+            "subtitle": f"Clinic: {clinic_name_safe}",
+            "name_label": "Full Name",
+            "phone_label": "Phone Number",
+            "submit": "Submit kariye",
+            "modal_close": "Close",
+            "modal_ok": "Appointment Confirmed",
+            "modal_warn": "Booking Update",
+            "modal_err": "Booking Status",
+        },
+    }[lang]
     result_class = ""
     if result_status == "booked":
         result_class = " ok"
@@ -150,32 +188,89 @@ def render_qr_page_html(
     .result.ok {{ font-weight: 600; }}
     .warn {{ color: var(--warn); }}
     .err {{ color: var(--danger); }}
+    .result {{
+      display: none;
+    }}
+    .modal {{
+      position: fixed;
+      inset: 0;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      background: rgba(7, 24, 22, 0.48);
+      padding: 20px;
+      z-index: 999;
+    }}
+    .modal.open {{
+      display: flex;
+    }}
+    .modal-card {{
+      width: min(560px, 100%);
+      background: #fff;
+      border-radius: 18px;
+      box-shadow: 0 24px 60px rgba(10, 30, 26, 0.28);
+      border: 1px solid #dfece5;
+      overflow: hidden;
+    }}
+    .modal-head {{
+      padding: 18px 20px 12px 20px;
+      border-bottom: 1px solid #ebf1ed;
+      font-size: 20px;
+      font-weight: 700;
+    }}
+    .modal-head.ok {{ color: var(--ok); }}
+    .modal-head.warn {{ color: var(--warn); }}
+    .modal-head.err {{ color: var(--danger); }}
+    .modal-body {{
+      padding: 18px 20px;
+      white-space: normal;
+      line-height: 1.55;
+      font-size: 15px;
+    }}
+    .modal-actions {{
+      padding: 0 20px 20px 20px;
+      display: flex;
+      justify-content: flex-end;
+    }}
+    .modal-actions button {{
+      margin-top: 0;
+      min-width: 120px;
+    }}
   </style>
 </head>
 <body>
   <section class=\"card\">
     <div class=\"hero\">
-      <span class=\"kicker\" id=\"kicker\">Book Your Appointment</span>
-      <h1 id=\"title\">Welcome to Dr. {doctor_name_safe} clinic</h1>
-      <p class=\"subtitle\" id=\"subtitle\">Clinic: {clinic_name_safe}</p>
+      <span class=\"kicker\" id=\"kicker\">{ui["kicker"]}</span>
+      <h1 id=\"title\">{ui["title"]}</h1>
+      <p class=\"subtitle\" id=\"subtitle\">{ui["subtitle"]}</p>
     </div>
     <form class=\"form-wrap\" id=\"checkinForm\" method=\"post\" action=\"/qr/checkin/submit?doctor_id={doctor_id}&clinic_id={clinic_id}\">
       <div class=\"grid\">
         <label>
-          <span id=\"nameLabel\">Full Name</span>
+          <span id=\"nameLabel\">{ui["name_label"]}</span>
           <input id=\"patientName\" name=\"patient_name\" maxlength=\"120\" value=\"{patient_name_safe}\" required />
         </label>
         <label>
-          <span id=\"phoneLabel\">Phone Number</span>
+          <span id=\"phoneLabel\">{ui["phone_label"]}</span>
           <input id=\"phoneNumber\" name=\"phone_number\" maxlength=\"20\" value=\"{phone_number_safe}\" required />
         </label>
       </div>
-      <button id=\"submitBtn\" type=\"submit\">Submit</button>
+      <button id=\"submitBtn\" type=\"submit\">{ui["submit"]}</button>
       <div id=\"result\" class=\"result{result_class}\">{result_message_safe}</div>
       <input type=\"hidden\" id=\"doctorId\" value=\"{doctor_id}\" />
       <input type=\"hidden\" id=\"clinicId\" value=\"{clinic_id}\" />
     </form>
   </section>
+  <div id=\"resultModal\" class=\"modal\" aria-hidden=\"true\">
+    <div class=\"modal-card\" role=\"dialog\" aria-modal=\"true\" aria-labelledby=\"modalTitle\">
+      <div id=\"modalTitle\" class=\"modal-head\">{ui["modal_err"]}</div>
+      <div id=\"modalBody\" class=\"modal-body\"></div>
+      <div class=\"modal-actions\">
+        <button id=\"modalCloseBtn\" type=\"button\">{ui["modal_close"]}</button>
+      </div>
+    </div>
+  </div>
 
   <script>
     const t = {{
@@ -186,6 +281,10 @@ def render_qr_page_html(
         nameLabel: "Full Name",
         phoneLabel: "Phone Number",
         submit: "Submit",
+        close: "Close",
+        modalOk: "Appointment Confirmed",
+        modalWarn: "Booking Update",
+        modalErr: "Booking Status",
         submitting: "Submitting...",
         missingIds: "Error: Doctor or clinic ID missing.",
         serverError: "Server error. Please try again.",
@@ -200,6 +299,10 @@ def render_qr_page_html(
         nameLabel: "पूरा नाम",
         phoneLabel: "फोन नंबर",
         submit: "सबमिट करें",
+        close: "बंद करें",
+        modalOk: "अपॉइंटमेंट कन्फर्म हुई",
+        modalWarn: "बुकिंग अपडेट",
+        modalErr: "बुकिंग स्थिति",
         submitting: "सबमिट हो रहा है...",
         missingIds: "त्रुटि: डॉक्टर या क्लिनिक आईडी नहीं मिली।",
         serverError: "सर्वर त्रुटि। कृपया फिर से कोशिश करें।",
@@ -214,6 +317,10 @@ def render_qr_page_html(
         nameLabel: "Full Name",
         phoneLabel: "Phone Number",
         submit: "Submit kariye",
+        close: "Close",
+        modalOk: "Appointment Confirmed",
+        modalWarn: "Booking Update",
+        modalErr: "Booking Status",
         submitting: "Submit ho raha hai...",
         missingIds: "Error: Doctor ya clinic ID missing hai.",
         serverError: "Server error. Please dobara try kariye.",
@@ -227,19 +334,6 @@ def render_qr_page_html(
     const lockLanguage = {"true" if lock_language else "false"};
     let activeLanguage = serverLang;
 
-    function normalizeDetectedLanguage(raw) {{
-      const value = String(raw || "").toLowerCase();
-      if (value.startsWith("hi")) return "hi";
-      if (value.startsWith("en")) return "en";
-      return "en";
-    }}
-
-    function detectBrowserLanguage() {{
-      const list = Array.isArray(navigator.languages) ? navigator.languages : [];
-      const first = list.length ? list[0] : navigator.language;
-      return normalizeDetectedLanguage(first);
-    }}
-
     function applyLanguage(lang) {{
       const d = t[lang] || t.en;
       activeLanguage = lang in t ? lang : "en";
@@ -249,16 +343,83 @@ def render_qr_page_html(
       document.getElementById("nameLabel").textContent = d.nameLabel;
       document.getElementById("phoneLabel").textContent = d.phoneLabel;
       document.getElementById("submitBtn").textContent = d.submit;
+      document.getElementById("modalCloseBtn").textContent = d.close;
     }}
 
-    applyLanguage(lockLanguage ? serverLang : detectBrowserLanguage());
+    function formatResultHtml(message, currentTexts, kind) {{
+      const confirmationLines = [
+        "Appointment confirmed.",
+        "अपॉइंटमेंट कन्फर्म हो गई।",
+        "Appointment confirm ho gayi.",
+      ];
+      const lines = String(message || currentTexts.done)
+        .split("\\n")
+        .map((line) => line.trim())
+        .filter(Boolean)
+        .filter((line, index) => !(kind === "ok" && index === 0 && confirmationLines.includes(line)));
+      const boldPrefixes = [
+        "Appointment ID:",
+        "अपॉइंटमेंट आईडी:",
+        "Estimated Time:",
+        "अनुमानित समय:",
+      ];
+      return lines
+        .map((line) => {{
+          const safe = line
+            .replace(/&/g, "&amp;")
+            .replace(/</g, "&lt;")
+            .replace(/>/g, "&gt;");
+          const shouldBold = boldPrefixes.some((prefix) => safe.startsWith(prefix));
+          return shouldBold ? "<strong>" + safe + "</strong>" : safe;
+        }})
+        .join("<br>");
+    }}
+
+    function openResultModal(kind, htmlMessage) {{
+      const currentTexts = t[activeLanguage] || t.en;
+      const title = document.getElementById("modalTitle");
+      const body = document.getElementById("modalBody");
+      const modal = document.getElementById("resultModal");
+      title.className = "modal-head " + kind;
+      title.textContent =
+        kind === "ok" ? currentTexts.modalOk :
+        kind === "warn" ? currentTexts.modalWarn :
+        currentTexts.modalErr;
+      body.innerHTML = htmlMessage;
+      modal.classList.add("open");
+      modal.setAttribute("aria-hidden", "false");
+    }}
+
+    function closeResultModal() {{
+      const modal = document.getElementById("resultModal");
+      modal.classList.remove("open");
+      modal.setAttribute("aria-hidden", "true");
+    }}
+
+    applyLanguage(serverLang);
+
+    document.getElementById("modalCloseBtn").addEventListener("click", closeResultModal);
+    document.getElementById("resultModal").addEventListener("click", (e) => {{
+      if (e.target.id === "resultModal") closeResultModal();
+    }});
+
+    const initialResult = document.getElementById("result").textContent.trim();
+    if (initialResult) {{
+      openResultModal(
+        "{'ok' if result_status == 'booked' else 'warn' if result_status in {'overflow', 'active_booking'} else 'err'}",
+        formatResultHtml(
+          initialResult,
+          t[activeLanguage] || t.en,
+          "{'ok' if result_status == 'booked' else 'warn' if result_status in {'overflow', 'active_booking'} else 'err'}"
+        )
+      );
+    }}
 
     const checkinForm = document.getElementById("checkinForm");
     checkinForm.addEventListener("submit", async (e) => {{
       e.preventDefault();
       e.stopPropagation();
-      const forcedLangParam = lockLanguage ? `?lang=${{encodeURIComponent(serverLang)}}` : "";
-      const submitUrl = `/qr/checkin/submit${{forcedLangParam}}`;
+      const submitUrl = `/qr/checkin/submit?lang=${{encodeURIComponent(activeLanguage)}}`;
       const result = document.getElementById("result");
       const btn = document.getElementById("submitBtn");
       const currentTexts = t[activeLanguage] || t.en;
@@ -288,35 +449,19 @@ def render_qr_page_html(
         try {{
           data = await resp.json();
         }} catch {{
-          result.classList.add("err");
-          result.textContent = currentTexts.serverError;
+          openResultModal("err", formatResultHtml(currentTexts.serverError, currentTexts, "err"));
           btn.disabled = false;
           return;
         }}
-        const renderResultMessage = (message) => {{
-          const safe = String(message || currentTexts.done)
-            .replace(/&/g, "&amp;")
-            .replace(/</g, "&lt;")
-            .replace(/>/g, "&gt;");
-          const withBold = safe.replace(
-            /(Token ID:\s*[A-Za-z0-9\-]+\.?)/gi,
-            "<strong>$1</strong>"
-          );
-          result.innerHTML = withBold.replace(/\n/g, "<br>");
-        }};
         if (!resp.ok) {{
-          result.classList.add("err");
-          result.textContent = data.detail || data.message || currentTexts.requestFailed;
+          openResultModal("err", formatResultHtml(data.detail || data.message || currentTexts.requestFailed, currentTexts, "err"));
         }} else {{
           const status = data.status || "";
-          if (status === "booked") result.classList.add("ok");
-          else if (status === "overflow" || status === "active_booking") result.classList.add("warn");
-          else result.classList.add("err");
-          renderResultMessage(data.message || currentTexts.done);
+          const kind = status === "booked" ? "ok" : (status === "overflow" || status === "active_booking") ? "warn" : "err";
+          openResultModal(kind, formatResultHtml(data.message || currentTexts.done, currentTexts, kind));
         }}
       }} catch (_err) {{
-        result.classList.add("err");
-        result.textContent = currentTexts.submitFailed;
+        openResultModal("err", formatResultHtml(currentTexts.submitFailed, currentTexts, "err"));
       }} finally {{
         btn.disabled = false;
       }}

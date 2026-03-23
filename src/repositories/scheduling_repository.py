@@ -2,11 +2,9 @@ import json
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
 from typing import Optional
-from zoneinfo import ZoneInfo
-
-_IST = ZoneInfo("Asia/Kolkata")
 
 from src.db.connection import MySQLConfig, connect_mysql
+from src.timezone_utils import now_in_runtime_timezone
 
 
 @dataclass
@@ -135,14 +133,14 @@ class SchedulingRepository:
         return sorted(all_times)
 
     def _availability_cache_key(self, doctor_id: int, admin_id: Optional[int]) -> str:
-        today_key = date.today().isoformat().replace("-", "")
+        today_key = now_in_runtime_timezone().date().isoformat().replace("-", "")
         admin_key = str(int(admin_id)) if admin_id is not None else "na"
         return f"{self._cache_key_prefix}:avail:{admin_key}:{int(doctor_id)}:{today_key}"
 
     def invalidate_cached_availability(self, doctor_id: int, admin_id: Optional[int]) -> None:
         if not self.redis_client:
             return
-        today_key = date.today().isoformat().replace("-", "")
+        today_key = now_in_runtime_timezone().date().isoformat().replace("-", "")
         doctor = int(doctor_id)
         keys: list[str] = []
         if admin_id is not None:
@@ -270,10 +268,10 @@ class SchedulingRepository:
         values = [str(t or "").strip() for t in (times or []) if str(t or "").strip()]
         if not values:
             return []
-        today_iso = datetime.now(_IST).date().isoformat()
+        today_iso = now_in_runtime_timezone().date().isoformat()
         if slot_date != today_iso:
             return values
-        now_hhmm = datetime.now(_IST).strftime("%H:%M")
+        now_hhmm = now_in_runtime_timezone().strftime("%H:%M")
         visible: list[str] = []
         end_lookup = {str(k): str(v) for k, v in (end_times_by_start or {}).items() if str(k) and str(v)}
         for slot_start in values:
@@ -483,7 +481,7 @@ class SchedulingRepository:
             clinic_key = str(clinic.clinic_id)
             clinic_dates: list[str] = []
             for offset in range(day_horizon + 1):
-                day_value = (date.today() + timedelta(days=offset)).isoformat()
+                day_value = (now_in_runtime_timezone().date() + timedelta(days=offset)).isoformat()
                 windows = self._appointment_windows_for_date(
                     doctor_id=doctor_id,
                     clinic_id=clinic.clinic_id,
@@ -508,7 +506,7 @@ class SchedulingRepository:
             "doctor_id": int(doctor_id),
             "admin_id": int(admin_id) if admin_id is not None else None,
             "accept_days": day_horizon,
-            "generated_on": date.today().isoformat(),
+            "generated_on": now_in_runtime_timezone().date().isoformat(),
             "clinics": clinics_payload,
             "dates_by_clinic": dates_by_clinic,
             "times_by_clinic_date": times_by_clinic_date,
@@ -1274,7 +1272,7 @@ class SchedulingRepository:
         max_days = max(0, int(accept_days))
         available: list[str] = []
         for offset in range(max_days + 1):
-            d = (date.today() + timedelta(days=offset)).isoformat()
+            d = (now_in_runtime_timezone().date() + timedelta(days=offset)).isoformat()
             times = self._db_list_available_times_for_date(
                 doctor_id=doctor_id,
                 clinic_id=clinic_id,

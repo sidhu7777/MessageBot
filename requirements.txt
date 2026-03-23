@@ -11,3 +11,4 @@ openpyxl
 
 redis
 kafka-python
+qrcode

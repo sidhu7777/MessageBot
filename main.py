@@ -301,6 +301,10 @@ async def startup_validation() -> None:
     global _telegram_bot_username_runtime, _overflow_poll_thread, _cache_inv_thread
     if settings.enable_db_booking and booking_repository:
         try:
+            booking_repository.ensure_appointment_columns()
+        except Exception as exc:
+            LOGGER.warning("Appointment column ensure failed: %s", exc)
+        try:
             booking_repository.ensure_notification_schema()
         except Exception as exc:
             LOGGER.warning("Notification schema ensure failed: %s", exc)

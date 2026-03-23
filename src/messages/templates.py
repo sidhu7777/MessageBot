@@ -16,13 +16,13 @@ def _normalize_menu_spacing(text: str) -> str:
 
 def _emphasize_patient_id_line(text: str) -> str:
     emphasized = re.sub(
-        r"\*Patient ID:\*\s*([^\n]+)",
-        r"*Patient ID: \1*",
+        r"\*Appointment ID:\*\s*([^\n]+)",
+        r"*Appointment ID: \1*",
         text,
     )
     emphasized = re.sub(
-        r"\*रोगी आईडी:\*\s*([^\n]+)",
-        r"*रोगी आईडी: \1*",
+        r"\*अपॉइंटमेंट आईडी:\*\s*([^\n]+)",
+        r"*अपॉइंटमेंट आईडी: \1*",
         emphasized,
     )
     return emphasized
@@ -95,6 +95,15 @@ def get_message(response_language: str, key: str, **kwargs: object) -> str:
             "0. Go back\n"
             "Reply with 1, 2, or 0."
         ),
+        "menu_warning_today_unavailable": (
+            "No slots are available today for Dr. {doctor_name}.\n"
+            "The next available booking date is {next_available_date}.\n"
+            "If you want to continue booking for the next available dates within the allowed booking window, please choose one option below."
+        ),
+        "menu_warning_no_clinic_window": (
+            "No clinic is available for booking right now for Dr. {doctor_name}.\n"
+            "Please try booking again on {retry_date}."
+        ),
         "final_booking_check": "Do you want to book a medical appointment now? Reply YES or NO.",
         "non_scope_final": (
             "Sorry, I am a medical appointment assistant and can only help with booking or doctor availability.\n"
@@ -112,7 +121,7 @@ def get_message(response_language: str, key: str, **kwargs: object) -> str:
         "go_back_hint": "Press \"0\" to go back.",
         "existing_booking_found": (
             "You already have a booked appointment:\n"
-            "Patient ID: {appointment_id}\n"
+            "Appointment ID: {appointment_id}\n"
             "Clinic: {clinic_name}\n"
             "Date: {appointment_date}\n"
             "Time: {appointment_time}\n"
@@ -150,7 +159,7 @@ def get_message(response_language: str, key: str, **kwargs: object) -> str:
         "confirm_reschedule_prompt": "1. Confirm\n2. Change details\n\n0. Go back\nReply with 1, 2, or 0.",
         "reschedule_confirmed": (
             "Appointment rescheduled successfully.\n"
-            "*Patient ID: {appointment_id}*\n"
+            "*Appointment ID: {appointment_id}*\n"
             "Clinic: {clinic_name}\n"
             "Date: {appointment_date}\n"
             "Time: {appointment_time}"
@@ -261,7 +270,7 @@ def get_message(response_language: str, key: str, **kwargs: object) -> str:
         "reply_with_numbers": "Reply with {numbers}.",
         "not_confirmed": "No problem. Restarting booking flow. Please share the patient full name.",
         "completed_hint": "This appointment flow is complete. Send 'book appointment' to start another.",
-        "db_save_ok": "Appointment booked successfully.\n*Patient ID: {appointment_id}*",
+        "db_save_ok": "Appointment booked successfully.\n*Appointment ID: {appointment_id}*",
         "db_save_failed": "Booking confirmation received, but database save is pending manual follow-up.",
         "ended": "Understood. I have ended the process. Send 'book appointment' whenever you want to start again.",
         "cancelled_hint": "Process is ended. Send 'book appointment' to start a new booking.",
@@ -333,6 +342,15 @@ def get_message(response_language: str, key: str, **kwargs: object) -> str:
             "\"0\" दबाकर वापस जाएं।\n"
             "कृपया 1, 2, या 0 में उत्तर दें।"
         ),
+        "menu_warning_today_unavailable": (
+            "डॉ. {doctor_name} के लिए आज कोई स्लॉट उपलब्ध नहीं है।\n"
+            "अगली उपलब्ध बुकिंग तारीख {next_available_date} है।\n"
+            "यदि आप अनुमति प्राप्त बुकिंग अवधि के भीतर अगली उपलब्ध तारीखों के लिए बुकिंग जारी रखना चाहते हैं, तो नीचे एक विकल्प चुनें।"
+        ),
+        "menu_warning_no_clinic_window": (
+            "डॉ. {doctor_name} के लिए इस समय कोई क्लिनिक बुकिंग के लिए उपलब्ध नहीं है।\n"
+            "कृपया {retry_date} को फिर से बुकिंग करने का प्रयास करें।"
+        ),
         "ask_booking_for": (
             "यह अपॉइंटमेंट किसके लिए है?\n"
             "1. स्वयं के लिए\n"
@@ -344,7 +362,7 @@ def get_message(response_language: str, key: str, **kwargs: object) -> str:
         "go_back_hint": "\"0\" दबाकर वापस जाएं।",
         "existing_booking_found": (
             "आपकी एक बुक की हुई अपॉइंटमेंट पहले से मौजूद है:\n"
-            "रोगी आईडी: {appointment_id}\n"
+            "अपॉइंटमेंट आईडी: {appointment_id}\n"
             "क्लिनिक: {clinic_name}\n"
             "तारीख: {appointment_date}\n"
             "समय: {appointment_time}\n"
@@ -379,7 +397,7 @@ def get_message(response_language: str, key: str, **kwargs: object) -> str:
         "confirm_reschedule_prompt": "1. पुष्टि करें\n2. विवरण बदलें\n0. वापस जाएं\nकृपया 1, 2, या 0 में उत्तर दें।",
         "reschedule_confirmed": (
             "अपॉइंटमेंट सफलतापूर्वक पुनर्निर्धारित हो गई।\n"
-            "*रोगी आईडी: {appointment_id}*\n"
+            "*अपॉइंटमेंट आईडी: {appointment_id}*\n"
             "क्लिनिक: {clinic_name}\n"
             "तारीख: {appointment_date}\n"
             "समय: {appointment_time}"
@@ -474,7 +492,7 @@ def get_message(response_language: str, key: str, **kwargs: object) -> str:
         "reply_with_numbers": "कृपया {numbers} में उत्तर दें।",
         "not_confirmed": "कोई बात नहीं। प्रक्रिया दोबारा शुरू कर रहा हूँ। कृपया मरीज़ का पूरा नाम बताएं।",
         "completed_hint": "यह बुकिंग पूरी हो चुकी है। नई बुकिंग के लिए 'अपॉइंटमेंट बुक करें' भेजें।",
-        "db_save_ok": "अपॉइंटमेंट सफलतापूर्वक बुक हो गई।\n*रोगी आईडी: {appointment_id}*",
+        "db_save_ok": "अपॉइंटमेंट सफलतापूर्वक बुक हो गई।\n*अपॉइंटमेंट आईडी: {appointment_id}*",
         "db_save_failed": "बुकिंग की पुष्टि हो गई, लेकिन डेटाबेस सेव लंबित है। मैनुअल फ़ॉलो-अप आवश्यक है।",
         "ended": "ठीक है, प्रक्रिया समाप्त कर दी गई है। दोबारा शुरू करने के लिए 'अपॉइंटमेंट बुक करें' भेजें।",
         "cancelled_hint": "प्रक्रिया समाप्त है। नई बुकिंग के लिए 'अपॉइंटमेंट बुक करें' भेजें।",
@@ -553,9 +571,18 @@ def get_message(response_language: str, key: str, **kwargs: object) -> str:
             "0. Go back\n"
             "1, 2, ya 0 se reply kariye."
         ),
+        "menu_warning_today_unavailable": (
+            "Dr. {doctor_name} ke liye aaj koi slot available nahi hai.\n"
+            "Next available booking date {next_available_date} hai.\n"
+            "Agar aap allowed booking window ke andar next available dates ke liye booking continue karna chahte hain, to neeche ek option choose kariye."
+        ),
+        "menu_warning_no_clinic_window": (
+            "Dr. {doctor_name} ke liye abhi koi clinic booking ke liye available nahi hai.\n"
+            "Please {retry_date} ko phir se booking try kariye."
+        ),
         "existing_booking_found": (
             "Aapki ek booked appointment pehle se maujood hai:\n"
-            "Patient ID: {appointment_id}\n"
+            "Appointment ID: {appointment_id}\n"
             "Clinic: {clinic_name}\n"
             "Date: {appointment_date}\n"
             "Time: {appointment_time}\n"
@@ -593,7 +620,7 @@ def get_message(response_language: str, key: str, **kwargs: object) -> str:
         "confirm_reschedule_prompt": "1. Confirm kariye\n2. Details badliye\n0. Go back\nReply with 1, 2, or 0.",
         "reschedule_confirmed": (
             "Appointment successfully reschedule ho gaya.\n"
-            "*Patient ID: {appointment_id}*\n"
+            "*Appointment ID: {appointment_id}*\n"
             "Clinic: {clinic_name}\n"
             "Date: {appointment_date}\n"
             "Time: {appointment_time}"
@@ -695,7 +722,7 @@ def get_message(response_language: str, key: str, **kwargs: object) -> str:
         ),
         "not_confirmed": "No problem. Booking flow restart kar raha hoon. Please patient ka full name share kariye.",
         "completed_hint": "Yeh appointment flow complete ho chuka hai. Nayi booking ke liye 'book appointment' bhejiye.",
-        "db_save_ok": "Appointment successfully book ho gaya.\n*Patient ID: {appointment_id}*",
+        "db_save_ok": "Appointment successfully book ho gaya.\n*Appointment ID: {appointment_id}*",
         "db_save_failed": "Booking confirm ho gayi, lekin database save pending hai. Manual follow-up zaroori hai.",
         "ended": "Theek hai, process end kar diya gaya hai. Dobara start karne ke liye 'book appointment' bhejiye.",
         "cancelled_hint": "Process ended hai. Nayi booking ke liye 'book appointment' bhejiye.",
@@ -787,9 +814,10 @@ _QR_MESSAGES = {
         "qr_enter_valid_phone": "Please enter a valid phone number.",
         "qr_doctor_admin_missing": "Doctor/admin mapping is not configured.",
         "qr_active_booking": "You already have an active booking (#{booking_number}){slot_suffix}",
-        "qr_confirmed_token": "Appointment confirmed.\nToken ID: {token_id}.",
+        "qr_confirmed_token": "Appointment confirmed.\nAppointment ID: {token_id}.",
         "qr_estimated_time": "Estimated Time: {estimated_time}.",
         "qr_unable_confirm": "Unable to confirm QR booking: {error}",
+        "qr_schedule_unavailable": "Today the doctor has no scheduled appointments for this clinic.",
     },
     "hi": {
         "qr_not_configured": "<h3>QR चेक-इन कॉन्फ़िगर नहीं है।</h3>",
@@ -806,9 +834,10 @@ _QR_MESSAGES = {
         "qr_enter_valid_phone": "कृपया वैध फोन नंबर दर्ज करें।",
         "qr_doctor_admin_missing": "डॉक्टर/एडमिन मैपिंग कॉन्फ़िगर नहीं है।",
         "qr_active_booking": "आपकी एक सक्रिय बुकिंग पहले से है (#{booking_number}){slot_suffix}",
-        "qr_confirmed_token": "अपॉइंटमेंट कन्फर्म हो गई।\nToken ID: {token_id}.",
+        "qr_confirmed_token": "अपॉइंटमेंट कन्फर्म हो गई।\nअपॉइंटमेंट आईडी: {token_id}.",
         "qr_estimated_time": "अनुमानित समय: {estimated_time}.",
         "qr_unable_confirm": "QR बुकिंग कन्फर्म नहीं हो पाई: {error}",
+        "qr_schedule_unavailable": "आज इस क्लिनिक के लिए डॉक्टर की कोई निर्धारित अपॉइंटमेंट उपलब्ध नहीं है।",
     },
     "hinglish": {
         "qr_not_configured": "<h3>QR check-in configure nahi hai.</h3>",
@@ -825,9 +854,10 @@ _QR_MESSAGES = {
         "qr_enter_valid_phone": "Please valid phone number enter kariye.",
         "qr_doctor_admin_missing": "Doctor/admin mapping configure nahi hai.",
         "qr_active_booking": "Aapki ek active booking pehle se hai (#{booking_number}){slot_suffix}",
-        "qr_confirmed_token": "Appointment confirm ho gayi.\nToken ID: {token_id}.",
+        "qr_confirmed_token": "Appointment confirm ho gayi.\nAppointment ID: {token_id}.",
         "qr_estimated_time": "Estimated Time: {estimated_time}.",
         "qr_unable_confirm": "QR booking confirm nahi ho payi: {error}",
+        "qr_schedule_unavailable": "Aaj is clinic ke liye doctor ki koi scheduled appointment available nahi hai.",
     },
 }
 

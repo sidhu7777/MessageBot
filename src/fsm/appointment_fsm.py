@@ -17,6 +17,7 @@ from src.llm.tasks import (
 )
 from src.messages.templates import get_message
 from src.runtime.account_scope import parse_scoped_user_id
+from src.timezone_utils import now_in_runtime_timezone
 from src.fsm.handlers.booking import (
     handle_ask_booking_for_state,
     handle_ask_clinic_state,
@@ -405,7 +406,7 @@ class AppointmentFSM:
     def _handle_go_back(self) -> Optional[str]:
         if self.state == "ASK_BOOKING_FOR":
             self.state = "INIT"
-            return self._msg("clarify_intent")
+            return self._main_menu_prompt()
         if self.state == "ASK_NAME":
             self.state = "ASK_BOOKING_FOR"
             return self._with_back(self._msg("ask_booking_for"), option_count=2)
@@ -435,7 +436,7 @@ class AppointmentFSM:
         if self.state == "ASK_AVAILABILITY_DATE":
             self.state = "INIT"
             self.availability_date_options_cache = []
-            return self._msg("clarify_intent")
+            return self._main_menu_prompt()
         if self.state == "ASK_AVAILABILITY_DETAILS":
             self.state = "ASK_AVAILABILITY_DATE"
             self.context.availability_date = None
@@ -488,6 +489,56 @@ class AppointmentFSM:
                 patient_name=self.known_patient_name,
             )
         return self._msg("language_selection_new_patient", doctor_name=doctor_name)
+
+    def _main_menu_warning(self) -> tuple[str, str]:
+        if not self.scheduling_repository or not self.doctor_id:
+            return "", ""
+        try:
+            snapshot = self.scheduling_repository.get_availability_snapshot(
+                doctor_id=self.doctor_id,
+                admin_id=self.admin_id,
+            )
+        except Exception:
+            return "", ""
+        dates_by_clinic = snapshot.get("dates_by_clinic") or {}
+        unique_dates = sorted(
+            {
+                str(slot_date).strip()
+                for clinic_dates in dates_by_clinic.values()
+                for slot_date in (clinic_dates or [])
+                if str(slot_date).strip()
+            }
+        )
+        if not unique_dates:
+            retry_date = (now_in_runtime_timezone().date() + timedelta(days=1)).isoformat()
+            return (
+                "no_clinic_window",
+                self._msg(
+                    "menu_warning_no_clinic_window",
+                    doctor_name=self._doctor_display_name(),
+                    retry_date=retry_date,
+                ),
+            )
+        today_iso = now_in_runtime_timezone().date().isoformat()
+        if today_iso in unique_dates:
+            return "", ""
+        return (
+            "today_unavailable",
+            self._msg(
+                "menu_warning_today_unavailable",
+                doctor_name=self._doctor_display_name(),
+                next_available_date=unique_dates[0],
+            ),
+        )
+
+    def _main_menu_prompt(self) -> str:
+        warning_kind, warning = self._main_menu_warning()
+        menu = self._msg("clarify_intent")
+        if not warning:
+            return menu
+        if warning_kind == "no_clinic_window":
+            return warning
+        return f"{warning}\n\n{menu}"
 
     def _doctor_display_name(self) -> str:
         self._ensure_actor_defaults()

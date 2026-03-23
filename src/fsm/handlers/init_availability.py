@@ -22,7 +22,7 @@ if TYPE_CHECKING:
 
 def handle_init_state(fsm: "AppointmentFSM", text: str, lower: str) -> str:
     def _clarify_options_only() -> str:
-        return fsm._msg("clarify_intent")
+        return fsm._main_menu_prompt()
 
     def _booking_start_reply() -> str:
         return (

@@ -4,9 +4,15 @@ from typing import Any, Callable
 
 from fastapi import APIRouter, Request
 from fastapi.concurrency import run_in_threadpool
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, Response
 
 from src.messages.templates import get_qr_message
+from src.qr.generator_service import (
+    build_download_filename,
+    build_qr_booking_url,
+    build_qr_svg,
+    svg_to_data_url,
+)
 from src.qr.page_renderer import render_qr_page_html
 
 
@@ -223,6 +229,116 @@ def register_qr_routes(
                 "response_language": resolved_lang,
             },
             status_code=status_code,
+        )
+
+    @router.post("/qr/generate")
+    async def qr_generate(request: Request):
+        payload: dict[str, object] = {}
+        try:
+            payload = await request.json()
+        except Exception:
+            try:
+                form = await request.form()
+                payload = dict(form)
+            except Exception:
+                payload = {}
+
+        resolved_lang, _ = _resolve_effective_language(request, payload)
+        try:
+            doctor_raw = payload.get("doctor_id") or request.query_params.get("doctor_id")
+            clinic_raw = payload.get("clinic_id") or request.query_params.get("clinic_id")
+            doctor_id = int(doctor_raw)
+            clinic_id = int(clinic_raw)
+        except Exception:
+            msg = get_qr_message(resolved_lang, "qr_invalid_ids")
+            return JSONResponse({"detail": msg, "message": msg}, status_code=400)
+
+        doctor_name, clinic_name = "Doctor", "Clinic"
+        if qr_checkin_service:
+            try:
+                doctor_name, clinic_name = await asyncio.wait_for(
+                    run_in_threadpool(
+                        qr_checkin_service.resolve_doctor_and_clinic,
+                        doctor_id=doctor_id,
+                        clinic_id=clinic_id,
+                    ),
+                    timeout=qr_page_lookup_timeout_seconds,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "QR generator name lookup fallback doctor_id=%s clinic_id=%s error=%s",
+                    doctor_id,
+                    clinic_id,
+                    exc,
+                )
+
+        booking_url = build_qr_booking_url(
+            base_url=str(request.base_url),
+            doctor_id=doctor_id,
+            clinic_id=clinic_id,
+        )
+        svg_markup = await run_in_threadpool(build_qr_svg, url=booking_url)
+        filename = build_download_filename(
+            doctor_name=doctor_name,
+            clinic_name=clinic_name,
+            doctor_id=doctor_id,
+            clinic_id=clinic_id,
+        )
+        return JSONResponse(
+            {
+                "doctor_id": doctor_id,
+                "clinic_id": clinic_id,
+                "doctor_name": doctor_name,
+                "clinic_name": clinic_name,
+                "mime_type": "image/svg+xml",
+                "filename": filename,
+                "preview_data_url": svg_to_data_url(svg_markup),
+                "download_path": f"/qr/generate/download?doctor_id={doctor_id}&clinic_id={clinic_id}",
+            }
+        )
+
+    @router.get("/qr/generate/download")
+    async def qr_generate_download(request: Request, doctor_id: int | None = None, clinic_id: int | None = None):
+        resolved_lang, _ = _resolve_effective_language(request, {})
+        if not doctor_id or not clinic_id:
+            msg = get_qr_message(resolved_lang, "qr_invalid_ids")
+            return JSONResponse({"detail": msg, "message": msg}, status_code=400)
+
+        doctor_name, clinic_name = "Doctor", "Clinic"
+        if qr_checkin_service:
+            try:
+                doctor_name, clinic_name = await asyncio.wait_for(
+                    run_in_threadpool(
+                        qr_checkin_service.resolve_doctor_and_clinic,
+                        doctor_id=doctor_id,
+                        clinic_id=clinic_id,
+                    ),
+                    timeout=qr_page_lookup_timeout_seconds,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "QR generator download name lookup fallback doctor_id=%s clinic_id=%s error=%s",
+                    doctor_id,
+                    clinic_id,
+                    exc,
+                )
+
+        booking_url = build_qr_booking_url(
+            base_url=str(request.base_url),
+            doctor_id=int(doctor_id),
+            clinic_id=int(clinic_id),
+        )
+        svg_markup = await run_in_threadpool(build_qr_svg, url=booking_url)
+        filename = build_download_filename(
+            doctor_name=doctor_name,
+            clinic_name=clinic_name,
+            doctor_id=int(doctor_id),
+            clinic_id=int(clinic_id),
+        )
+        return Response(
+            content=svg_markup,
+            media_type="image/svg+xml",
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
         )
 
     app.include_router(router)

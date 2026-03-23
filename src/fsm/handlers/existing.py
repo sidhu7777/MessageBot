@@ -68,7 +68,7 @@ def handle_existing_booking_action_state(fsm: "AppointmentFSM", lower: str) -> s
             fsm._reset_existing_booking_flags()
             fsm.existing_appointment_id = None
             fsm.state = "INIT"
-            return fsm._respond(fsm._welcome_greeting() + "\n" + fsm._msg("clarify_intent"), allow_polish=False)
+            return fsm._respond(fsm._welcome_greeting() + "\n" + fsm._main_menu_prompt(), allow_polish=False)
         lines = [fsm._msg("existing_booking_list_header")]
         for idx, row in enumerate(rows, start=1):
             display_number = row.get("booking_number")
@@ -82,7 +82,7 @@ def handle_existing_booking_action_state(fsm: "AppointmentFSM", lower: str) -> s
         return fsm._respond("\n".join(lines))
     if normalized in {"0", "back", "go back"}:
         fsm.state = "INIT"
-        return fsm._respond(fsm._welcome_greeting() + "\n" + fsm._msg("clarify_intent"), allow_polish=False)
+        return fsm._respond(fsm._welcome_greeting() + "\n" + fsm._main_menu_prompt(), allow_polish=False)
     return fsm._respond(fsm._msg("existing_booking_choice_again"))
 
 

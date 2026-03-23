@@ -460,7 +460,12 @@ class ChannelDelivery:
     def _format_telegram_text(body: str) -> str:
         escaped = html.escape(body or "")
         escaped = re.sub(
-            r"\*(Token ID:\s*[^*\n]+)\*",
+            r"\*(Appointment ID:\s*[^*\n]+)\*",
+            lambda match: f"<b>{match.group(1)}</b>",
+            escaped,
+        )
+        escaped = re.sub(
+            r"\*(अपॉइंटमेंट आईडी:\s*[^*\n]+)\*",
             lambda match: f"<b>{match.group(1)}</b>",
             escaped,
         )
@@ -469,13 +474,8 @@ class ChannelDelivery:
             lambda match: f"<b>{match.group(1)}</b>",
             escaped,
         )
-        escaped = re.sub(
-            r"\*(à¤°à¥‹à¤—à¥€ à¤†à¤ˆà¤¡à¥€:\s*[^*\n]+)\*",
-            lambda match: f"<b>{match.group(1)}</b>",
-            escaped,
-        )
         return re.sub(
-            r"\*(Token ID:|Patient ID:|रोगी आईडी:)\*",
+            r"\*(Appointment ID:|Patient ID:|अपॉइंटमेंट आईडी:)\*",
             lambda match: f"<b>{match.group(1)}</b>",
             escaped,
         )

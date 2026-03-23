@@ -66,6 +66,11 @@ def list_due_doctor_reminders(
     try:
         horizon_minutes = max(1, int(lookahead_minutes))
         appointment_table = repo._appointment_table()
+        booking_select = (
+            "COALESCE(a.booking_id, p.booking_id)"
+            if repo._column_exists(appointment_table, "booking_id")
+            else "p.booking_id"
+        )
         doctor_columns = repo._table_columns("doctors")
         whatsapp_col = "whatsapp_number" if "whatsapp_number" in doctor_columns else None
         telegram_col = None
@@ -95,7 +100,7 @@ def list_due_doctor_reminders(
                     DATE_FORMAT(a.appointment_date, '%Y-%m-%d') AS slot_date,
                     TIME_FORMAT(a.start_time, '%H:%i') AS slot_time,
                     COALESCE(a.status, '') AS status,
-                    p.booking_id AS booking_number,
+                    {booking_select} AS booking_number,
                     dcs.schedule_id AS schedule_id,
                     TIME_FORMAT(
                       COALESCE(TIME(STR_TO_DATE(dcs.start_time, '%h:%i %p')), TIME(STR_TO_DATE(dcs.start_time, '%H:%i')), TIME(dcs.start_time)),
@@ -174,7 +179,7 @@ def list_due_doctor_reminders(
                 DATE_FORMAT(s.slot_date, '%Y-%m-%d') AS slot_date,
                 TIME_FORMAT(s.slot_time, '%H:%i') AS slot_time,
                 COALESCE(a.status, '') AS status,
-                p.booking_id AS booking_number,
+                {booking_select} AS booking_number,
                 s.schedule_id AS schedule_id,
                 TIME_FORMAT(dcs.start_time, '%H:%i') AS schedule_start_time,
                 TIME_FORMAT(dcs.end_time, '%H:%i') AS schedule_end_time

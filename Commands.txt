@@ -30,3 +30,41 @@ KEYS msgbot:avail:*
   -H 'Authorization: Bearer EAAZA4z74FThQBQ2SCtODvrGXUh41MiM5KIHSLrz5ySeFxKZA81y8TcZAgBCWzO41PNMfpcGmc4ZBV990nBGsD7sTlq9xoZCJriap9VwZBxdKA88tC4UrRR8KUZBPqf9iqohEZAqlTBD3VsX7bqcSBDWCq7jqZA7NFiHzcExdkC6hsCxwZCKnYqbDTf7uTJwSk7iXiDZChDRxZAr3RXi4uh9wETBXyJJsTYVr5J71HVJHsspDs0yiJZC3eTCnXqHbO0JM4aGeSiphHyIH65wjBkp5DTrSGIgZDZD' `
   -H 'Content-Type: application/json' `
   -d '{ \"messaging_product\": \"whatsapp\", \"to\": \"\", \"type\": \"template\", \"template\": { \"name\": \"hello_world\", \"language\": { \"code\": \"en_US\" } } }'
+
+
+
+### channel  INSERT command
+
+
+INSERT INTO channel_accounts
+(admin_id, channel, provider, account_label, sender_identity, webhook_path_key, credential_json_enc, status, is_primary)
+VALUES
+(<ADMIN_ID>, 'telegram', 'telegram', '<LABEL>', '<BOT_USERNAME>', '<WEBHOOK_KEY>', '{"telegram_bot_token":"<BOT_TOKEN>"}', 'ACTIVE', 1);
+
+
+INSERT INTO channel_accounts
+(admin_id, channel, provider, account_label, sender_identity, webhook_path_key, credential_json_enc, status, is_primary)
+VALUES
+(1, 'telegram', 'telegram', 'Doctor 5 Telegram Bot', 'DrSanjayVinayakBot', 'doctor_id_5', '{"telegram_bot_token":"8055558861:AAGFHv8l9xIJQs5t3l7gYFbXWNsQXjnm-1w"}', 'ACTIVE', 1);
+
+
+
+
+### blinding query 
+
+INSERT INTO doctor_channel_bindings
+(doctor_id, channel_account_id, status, is_primary)
+VALUES
+(<DOCTOR_ID>, <CHANNEL_ACCOUNT_ID>, 'ACTIVE', 1);
+
+
+INSERT INTO doctor_channel_bindings
+(doctor_id, channel_account_id, status, is_primary)
+VALUES
+(5, 2, 'ACTIVE', 1);
+
+
+
+# to generate the qr code 
+
+docker exec -it message-bot-app python tests/live_qr_generate_preview.py --base-url https://msgbot.duckdns.org --doctor-id 1 --clinic-id 5

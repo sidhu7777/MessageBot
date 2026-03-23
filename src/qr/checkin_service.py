@@ -6,6 +6,7 @@ from types import SimpleNamespace
 from typing import Any, Optional
 
 from src.messages.templates import get_qr_message
+from src.timezone_utils import now_in_runtime_timezone
 
 @dataclass
 class QrCheckinResult:
@@ -69,9 +70,9 @@ class QrCheckinService:
                 "hinglish": ".",
             },
             "appointment_confirmed": {
-                "en": "Appointment confirmed. Token ID: {booking_number}{suffix}",
-                "hi": "अपॉइंटमेंट कन्फर्म हो गई। Token ID: {booking_number}{suffix}",
-                "hinglish": "Appointment confirm ho gayi. Token ID: {booking_number}{suffix}",
+                "en": "Appointment confirmed. Appointment ID: {booking_number}{suffix}",
+                "hi": "अपॉइंटमेंट कन्फर्म हो गई। अपॉइंटमेंट आईडी: {booking_number}{suffix}",
+                "hinglish": "Appointment confirm ho gayi. Appointment ID: {booking_number}{suffix}",
             },
             "appointment_confirmed_suffix": {
                 "en": " on {slot_date} {slot_time}.",
@@ -207,8 +208,13 @@ class QrCheckinService:
         cur = conn.cursor(dictionary=True)
         try:
             appointment_table = self.booking_repository._appointment_table()
+            booking_select = (
+                "COALESCE(a.booking_id, p.booking_id)"
+                if self.booking_repository._column_exists(appointment_table, "booking_id")
+                else "p.booking_id"
+            )
             phone_expr = self.booking_repository._normalized_phone_sql_expr("p.phone")
-            today = datetime.now().date().isoformat()
+            today = now_in_runtime_timezone().date().isoformat()
             params: list[object] = [
                 admin_id,
                 doctor_id,
@@ -225,7 +231,7 @@ class QrCheckinService:
                     f"""
                     SELECT
                         a.appointment_id,
-                        p.booking_id AS booking_number,
+                        {booking_select} AS booking_number,
                         DATE_FORMAT(a.appointment_date, '%Y-%m-%d') AS slot_date,
                         TIME_FORMAT(a.start_time, '%h:%i %p') AS slot_time
                     FROM {appointment_table} a
@@ -246,7 +252,7 @@ class QrCheckinService:
                     f"""
                     SELECT
                         a.appointment_id,
-                        p.booking_id AS booking_number,
+                        {booking_select} AS booking_number,
                         DATE_FORMAT(s.slot_date, '%Y-%m-%d') AS slot_date,
                         TIME_FORMAT(s.slot_time, '%h:%i %p') AS slot_time
                     FROM {appointment_table} a
@@ -269,7 +275,7 @@ class QrCheckinService:
             conn.close()
 
     def _first_available_slot(self, doctor_id: int, clinic_id: int, admin_id: int) -> tuple[str, str]:
-        slot_date = datetime.now().date().isoformat()
+        slot_date = now_in_runtime_timezone().date().isoformat()
         times = self.scheduling_repository.list_available_times(
             doctor_id=doctor_id,
             clinic_id=clinic_id,
@@ -292,11 +298,12 @@ class QrCheckinService:
     ) -> tuple[int, int, str, str]:
         conn = self.booking_repository._connect()
         cur = conn.cursor(dictionary=True)
-        today = datetime.now().date()
+        today = now_in_runtime_timezone().date()
         try:
             conn.start_transaction()
             patient_columns = self.booking_repository._table_columns("patients")
             appointment_table = self.booking_repository._appointment_table()
+            appointment_columns = self.booking_repository._table_columns(appointment_table)
             if not self.booking_repository._use_appointment_mode():
                 conn.rollback()
                 raise RuntimeError("QR overflow booking currently requires appointment-mode schema.")
@@ -406,30 +413,53 @@ class QrCheckinService:
                 )
                 appt_row = cur.fetchone()
                 if not appt_row:
-                    cur.execute(
-                        f"""
-                        INSERT INTO {appointment_table}
-                        (patient_id, doctor_id, clinic_id, admin_id, status, appointment_date, start_time, end_time)
-                        VALUES (%s, %s, %s, %s, 'BOOKED', %s, %s, %s)
-                        """,
-                        (patient_id, doctor_id, clinic_id, admin_id, today, start_time, end_time),
-                    )
+                    if "booking_id" in appointment_columns:
+                        cur.execute(
+                            f"""
+                            INSERT INTO {appointment_table}
+                            (patient_id, doctor_id, clinic_id, admin_id, status, appointment_date, start_time, end_time, booking_id)
+                            VALUES (%s, %s, %s, %s, 'BOOKED', %s, %s, %s, %s)
+                            """,
+                            (patient_id, doctor_id, clinic_id, admin_id, today, start_time, end_time, next_booking_id),
+                        )
+                    else:
+                        cur.execute(
+                            f"""
+                            INSERT INTO {appointment_table}
+                            (patient_id, doctor_id, clinic_id, admin_id, status, appointment_date, start_time, end_time)
+                            VALUES (%s, %s, %s, %s, 'BOOKED', %s, %s, %s)
+                            """,
+                            (patient_id, doctor_id, clinic_id, admin_id, today, start_time, end_time),
+                        )
                     appointment_id = int(cur.lastrowid)
                     break
 
                 appt_id = int(appt_row["appointment_id"])
                 appt_status = str(appt_row.get("status") or "").upper()
                 if appt_status in {"CANCELLED", "COMPLETED"}:
-                    cur.execute(
-                        f"""
-                        UPDATE {appointment_table}
-                        SET patient_id = %s,
-                            status = 'BOOKED',
-                            end_time = %s
-                        WHERE appointment_id = %s
-                        """,
-                        (patient_id, end_time, appt_id),
-                    )
+                    if "booking_id" in appointment_columns:
+                        cur.execute(
+                            f"""
+                            UPDATE {appointment_table}
+                            SET patient_id = %s,
+                                status = 'BOOKED',
+                                end_time = %s,
+                                booking_id = %s
+                            WHERE appointment_id = %s
+                            """,
+                            (patient_id, end_time, next_booking_id, appt_id),
+                        )
+                    else:
+                        cur.execute(
+                            f"""
+                            UPDATE {appointment_table}
+                            SET patient_id = %s,
+                                status = 'BOOKED',
+                                end_time = %s
+                            WHERE appointment_id = %s
+                            """,
+                            (patient_id, end_time, appt_id),
+                        )
                     appointment_id = appt_id
                     break
 
@@ -467,7 +497,7 @@ class QrCheckinService:
     ) -> tuple[int, str]:
         conn = self.booking_repository._connect()
         cur = conn.cursor(dictionary=True)
-        today = datetime.now().date()
+        today = now_in_runtime_timezone().date()
         try:
             conn.start_transaction()
             cur.execute(
@@ -508,7 +538,7 @@ class QrCheckinService:
             )
             max_pos_row = cur.fetchone() or {}
             next_pos = int(max_pos_row.get("max_pos") or 0) + 1
-            estimate_dt = datetime.now() + timedelta(minutes=max(10, next_pos * 8))
+            estimate_dt = now_in_runtime_timezone() + timedelta(minutes=max(10, next_pos * 8))
             cur.execute(
                 """
                 INSERT INTO qr_walkin_queue
@@ -657,9 +687,12 @@ class QrCheckinService:
                 phone=normalized_phone,
             )
         except Exception as exc:
+            error_text = str(exc)
+            if error_text == "Doctor schedule is not configured for this clinic.":
+                error_text = get_qr_message(language, "qr_schedule_unavailable")
             return QrCheckinResult(
                 status="error",
-                message=get_qr_message(language, "qr_unable_confirm", error=str(exc)),
+                message=get_qr_message(language, "qr_unable_confirm", error=error_text),
             )
         overflow_message = get_qr_message(language, "qr_confirmed_token", token_id=booking_number)
         if overflow_time:

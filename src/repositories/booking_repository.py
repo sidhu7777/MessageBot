@@ -3,11 +3,9 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, date, time
 import threading
 from typing import Optional
-from zoneinfo import ZoneInfo
-
-_IST = ZoneInfo("Asia/Kolkata")
 
 from src.db.connection import MySQLConfig, connect_mysql
+from src.timezone_utils import now_in_runtime_timezone
 from src.runtime.account_scope import parse_scoped_user_id
 from src.repositories.notification_ops import (
     claim_pending_notification_events as _claim_pending_notification_events,
@@ -248,7 +246,7 @@ class BookingRepository:
         )
 
     def ensure_appointment_columns(self) -> None:
-        """Ensure appointment table has cancelled_by and rescheduled_by columns."""
+        """Ensure appointment table has runtime-required audit and booking columns."""
         conn = self._connect()
         cur = conn.cursor()
         try:
@@ -268,6 +266,8 @@ class BookingRepository:
                 cur.execute(f"ALTER TABLE {appointment_table} ADD COLUMN cancelled_by VARCHAR(20) NULL")
             if "rescheduled_by" not in cols:
                 cur.execute(f"ALTER TABLE {appointment_table} ADD COLUMN rescheduled_by VARCHAR(20) NULL")
+            if "booking_id" not in cols:
+                cur.execute(f"ALTER TABLE {appointment_table} ADD COLUMN booking_id INT NULL")
 
             conn.commit()
             self._invalidate_table_columns_cache(appointment_table)
@@ -478,7 +478,7 @@ class BookingRepository:
         except ValueError:
             return True
 
-        today = datetime.now(_IST).date()
+        today = now_in_runtime_timezone().date()
         if slot_date_val > today:
             return True
         if slot_date_val < today:
@@ -487,7 +487,7 @@ class BookingRepository:
         slot_time_val = BookingRepository._parse_time_value(slot_time_raw)
         if slot_time_val is None:
             return True
-        now_time = datetime.now(_IST).time().replace(second=0, microsecond=0)
+        now_time = now_in_runtime_timezone().time().replace(second=0, microsecond=0)
         return slot_time_val >= now_time
 
     def default_admin_id(self) -> Optional[int]:
@@ -853,4 +853,3 @@ class BookingRepository:
 
     def mark_reminder_failed(self, *, queue_id: int, error: str) -> None:
         _mark_reminder_failed(self, queue_id=queue_id, error=error)
-
