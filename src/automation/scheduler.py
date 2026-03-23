@@ -270,6 +270,22 @@ class AutomationScheduler:
                 any_sent = False
                 for to_number in destinations:
                     channel = "telegram" if to_number.startswith("telegram:") else "whatsapp"
+                    scoped_to_number = to_number
+                    channel_account_id: Optional[int] = None
+                    doctor_id = getattr(rows_sorted[0], "doctor_id", None)
+                    if (
+                        self._resolve_channel_account_id_fn
+                        and doctor_id is not None
+                        and channel in {"telegram", "whatsapp"}
+                    ):
+                        try:
+                            resolved = self._resolve_channel_account_id_fn(channel, int(doctor_id))
+                            if resolved is not None:
+                                channel_account_id = int(resolved)
+                                scoped_to_number = build_scoped_user_id(channel_account_id, to_number)
+                        except Exception:
+                            channel_account_id = None
+                            scoped_to_number = to_number
                     dedup_key = (
                         f"doctor-schedule-reminder:{slot_date}:{schedule_id}:"
                         f"{start_time}:{end_time}:{lead_minutes}min:{channel}:{to_number}"
@@ -323,10 +339,10 @@ class AutomationScheduler:
                             end_time=end_time,
                         )
                         if self._send_document_fn:
-                            self._send_document_fn(to_number, report_path, summary_text)
+                            self._send_document_fn(scoped_to_number, report_path, summary_text)
                         else:
                             self._send_message_fn(
-                                to_number,
+                                scoped_to_number,
                                 summary_text + "\nReport generated: " + os.path.basename(report_path),
                             )
                         # ── Mark SENT in DB + flat file ──────────────────────

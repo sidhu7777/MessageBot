@@ -15,6 +15,7 @@ from dotenv import load_dotenv
 
 from src.automation import AutomationScheduler
 from src.api.qr_routes import register_qr_routes
+from src.api.whatsapp_web_routes import register_whatsapp_web_routes
 from src.api.webhooks import register_webhook_routes
 from src.config import load_settings
 from src.db_store import (
@@ -427,6 +428,13 @@ register_qr_routes(
     qr_checkin_service=qr_checkin_service,
     logger=LOGGER,
     log_event_fn=log_event,
+)
+
+register_whatsapp_web_routes(
+    app,
+    booking_repository=booking_repository,
+    scheduling_repository=scheduling_repository,
+    logger=LOGGER,
 )
 
 
