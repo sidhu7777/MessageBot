@@ -137,7 +137,8 @@ def get_message(response_language: str, key: str, **kwargs: object) -> str:
         "existing_booking_pick_invalid": "Please choose a valid booking option number.",
         "max_active_bookings_reached": "For this number, maximum 2 active bookings are allowed. Please cancel/reschedule an existing booking first.",
         "max_active_bookings_actions": (
-            "Choose one option:\n"
+            "You have reached the maximum active booking limit for this number.\n"
+            "Please choose one option below:\n"
             "1. Cancel an existing appointment\n"
             "2. Reschedule an existing appointment\n"
             "Press \"0\" to go back."
@@ -167,6 +168,8 @@ def get_message(response_language: str, key: str, **kwargs: object) -> str:
         "reschedule_failed": "Reschedule failed because the selected slot is not available now. Please try another date/time.",
         "existing_booking_cancel_failed": "I could not cancel the existing appointment right now. Please try again later.",
         "invalid_name": "Please provide a valid name. Example: Vineeth Raja Banala",
+        "other_person_name_must_differ": "Please use a different name other than self when booking for another person.",
+        "other_active_booking_exists": "This other person already has an active appointment. Please cancel or complete the existing booking first.",
         "name_ack": "Name noted: {name}.",
         "ask_appointment_mode": (
             "Please choose appointment type:\n"
@@ -378,7 +381,8 @@ def get_message(response_language: str, key: str, **kwargs: object) -> str:
         "existing_booking_cancel_only_done": "ठीक है। आपकी अपॉइंटमेंट रद्द कर दी गई है।",
         "existing_booking_reschedule_start": "ठीक है। आपकी पुरानी क्लिनिक: {clinic_name}। आप वही या दूसरी क्लिनिक चुनकर पुनर्निर्धारित कर सकते हैं।",
         "max_active_bookings_actions": (
-            "एक विकल्प चुनें:\n"
+            "आपने इस नंबर के लिए अधिकतम सक्रिय बुकिंग सीमा प्राप्त कर ली है।\n"
+            "कृपया नीचे एक विकल्प चुनें:\n"
             "1. किसी पुरानी अपॉइंटमेंट को रद्द करें\n"
             "2. किसी पुरानी अपॉइंटमेंट को पुनर्निर्धारित करें\n"
             "0. वापस जाएं"
@@ -405,6 +409,8 @@ def get_message(response_language: str, key: str, **kwargs: object) -> str:
         "reschedule_failed": "पुनर्निर्धारण असफल रहा क्योंकि चुना गया स्लॉट अभी उपलब्ध नहीं है। कृपया दूसरी तारीख/समय चुनें।",
         "existing_booking_cancel_failed": "अभी पुरानी अपॉइंटमेंट रद्द नहीं हो पाई। कृपया बाद में फिर कोशिश करें।",
         "invalid_name": "कृपया सही नाम बताएं। उदाहरण: Vineeth Raja Banala",
+        "other_person_name_must_differ": "किसी अन्य व्यक्ति के लिए बुकिंग करते समय कृपया स्वयं से अलग नाम दें।",
+        "other_active_booking_exists": "इस अन्य व्यक्ति की एक सक्रिय अपॉइंटमेंट पहले से मौजूद है। कृपया पहले पुरानी बुकिंग रद्द करें या पूरी होने दें।",
         "name_ack": "नाम नोट किया गया: {name}।",
         "ask_phone": (
             "कृपया संपर्क नंबर की पुष्टि करें:\n"
@@ -598,7 +604,8 @@ def get_message(response_language: str, key: str, **kwargs: object) -> str:
         "existing_booking_pick_invalid": "Please valid booking option number choose kariye.",
         "max_active_bookings_reached": "Is number par maximum 2 active bookings allowed hain. Pehle existing booking cancel ya reschedule kariye.",
         "max_active_bookings_actions": (
-            "Ek option choose kariye:\n"
+            "Aap is number ke liye maximum active booking limit tak pahunch chuke hain.\n"
+            "Please neeche ek option choose kariye:\n"
             "1. Existing appointment cancel kariye\n"
             "2. Existing appointment reschedule kariye\n"
             "Press \"0\" to go back."
@@ -628,6 +635,8 @@ def get_message(response_language: str, key: str, **kwargs: object) -> str:
         "reschedule_failed": "Reschedule fail hua kyunki selected slot ab available nahi hai. Please doosri date/time try kariye.",
         "existing_booking_cancel_failed": "Existing appointment abhi cancel nahi ho paaya. Please baad mein try kariye.",
         "invalid_name": "Please valid name batayiye. Example: Vineeth Raja Banala",
+        "other_person_name_must_differ": "Someone Else ke liye booking karte waqt please self se alag naam dijiye.",
+        "other_active_booking_exists": "Is other person ki ek active appointment pehle se hai. Pehle existing booking cancel kariye ya complete hone dijiye.",
         "name_ack": "Name noted: {name}.",
         "ask_appointment_mode": (
             "Please appointment type choose kariye:\n"

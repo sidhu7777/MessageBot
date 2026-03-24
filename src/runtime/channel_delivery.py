@@ -465,7 +465,37 @@ class ChannelDelivery:
             escaped,
         )
         escaped = re.sub(
+            r"\*(Clinic:\s*[^*\n]+)\*",
+            lambda match: f"<b>{match.group(1)}</b>",
+            escaped,
+        )
+        escaped = re.sub(
+            r"\*(Date:\s*[^*\n]+)\*",
+            lambda match: f"<b>{match.group(1)}</b>",
+            escaped,
+        )
+        escaped = re.sub(
+            r"\*(Time:\s*[^*\n]+)\*",
+            lambda match: f"<b>{match.group(1)}</b>",
+            escaped,
+        )
+        escaped = re.sub(
             r"\*(अपॉइंटमेंट आईडी:\s*[^*\n]+)\*",
+            lambda match: f"<b>{match.group(1)}</b>",
+            escaped,
+        )
+        escaped = re.sub(
+            r"\*(क्लिनिक:\s*[^*\n]+)\*",
+            lambda match: f"<b>{match.group(1)}</b>",
+            escaped,
+        )
+        escaped = re.sub(
+            r"\*(तारीख:\s*[^*\n]+)\*",
+            lambda match: f"<b>{match.group(1)}</b>",
+            escaped,
+        )
+        escaped = re.sub(
+            r"\*(समय:\s*[^*\n]+)\*",
             lambda match: f"<b>{match.group(1)}</b>",
             escaped,
         )

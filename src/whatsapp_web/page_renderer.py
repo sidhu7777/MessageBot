@@ -106,7 +106,7 @@ def render_whatsapp_web_page_html(
                 "manageTitle": "Existing Appointment Found",
                 "bookingTitle": "Book New Appointment",
                 "rescheduleTitle": "Reschedule Appointment",
-                "existingHint": "You already have an active appointment. Choose cancel or reschedule.",
+                "existingHint": "You already have an active appointment. Choose cancel, reschedule, or use Book New Instead for Someone Else with different details.",
                 "noClinics": "No clinics available.",
                 "noDates": "No dates available.",
                 "noTimes": "No times available.",
@@ -161,7 +161,7 @@ def render_whatsapp_web_page_html(
                 "manageTitle": "मौजूदा अपॉइंटमेंट मिली",
                 "bookingTitle": "नई अपॉइंटमेंट बुक करें",
                 "rescheduleTitle": "अपॉइंटमेंट रीशेड्यूल करें",
-                "existingHint": "आपकी सक्रिय अपॉइंटमेंट पहले से है। कैंसल या रीशेड्यूल चुनें।",
+                "existingHint": "आपकी सक्रिय अपॉइंटमेंट पहले से है। कैंसल, रीशेड्यूल चुनें, या अलग विवरण वाले किसी और के लिए नई बुकिंग करें।",
                 "noClinics": "कोई क्लिनिक उपलब्ध नहीं है।",
                 "noDates": "कोई तारीख उपलब्ध नहीं है।",
                 "noTimes": "कोई समय उपलब्ध नहीं है।",
@@ -216,7 +216,7 @@ def render_whatsapp_web_page_html(
                 "manageTitle": "Existing Appointment Mili",
                 "bookingTitle": "New Appointment Book kariye",
                 "rescheduleTitle": "Appointment Reschedule kariye",
-                "existingHint": "Aapki active appointment pehle se hai. Cancel ya reschedule choose kariye.",
+                "existingHint": "Aapki active appointment pehle se hai. Cancel, reschedule choose kariye, ya different details wale Someone Else ke liye nayi booking kariye.",
                 "noClinics": "Koi clinic available nahi hai.",
                 "noDates": "Koi date available nahi hai.",
                 "noTimes": "Koi time available nahi hai.",
@@ -519,16 +519,6 @@ def render_whatsapp_web_page_html(
     </div>
 
     <section class=\"section\" id=\"identitySection\">
-      <div class=\"grid two\">
-        <label>
-          <span id=\"nameLabel\">{ui["name_label"]}</span>
-          <input id=\"patientName\" maxlength=\"120\" required />
-        </label>
-        <label>
-          <span id=\"phoneLabel\">{ui["phone_label"]}</span>
-          <input id=\"phoneNumber\" maxlength=\"20\" required />
-        </label>
-      </div>
       <div class=\"booking-for\">
         <span id=\"bookingForLabel\">{ui["booking_for_label"]}</span>
         <div class=\"booking-for-group\">
@@ -541,6 +531,16 @@ def render_whatsapp_web_page_html(
             <span id=\"bookingForOther\">{ui["booking_for_other"]}</span>
           </label>
         </div>
+      </div>
+      <div class=\"grid two\">
+        <label>
+          <span id=\"nameLabel\">{ui["name_label"]}</span>
+          <input id=\"patientName\" maxlength=\"120\" required />
+        </label>
+        <label>
+          <span id=\"phoneLabel\">{ui["phone_label"]}</span>
+          <input id=\"phoneNumber\" maxlength=\"20\" required />
+        </label>
       </div>
       <button id=\"continueBtn\" type=\"button\">{ui["continue"]}</button>
       <div id=\"statusLine\" class=\"status-line\"></div>
@@ -725,13 +725,18 @@ def render_whatsapp_web_page_html(
       return texts.modalErr;
     }}
 
-    function formatResultHtml(message, summary) {{
+    function formatResultHtml(kind, message, summary) {{
       const messageHtml = String(message || "")
         .split("\\n")
         .map((line) => line.trim())
         .filter(Boolean)
         .filter((line) => {{
           const lower = line.toLowerCase();
+          if (kind === "ok" && (
+            lower === "appointment booked successfully." ||
+            lower === "appointment rescheduled successfully." ||
+            lower === "appointment cancelled successfully."
+          )) return false;
           if (summary?.appointmentId && lower.startsWith("appointment id:")) return false;
           if (summary?.clinic && lower.startsWith("clinic:")) return false;
           if (summary?.date && lower.startsWith("date:")) return false;
@@ -747,7 +752,7 @@ def render_whatsapp_web_page_html(
       const title = document.getElementById("modalTitle");
       title.className = "modal-head " + kind;
       title.textContent = resultModalTitle(kind, message);
-      document.getElementById("modalBody").innerHTML = formatResultHtml(message, summary);
+      document.getElementById("modalBody").innerHTML = formatResultHtml(kind, message, summary);
       const modal = document.getElementById("resultModal");
       modal.classList.add("open");
       modal.setAttribute("aria-hidden", "false");
@@ -863,7 +868,7 @@ def render_whatsapp_web_page_html(
       renderOptions(targetSelect, dates.map((value) => ({{ value, label: value }})), currentTexts().noDates);
     }}
 
-    async function loadTimes(clinicId, slotDate, period, periodSelect, targetSelect) {{
+    async function loadTimes(clinicId, slotDate, period, periodSelect, targetSelect, options = {{}}) {{
       const periodWrap = periodSelect.id === "periodSelect"
         ? document.getElementById("periodWrap")
         : document.getElementById("reschedulePeriodWrap");
@@ -872,7 +877,10 @@ def render_whatsapp_web_page_html(
       togglePeriodVisibility(periodWrap, false);
       renderOptions(targetSelect, [], currentTexts().loadingTimes);
       const periodQuery = period ? `&period=${{encodeURIComponent(period)}}` : "";
-      const data = await fetchJson(`/whatsapp/web/times?doctor_id=${{doctorId}}&clinic_id=${{encodeURIComponent(clinicId)}}&slot_date=${{encodeURIComponent(slotDate)}}&lang=${{encodeURIComponent(activeLanguage)}}${{periodQuery}}`);
+      const rescheduleQuery = options.reschedule && options.appointmentId
+        ? `&reschedule=1&appointment_id=${{encodeURIComponent(options.appointmentId)}}`
+        : "";
+      const data = await fetchJson(`/whatsapp/web/times?doctor_id=${{doctorId}}&clinic_id=${{encodeURIComponent(clinicId)}}&slot_date=${{encodeURIComponent(slotDate)}}&lang=${{encodeURIComponent(activeLanguage)}}${{periodQuery}}${{rescheduleQuery}}`);
       if (data.mode === "periods") {{
         const periods = Array.isArray(data.periods) ? data.periods : [];
         renderOptions(periodSelect, periods, currentTexts().noTimes);
@@ -935,6 +943,7 @@ def render_whatsapp_web_page_html(
             doctor_id: doctorId,
             patient_name: name,
             phone_number: phone,
+            booking_for_self: selectedBookingForSelf(),
             detected_language: activeLanguage,
           }}),
         }});
@@ -1143,6 +1152,7 @@ def render_whatsapp_web_page_html(
           "",
           document.getElementById("reschedulePeriodSelect"),
           document.getElementById("rescheduleTimeSelect"),
+          {{ reschedule: true, appointmentId: pendingRescheduleId }},
         );
       }}
     }});
@@ -1157,6 +1167,7 @@ def render_whatsapp_web_page_html(
           period,
           document.getElementById("reschedulePeriodSelect"),
           document.getElementById("rescheduleTimeSelect"),
+          {{ reschedule: true, appointmentId: pendingRescheduleId }},
         );
       }}
     }});

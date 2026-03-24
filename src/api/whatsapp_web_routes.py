@@ -136,7 +136,13 @@ def register_whatsapp_web_routes(
                 continue
         return text
 
-    def _grouped_time_payload(times: list[str], lang: str, period: str | None = None) -> dict[str, object]:
+    def _grouped_time_payload(
+        times: list[str],
+        lang: str,
+        period: str | None = None,
+        *,
+        hour_value_mode: str = "exact",
+    ) -> dict[str, object]:
         normalized_times = [_normalize_time_value(value) for value in (times or []) if _normalize_time_value(value)]
         hour_keys: list[str] = []
         seen: set[str] = set()
@@ -171,11 +177,155 @@ def register_whatsapp_web_routes(
             end = f"{(hour + 1) % 24:02d}:00"
             slots.append(
                 {
-                    "value": hour_times[0],
+                    "value": f"hour:{hour:02d}" if hour_value_mode == "bucket" else hour_times[0],
                     "label": f"{_format_time(start)} - {_format_time(end)}",
                 }
             )
         return {"mode": "slots", "periods": [], "slots": slots}
+
+    def _reschedule_conflict_exists(
+        *,
+        doctor_id: int,
+        appointment_id: int,
+        slot_date: str,
+        slot_time: str,
+        admin_id: int | None,
+    ) -> bool:
+        if not booking_repository:
+            return False
+        normalized_time = _normalize_time_value(slot_time)
+        if not normalized_time:
+            return False
+        conn = booking_repository._connect()
+        cur = conn.cursor(dictionary=True)
+        try:
+            appointment_table = booking_repository._appointment_table()
+            params: list[object] = [int(doctor_id), str(slot_date), normalized_time, int(appointment_id)]
+            cur.execute(
+                f"""
+                SELECT appointment_id
+                FROM {appointment_table}
+                WHERE doctor_id = %s
+                  AND appointment_date = %s
+                  AND TIME_FORMAT(start_time, '%H:%i') = %s
+                  AND appointment_id <> %s
+                LIMIT 1
+                """,
+                tuple(params),
+            )
+            return cur.fetchone() is not None
+        finally:
+            cur.close()
+            conn.close()
+
+    def _list_reschedule_exact_times(
+        *,
+        doctor_id: int,
+        clinic_id: int,
+        slot_date: str,
+        appointment_id: int,
+        admin_id: int | None,
+    ) -> list[str]:
+        times = list(
+            scheduling_repository._db_list_available_times_for_date(
+                int(doctor_id),
+                int(clinic_id),
+                str(slot_date),
+                admin_id,
+            )
+            or []
+        )
+        if not times:
+            return []
+
+        exact_times: list[str] = []
+        for hhmm in times:
+            if _reschedule_conflict_exists(
+                doctor_id=int(doctor_id),
+                appointment_id=int(appointment_id),
+                slot_date=str(slot_date),
+                slot_time=hhmm,
+                admin_id=admin_id,
+            ):
+                continue
+            exact_times.append(hhmm)
+        return exact_times
+
+    def _list_reschedule_times(
+        *,
+        doctor_id: int,
+        clinic_id: int,
+        slot_date: str,
+        appointment_id: int,
+        admin_id: int | None,
+        lang: str,
+        period: str | None = None,
+    ) -> dict[str, object]:
+        exact_times = _list_reschedule_exact_times(
+            doctor_id=doctor_id,
+            clinic_id=clinic_id,
+            slot_date=slot_date,
+            appointment_id=appointment_id,
+            admin_id=admin_id,
+        )
+        if not exact_times:
+            return {"mode": "slots", "periods": [], "slots": []}
+        return _grouped_time_payload(exact_times, lang, period, hour_value_mode="bucket")
+
+    def _resolve_reschedule_time_choice(
+        *,
+        doctor_id: int,
+        clinic_id: int,
+        slot_date: str,
+        appointment_id: int,
+        selected_time: str,
+        admin_id: int | None,
+    ) -> str:
+        normalized_choice = str(selected_time or "").strip().lower()
+        exact_times = _list_reschedule_exact_times(
+            doctor_id=doctor_id,
+            clinic_id=clinic_id,
+            slot_date=slot_date,
+            appointment_id=appointment_id,
+            admin_id=admin_id,
+        )
+        if not exact_times:
+            return ""
+        if normalized_choice.startswith("hour:"):
+            hour_token = normalized_choice.split(":", 1)[1].strip()
+            if len(hour_token) == 1:
+                hour_token = f"0{hour_token}"
+            for hhmm in exact_times:
+                if hhmm.startswith(f"{hour_token}:"):
+                    return hhmm
+            return ""
+        normalized_exact = _normalize_time_value(selected_time)
+        if normalized_exact in exact_times:
+            return normalized_exact
+        return ""
+
+    def _normalized_person_name(value: str) -> str:
+        return " ".join(str(value or "").strip().lower().split())
+
+    def _other_name_matches_self_name(
+        *,
+        patient_name: str,
+        phone_number: str,
+        doctor_id: int,
+        admin_id: int | None,
+    ) -> bool:
+        if not booking_repository:
+            return False
+        normalized_candidate = _normalized_person_name(patient_name)
+        if not normalized_candidate:
+            return False
+        known_name = booking_repository.find_patient_name_by_phone_number(
+            phone_number=phone_number,
+            admin_id=admin_id,
+            doctor_id=doctor_id,
+        )
+        normalized_known = _normalized_person_name(str(known_name or ""))
+        return bool(normalized_known and normalized_candidate == normalized_known)
 
     async def _require_repos(request: Request, payload: dict[str, object] | None = None) -> tuple[str, bool] | None:
         resolved_lang = _resolve_effective_language(request, payload)
@@ -254,6 +404,8 @@ def register_whatsapp_web_routes(
         clinic_id: int | None = None,
         slot_date: str | None = None,
         period: str | None = None,
+        appointment_id: int | None = None,
+        reschedule: int | None = None,
     ):
         resolved_lang, _ = _resolve_effective_language(request, {})
         if not doctor_id or not clinic_id or not slot_date:
@@ -261,6 +413,18 @@ def register_whatsapp_web_routes(
         if not scheduling_repository:
             return JSONResponse({"detail": "Scheduling is not configured."}, status_code=503)
         admin_id = await run_in_threadpool(_resolve_admin_id, int(doctor_id))
+        if int(reschedule or 0) == 1 and appointment_id:
+            payload = await run_in_threadpool(
+                _list_reschedule_times,
+                doctor_id=int(doctor_id),
+                clinic_id=int(clinic_id),
+                slot_date=str(slot_date),
+                appointment_id=int(appointment_id),
+                admin_id=admin_id,
+                lang=resolved_lang,
+                period=str(period or "").strip().lower() or None,
+            )
+            return JSONResponse(payload)
         times = await run_in_threadpool(
             scheduling_repository.list_available_times,
             int(doctor_id),
@@ -282,7 +446,9 @@ def register_whatsapp_web_routes(
             doctor_id = int(payload.get("doctor_id") or 0)
         except Exception:
             doctor_id = 0
+        patient_name = str(payload.get("patient_name") or "").strip()
         phone_number = str(payload.get("phone_number") or "").strip()
+        booking_for_self = bool(payload.get("booking_for_self", True))
         if doctor_id <= 0 or not phone_number:
             return JSONResponse({"detail": "Missing doctor_id or phone_number."}, status_code=400)
         admin_id = await run_in_threadpool(_resolve_admin_id, doctor_id)
@@ -293,6 +459,27 @@ def register_whatsapp_web_routes(
             doctor_id,
             10,
         )
+        if not booking_for_self and patient_name:
+            same_as_self = await run_in_threadpool(
+                _other_name_matches_self_name,
+                patient_name=patient_name,
+                phone_number=phone_number,
+                doctor_id=doctor_id,
+                admin_id=admin_id,
+            )
+            if same_as_self:
+                return JSONResponse(
+                    {"detail": "Please use a different name other than self when booking for another person."},
+                    status_code=400,
+                )
+        if not booking_for_self and patient_name:
+            normalized_name = " ".join(patient_name.lower().split())
+            matched_same_identity = []
+            for row in (appointments or []):
+                existing_name = " ".join(str(row.get("patient_name") or "").lower().split())
+                if existing_name and existing_name == normalized_name:
+                    matched_same_identity.append(row)
+            appointments = matched_same_identity
         return JSONResponse(
             {
                 "language": resolved_lang,
@@ -302,6 +489,7 @@ def register_whatsapp_web_routes(
                         "booking_number": row.get("booking_number"),
                         "clinic_id": row.get("clinic_id"),
                         "clinic_name": str(row.get("clinic_name") or ""),
+                        "patient_name": str(row.get("patient_name") or ""),
                         "slot_date": str(row.get("slot_date") or ""),
                         "slot_time": _format_time(str(row.get("slot_time") or "")),
                         "doctor_id": row.get("doctor_id"),
@@ -330,6 +518,22 @@ def register_whatsapp_web_routes(
         if not all([doctor_id, clinic_id, patient_name, phone_number, slot_date, slot_time]):
             return JSONResponse({"detail": "Missing required booking fields."}, status_code=400)
         admin_id = await run_in_threadpool(_resolve_admin_id, doctor_id)
+        if not booking_for_self:
+            same_as_self = await run_in_threadpool(
+                _other_name_matches_self_name,
+                patient_name=patient_name,
+                phone_number=phone_number,
+                doctor_id=doctor_id,
+                admin_id=admin_id,
+            )
+            if same_as_self:
+                return JSONResponse(
+                    {
+                        "status": "error",
+                        "message": "Please use a different name other than self when booking for another person.",
+                    },
+                    status_code=400,
+                )
         if booking_for_self:
             existing = await run_in_threadpool(
                 booking_repository.find_active_appointment_by_phone_number,
@@ -437,8 +641,35 @@ def register_whatsapp_web_routes(
         except Exception:
             return JSONResponse({"detail": "Invalid doctor_id, appointment_id, or clinic_id."}, status_code=400)
         slot_date = str(payload.get("appointment_date") or "").strip()
-        slot_time = _normalize_time_value(str(payload.get("appointment_time") or "").strip())
+        submitted_time = str(payload.get("appointment_time") or "").strip()
         admin_id = await run_in_threadpool(_resolve_admin_id, doctor_id)
+        slot_time = await run_in_threadpool(
+            _resolve_reschedule_time_choice,
+            doctor_id=doctor_id,
+            clinic_id=clinic_id,
+            slot_date=slot_date,
+            appointment_id=appointment_id,
+            selected_time=submitted_time,
+            admin_id=admin_id,
+        )
+        if not slot_time:
+            return JSONResponse(
+                {"status": "error", "message": "Selected hour is full now. Please choose another slot."},
+                status_code=400,
+            )
+        conflict_exists = await run_in_threadpool(
+            _reschedule_conflict_exists,
+            doctor_id=doctor_id,
+            appointment_id=appointment_id,
+            slot_date=slot_date,
+            slot_time=slot_time,
+            admin_id=admin_id,
+        )
+        if conflict_exists:
+            return JSONResponse(
+                {"status": "error", "message": "Selected time is already booked. Please choose another slot."},
+                status_code=400,
+            )
         result = await run_in_threadpool(
             booking_repository.reschedule_appointment_same_clinic,
             appointment_id,

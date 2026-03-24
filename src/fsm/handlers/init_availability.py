@@ -345,8 +345,9 @@ def handle_ask_date_state(fsm: "AppointmentFSM", lower: str) -> str:
             )
     elif normalized in {"today", "tomorrow"}:
         target = None
-        today_iso = date.today().isoformat()
-        tomorrow_iso = (date.today() + timedelta(days=1)).isoformat()
+        today = now_in_runtime_timezone().date()
+        today_iso = today.isoformat()
+        tomorrow_iso = (today + timedelta(days=1)).isoformat()
         if normalized == "today":
             target = today_iso
         elif normalized == "tomorrow":

@@ -60,8 +60,29 @@ def handle_existing_booking_action_state(fsm: "AppointmentFSM", lower: str) -> s
         fsm.state = "ASK_CLINIC"
         return fsm._respond(fsm._clinic_prompt())
     if normalized in {"4", "book for another", "another person"}:
-        fsm.state = "ASK_MAX_ACTIVE_BOOKINGS_ACTION"
-        return fsm._respond(fsm._msg("max_active_bookings_actions"))
+        fsm.booking_for_self = False
+        fsm.context.patient_name = None
+        fsm.context.phone_number = None
+        fsm.context.appointment_date = None
+        fsm.context.appointment_time = None
+        fsm.context.clinic_id = None
+        fsm.context.clinic_name = None
+        fsm.context.clinic_address = None
+        fsm.clinic_options_cache = []
+        fsm.date_options_cache = []
+        fsm.time_options_cache = []
+        fsm.time_hour_options_cache = []
+        fsm.time_slot_options_cache = []
+        fsm.time_window_labels_cache = []
+        fsm.selected_time_hour = None
+        fsm.selected_time_period = None
+        fsm.in_edit_flow = False
+        fsm.existing_appointment_id = None
+        fsm._reset_existing_booking_flags()
+        fsm.state = "ASK_NAME"
+        return fsm._respond(
+            fsm._msg("booking_for_other_ack") + "\n\n" + fsm._with_back(fsm._msg("ask_name"))
+        )
     if normalized in {"5", "show all", "list all", "all bookings"}:
         rows = fsm._active_booking_rows_for_chat_phone()
         if not rows:
@@ -197,10 +218,16 @@ def handle_confirm_reschedule_state(fsm: "AppointmentFSM", lower: str) -> str:
             fsm.in_reschedule_flow = False
             fsm.state = "COMPLETED"
             return fsm._respond(fsm._msg("existing_booking_cancel_failed"))
+        resolved_time = fsm._resolve_current_reschedule_time()
+        if not resolved_time:
+            fsm.in_reschedule_flow = False
+            fsm.state = "COMPLETED"
+            return fsm._respond(fsm._msg("reschedule_failed"))
+        fsm.context.appointment_time = resolved_time
         result = fsm.booking_repository.reschedule_appointment_same_clinic(
             appointment_id=fsm.existing_appointment_id,
             new_date=fsm.context.appointment_date or "",
-            new_time=fsm.context.appointment_time or "",
+            new_time=resolved_time,
             new_clinic_id=int(fsm.context.clinic_id) if fsm.context.clinic_id else None,
             admin_id=fsm.admin_id,
         )

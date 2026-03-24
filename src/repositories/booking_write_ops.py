@@ -608,6 +608,46 @@ def save_confirmed_appointment(
         appointment_table = repo._appointment_table()
         has_notify_chat_col = repo._column_exists(appointment_table, "notify_telegram_chat_id")
         has_appointment_booking_col = repo._column_exists(appointment_table, "booking_id")
+        has_booked_for_col = repo._column_exists(appointment_table, "booked_for")
+        booked_for_value: Optional[str] = None
+        if booking_for_self is True:
+            booked_for_value = "SELF"
+        elif booking_for_self is False:
+            booked_for_value = "OTHER"
+
+        def _has_other_active_booking() -> bool:
+            if patient_id is None or booked_for_value != "OTHER" or not has_booked_for_col:
+                return False
+            active_statuses = ("BOOKED", "PENDING", "CONFIRMED")
+            if repo._use_appointment_mode():
+                cur.execute(
+                    f"""
+                    SELECT appointment_id
+                    FROM {appointment_table}
+                    WHERE patient_id = %s
+                      AND admin_id = %s
+                      AND booked_for = 'OTHER'
+                      AND status IN (%s, %s, %s)
+                    ORDER BY appointment_id DESC
+                    LIMIT 1
+                    """,
+                    (patient_id, actual_admin_id, *active_statuses),
+                )
+                return cur.fetchone() is not None
+            cur.execute(
+                f"""
+                SELECT a.appointment_id
+                FROM {appointment_table} a
+                WHERE a.patient_id = %s
+                  AND a.admin_id = %s
+                  AND a.booked_for = 'OTHER'
+                  AND a.status IN (%s, %s, %s)
+                ORDER BY a.appointment_id DESC
+                LIMIT 1
+                """,
+                (patient_id, actual_admin_id, *active_statuses),
+            )
+            return cur.fetchone() is not None
 
         if repo._use_appointment_mode():
             resolved_doctor_id = int(doctor_id) if doctor_id is not None else None
@@ -706,14 +746,23 @@ def save_confirmed_appointment(
             )
             existing = cur.fetchone()
             if existing:
+                existing_updates: list[str] = []
+                existing_params: list[object] = []
                 if has_appointment_booking_col and requested_slot_number is not None:
+                    existing_updates.append("booking_id = %s")
+                    existing_params.append(requested_slot_number)
+                if has_booked_for_col and booked_for_value is not None:
+                    existing_updates.append("booked_for = %s")
+                    existing_params.append(booked_for_value)
+                if existing_updates:
+                    existing_params.append(int(existing["appointment_id"]))
                     cur.execute(
                         f"""
                         UPDATE {appointment_table}
-                        SET booking_id = %s
+                        SET {", ".join(existing_updates)}
                         WHERE appointment_id = %s
                         """,
-                        (requested_slot_number, int(existing["appointment_id"])),
+                        tuple(existing_params),
                     )
                 if "booking_id" in patient_columns and requested_slot_number is not None:
                     cur.execute(
@@ -731,6 +780,13 @@ def save_confirmed_appointment(
                     "Appointment already exists.",
                     appointment_id=appt_id,
                     queue_number=requested_slot_number if requested_slot_number is not None else repo.get_daily_queue_number(appt_id),
+                )
+
+            if _has_other_active_booking():
+                conn.rollback()
+                return BookingResult(
+                    False,
+                    "Another active appointment already exists for this other person. Please cancel or complete the existing booking first.",
                 )
 
             # Handle unique key (doctor_id, appointment_date, start_time):
@@ -758,8 +814,7 @@ def save_confirmed_appointment(
                 if slot_status in {"CANCELLED", "COMPLETED"}:
                     if has_notify_chat_col:
                         if has_appointment_booking_col:
-                            cur.execute(
-                                f"""
+                            update_sql = f"""
                                 UPDATE {appointment_table}
                                 SET patient_id = %s,
                                     clinic_id = %s,
@@ -768,21 +823,23 @@ def save_confirmed_appointment(
                                     notify_telegram_chat_id = %s,
                                     booking_id = %s,
                                     status = 'BOOKED'
-                                WHERE appointment_id = %s
-                                """,
-                                (
-                                    patient_id,
-                                    int(context.clinic_id),
-                                    actual_admin_id,
-                                    requested_end,
-                                    chat_user_id_value or None,
-                                    requested_slot_number,
-                                    slot_appointment_id,
-                                ),
-                            )
+                            """
+                            update_params: list[object] = [
+                                patient_id,
+                                int(context.clinic_id),
+                                actual_admin_id,
+                                requested_end,
+                                chat_user_id_value or None,
+                                requested_slot_number,
+                            ]
+                            if has_booked_for_col and booked_for_value is not None:
+                                update_sql += ",\n                                    booked_for = %s"
+                                update_params.append(booked_for_value)
+                            update_sql += "\n                                WHERE appointment_id = %s"
+                            update_params.append(slot_appointment_id)
+                            cur.execute(update_sql, tuple(update_params))
                         else:
-                            cur.execute(
-                                f"""
+                            update_sql = f"""
                                 UPDATE {appointment_table}
                                 SET patient_id = %s,
                                     clinic_id = %s,
@@ -790,21 +847,23 @@ def save_confirmed_appointment(
                                     end_time = %s,
                                     notify_telegram_chat_id = %s,
                                     status = 'BOOKED'
-                                WHERE appointment_id = %s
-                                """,
-                                (
-                                    patient_id,
-                                    int(context.clinic_id),
-                                    actual_admin_id,
-                                    requested_end,
-                                    chat_user_id_value or None,
-                                    slot_appointment_id,
-                                ),
-                            )
+                            """
+                            update_params = [
+                                patient_id,
+                                int(context.clinic_id),
+                                actual_admin_id,
+                                requested_end,
+                                chat_user_id_value or None,
+                            ]
+                            if has_booked_for_col and booked_for_value is not None:
+                                update_sql += ",\n                                    booked_for = %s"
+                                update_params.append(booked_for_value)
+                            update_sql += "\n                                WHERE appointment_id = %s"
+                            update_params.append(slot_appointment_id)
+                            cur.execute(update_sql, tuple(update_params))
                     else:
                         if has_appointment_booking_col:
-                            cur.execute(
-                                f"""
+                            update_sql = f"""
                                 UPDATE {appointment_table}
                                 SET patient_id = %s,
                                     clinic_id = %s,
@@ -812,36 +871,41 @@ def save_confirmed_appointment(
                                     end_time = %s,
                                     booking_id = %s,
                                     status = 'BOOKED'
-                                WHERE appointment_id = %s
-                                """,
-                                (
-                                    patient_id,
-                                    int(context.clinic_id),
-                                    actual_admin_id,
-                                    requested_end,
-                                    requested_slot_number,
-                                    slot_appointment_id,
-                                ),
-                            )
+                            """
+                            update_params = [
+                                patient_id,
+                                int(context.clinic_id),
+                                actual_admin_id,
+                                requested_end,
+                                requested_slot_number,
+                            ]
+                            if has_booked_for_col and booked_for_value is not None:
+                                update_sql += ",\n                                    booked_for = %s"
+                                update_params.append(booked_for_value)
+                            update_sql += "\n                                WHERE appointment_id = %s"
+                            update_params.append(slot_appointment_id)
+                            cur.execute(update_sql, tuple(update_params))
                         else:
-                            cur.execute(
-                                f"""
+                            update_sql = f"""
                                 UPDATE {appointment_table}
                                 SET patient_id = %s,
                                     clinic_id = %s,
                                     admin_id = %s,
                                     end_time = %s,
                                     status = 'BOOKED'
-                                WHERE appointment_id = %s
-                                """,
-                                (
-                                    patient_id,
-                                    int(context.clinic_id),
-                                    actual_admin_id,
-                                    requested_end,
-                                    slot_appointment_id,
-                                ),
-                            )
+                            """
+                            update_params = [
+                                patient_id,
+                                int(context.clinic_id),
+                                actual_admin_id,
+                                requested_end,
+                            ]
+                            if has_booked_for_col and booked_for_value is not None:
+                                update_sql += ",\n                                    booked_for = %s"
+                                update_params.append(booked_for_value)
+                            update_sql += "\n                                WHERE appointment_id = %s"
+                            update_params.append(slot_appointment_id)
+                            cur.execute(update_sql, tuple(update_params))
                     if "booking_id" in patient_columns and requested_slot_number is not None:
                         cur.execute(
                             """
@@ -864,77 +928,141 @@ def save_confirmed_appointment(
             try:
                 if has_notify_chat_col:
                     if has_appointment_booking_col:
+                        insert_cols = [
+                            "patient_id",
+                            "doctor_id",
+                            "clinic_id",
+                            "admin_id",
+                            "status",
+                            "appointment_date",
+                            "start_time",
+                            "end_time",
+                            "notify_telegram_chat_id",
+                            "booking_id",
+                        ]
+                        insert_vals: list[object] = [
+                            patient_id,
+                            resolved_doctor_id,
+                            int(context.clinic_id),
+                            actual_admin_id,
+                            "BOOKED",
+                            context.appointment_date,
+                            requested_start,
+                            requested_end,
+                            chat_user_id_value or None,
+                            requested_slot_number,
+                        ]
+                        if has_booked_for_col and booked_for_value is not None:
+                            insert_cols.append("booked_for")
+                            insert_vals.append(booked_for_value)
                         cur.execute(
                             f"""
                             INSERT INTO {appointment_table}
-                            (patient_id, doctor_id, clinic_id, admin_id, status, appointment_date, start_time, end_time, notify_telegram_chat_id, booking_id)
-                            VALUES (%s, %s, %s, %s, 'BOOKED', %s, %s, %s, %s, %s)
+                            ({", ".join(insert_cols)})
+                            VALUES ({", ".join(["%s"] * len(insert_cols))})
                             """,
-                            (
-                                patient_id,
-                                resolved_doctor_id,
-                                int(context.clinic_id),
-                                actual_admin_id,
-                                context.appointment_date,
-                                requested_start,
-                                requested_end,
-                                chat_user_id_value or None,
-                                requested_slot_number,
-                            ),
+                            tuple(insert_vals),
                         )
                     else:
+                        insert_cols = [
+                            "patient_id",
+                            "doctor_id",
+                            "clinic_id",
+                            "admin_id",
+                            "status",
+                            "appointment_date",
+                            "start_time",
+                            "end_time",
+                            "notify_telegram_chat_id",
+                        ]
+                        insert_vals = [
+                            patient_id,
+                            resolved_doctor_id,
+                            int(context.clinic_id),
+                            actual_admin_id,
+                            "BOOKED",
+                            context.appointment_date,
+                            requested_start,
+                            requested_end,
+                            chat_user_id_value or None,
+                        ]
+                        if has_booked_for_col and booked_for_value is not None:
+                            insert_cols.append("booked_for")
+                            insert_vals.append(booked_for_value)
                         cur.execute(
                             f"""
                             INSERT INTO {appointment_table}
-                            (patient_id, doctor_id, clinic_id, admin_id, status, appointment_date, start_time, end_time, notify_telegram_chat_id)
-                            VALUES (%s, %s, %s, %s, 'BOOKED', %s, %s, %s, %s)
+                            ({", ".join(insert_cols)})
+                            VALUES ({", ".join(["%s"] * len(insert_cols))})
                             """,
-                            (
-                                patient_id,
-                                resolved_doctor_id,
-                                int(context.clinic_id),
-                                actual_admin_id,
-                                context.appointment_date,
-                                requested_start,
-                                requested_end,
-                                chat_user_id_value or None,
-                            ),
+                            tuple(insert_vals),
                         )
                 else:
                     if has_appointment_booking_col:
+                        insert_cols = [
+                            "patient_id",
+                            "doctor_id",
+                            "clinic_id",
+                            "admin_id",
+                            "status",
+                            "appointment_date",
+                            "start_time",
+                            "end_time",
+                            "booking_id",
+                        ]
+                        insert_vals = [
+                            patient_id,
+                            resolved_doctor_id,
+                            int(context.clinic_id),
+                            actual_admin_id,
+                            "BOOKED",
+                            context.appointment_date,
+                            requested_start,
+                            requested_end,
+                            requested_slot_number,
+                        ]
+                        if has_booked_for_col and booked_for_value is not None:
+                            insert_cols.append("booked_for")
+                            insert_vals.append(booked_for_value)
                         cur.execute(
                             f"""
                             INSERT INTO {appointment_table}
-                            (patient_id, doctor_id, clinic_id, admin_id, status, appointment_date, start_time, end_time, booking_id)
-                            VALUES (%s, %s, %s, %s, 'BOOKED', %s, %s, %s, %s)
+                            ({", ".join(insert_cols)})
+                            VALUES ({", ".join(["%s"] * len(insert_cols))})
                             """,
-                            (
-                                patient_id,
-                                resolved_doctor_id,
-                                int(context.clinic_id),
-                                actual_admin_id,
-                                context.appointment_date,
-                                requested_start,
-                                requested_end,
-                                requested_slot_number,
-                            ),
+                            tuple(insert_vals),
                         )
                     else:
+                        insert_cols = [
+                            "patient_id",
+                            "doctor_id",
+                            "clinic_id",
+                            "admin_id",
+                            "status",
+                            "appointment_date",
+                            "start_time",
+                            "end_time",
+                        ]
+                        insert_vals = [
+                            patient_id,
+                            resolved_doctor_id,
+                            int(context.clinic_id),
+                            actual_admin_id,
+                            "BOOKED",
+                            context.appointment_date,
+                            requested_start,
+                            requested_end,
+                        ]
+                        if has_booked_for_col and booked_for_value is not None:
+                            insert_cols.append("booked_for")
+                            insert_vals.append(booked_for_value)
                         cur.execute(
                             f"""
                             INSERT INTO {appointment_table}
-                            (patient_id, doctor_id, clinic_id, admin_id, status, appointment_date, start_time, end_time)
-                            VALUES (%s, %s, %s, %s, 'BOOKED', %s, %s, %s)
+                            ({", ".join(insert_cols)})
+                            VALUES ({", ".join(["%s"] * len(insert_cols))})
                             """,
-                            (
-                                patient_id,
-                                resolved_doctor_id,
-                                int(context.clinic_id),
-                                actual_admin_id,
-                                context.appointment_date,
-                                requested_start,
-                                requested_end,
-                            ),
+                            tuple(insert_vals),
                         )
             except Exception as _insert_exc:
                 if "1062" not in str(_insert_exc) and "Duplicate entry" not in str(_insert_exc):
@@ -1019,6 +1147,15 @@ def save_confirmed_appointment(
                         """,
                         (existing_booking_id, int(existing["appointment_id"])),
                     )
+            if has_booked_for_col and booked_for_value is not None:
+                cur.execute(
+                    f"""
+                    UPDATE {appointment_table}
+                    SET booked_for = %s
+                    WHERE appointment_id = %s
+                    """,
+                    (booked_for_value, int(existing["appointment_id"])),
+                )
             conn.commit()
             appt_id = int(existing["appointment_id"])
             return BookingResult(
@@ -1026,6 +1163,13 @@ def save_confirmed_appointment(
                 "Appointment already exists.",
                 appointment_id=appt_id,
                 queue_number=repo.get_daily_queue_number(appt_id),
+            )
+
+        if _has_other_active_booking():
+            conn.rollback()
+            return BookingResult(
+                False,
+                "Another active appointment already exists for this other person. Please cancel or complete the existing booking first.",
             )
 
         params = [int(context.clinic_id), actual_admin_id]
@@ -1083,41 +1227,125 @@ def save_confirmed_appointment(
 
         if has_notify_chat_col:
             if has_appointment_booking_col:
+                insert_cols = [
+                    "patient_id",
+                    "slot_id",
+                    "doctor_id",
+                    "clinic_id",
+                    "admin_id",
+                    "status",
+                    "notify_telegram_chat_id",
+                    "booking_id",
+                ]
+                insert_vals = [
+                    patient_id,
+                    slot_id,
+                    doctor_id,
+                    clinic_id,
+                    actual_admin_id,
+                    "BOOKED",
+                    chat_user_id_value or None,
+                    None,
+                ]
+                if has_booked_for_col and booked_for_value is not None:
+                    insert_cols.append("booked_for")
+                    insert_vals.append(booked_for_value)
                 cur.execute(
                     f"""
                     INSERT INTO {appointment_table}
-                    (patient_id, slot_id, doctor_id, clinic_id, admin_id, status, notify_telegram_chat_id, booking_id)
-                    VALUES (%s, %s, %s, %s, %s, 'BOOKED', %s, NULL)
+                    ({", ".join(insert_cols)})
+                    VALUES ({", ".join(["%s"] * len(insert_cols))})
                     """,
-                    (patient_id, slot_id, doctor_id, clinic_id, actual_admin_id, chat_user_id_value or None),
+                    tuple(insert_vals),
                 )
             else:
+                insert_cols = [
+                    "patient_id",
+                    "slot_id",
+                    "doctor_id",
+                    "clinic_id",
+                    "admin_id",
+                    "status",
+                    "notify_telegram_chat_id",
+                ]
+                insert_vals = [
+                    patient_id,
+                    slot_id,
+                    doctor_id,
+                    clinic_id,
+                    actual_admin_id,
+                    "BOOKED",
+                    chat_user_id_value or None,
+                ]
+                if has_booked_for_col and booked_for_value is not None:
+                    insert_cols.append("booked_for")
+                    insert_vals.append(booked_for_value)
                 cur.execute(
                     f"""
                     INSERT INTO {appointment_table}
-                    (patient_id, slot_id, doctor_id, clinic_id, admin_id, status, notify_telegram_chat_id)
-                    VALUES (%s, %s, %s, %s, %s, 'BOOKED', %s)
+                    ({", ".join(insert_cols)})
+                    VALUES ({", ".join(["%s"] * len(insert_cols))})
                     """,
-                    (patient_id, slot_id, doctor_id, clinic_id, actual_admin_id, chat_user_id_value or None),
+                    tuple(insert_vals),
                 )
         else:
             if has_appointment_booking_col:
+                insert_cols = [
+                    "patient_id",
+                    "slot_id",
+                    "doctor_id",
+                    "clinic_id",
+                    "admin_id",
+                    "status",
+                    "booking_id",
+                ]
+                insert_vals = [
+                    patient_id,
+                    slot_id,
+                    doctor_id,
+                    clinic_id,
+                    actual_admin_id,
+                    "BOOKED",
+                    None,
+                ]
+                if has_booked_for_col and booked_for_value is not None:
+                    insert_cols.append("booked_for")
+                    insert_vals.append(booked_for_value)
                 cur.execute(
                     f"""
                     INSERT INTO {appointment_table}
-                    (patient_id, slot_id, doctor_id, clinic_id, admin_id, status, booking_id)
-                    VALUES (%s, %s, %s, %s, %s, 'BOOKED', NULL)
+                    ({", ".join(insert_cols)})
+                    VALUES ({", ".join(["%s"] * len(insert_cols))})
                     """,
-                    (patient_id, slot_id, doctor_id, clinic_id, actual_admin_id),
+                    tuple(insert_vals),
                 )
             else:
+                insert_cols = [
+                    "patient_id",
+                    "slot_id",
+                    "doctor_id",
+                    "clinic_id",
+                    "admin_id",
+                    "status",
+                ]
+                insert_vals = [
+                    patient_id,
+                    slot_id,
+                    doctor_id,
+                    clinic_id,
+                    actual_admin_id,
+                    "BOOKED",
+                ]
+                if has_booked_for_col and booked_for_value is not None:
+                    insert_cols.append("booked_for")
+                    insert_vals.append(booked_for_value)
                 cur.execute(
                     f"""
                     INSERT INTO {appointment_table}
-                    (patient_id, slot_id, doctor_id, clinic_id, admin_id, status)
-                    VALUES (%s, %s, %s, %s, %s, 'BOOKED')
+                    ({", ".join(insert_cols)})
+                    VALUES ({", ".join(["%s"] * len(insert_cols))})
                     """,
-                    (patient_id, slot_id, doctor_id, clinic_id, actual_admin_id),
+                    tuple(insert_vals),
                 )
         appointment_id = int(cur.lastrowid)
         if has_appointment_booking_col:

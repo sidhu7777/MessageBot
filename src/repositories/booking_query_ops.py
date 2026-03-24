@@ -400,6 +400,7 @@ def find_active_appointment_by_phone_number(
                     a.doctor_id,
                     {booking_select} AS booking_number,
                     c.clinic_name,
+                    COALESCE(p.full_name, '') AS patient_name,
                     DATE_FORMAT(a.appointment_date, '%Y-%m-%d') AS slot_date,
                     TIME_FORMAT(a.start_time, '%H:%i') AS slot_time,
                     COALESCE(p.phone, '') AS patient_phone
@@ -534,6 +535,7 @@ def list_active_appointments_by_phone_number(
                     a.doctor_id,
                     {booking_select} AS booking_number,
                     c.clinic_name,
+                    COALESCE(p.full_name, '') AS patient_name,
                     s.slot_date,
                     TIME_FORMAT(s.slot_time, '%H:%i') AS slot_time,
                     COALESCE(p.phone, '') AS patient_phone
@@ -580,17 +582,28 @@ def list_active_appointments_by_chat_user_id(
         actual_admin_id = admin_id or repo.default_admin_id()
         if not actual_admin_id:
             return []
+        appointment_table = repo._appointment_table()
+        has_notify_chat_col = repo._column_exists(appointment_table, "notify_telegram_chat_id")
         chat_col = repo._first_existing_column("patients", ("telegram_chat_id", "telegram_user_id", "user_id"))
-        if not chat_col:
+        if not has_notify_chat_col and not chat_col:
             return []
 
-        appointment_table = repo._appointment_table()
         booking_select = (
             "COALESCE(a.booking_id, p.booking_id)"
             if repo._column_exists(appointment_table, "booking_id")
             else "p.booking_id"
         )
-        params: list[object] = [actual_admin_id, target]
+        owner_filters: list[str] = []
+        owner_params: list[object] = []
+        if has_notify_chat_col:
+            owner_filters.append("TRIM(COALESCE(a.notify_telegram_chat_id, '')) = %s")
+            owner_params.append(target)
+        if chat_col:
+            owner_filters.append(f"TRIM(COALESCE(p.{chat_col}, '')) = %s")
+            owner_params.append(target)
+        owner_filter_sql = " OR ".join(owner_filters)
+        params: list[object] = [actual_admin_id]
+        params.extend(owner_params)
         doctor_sql = ""
         if doctor_id is not None:
             doctor_sql = "AND a.doctor_id = %s"
@@ -605,14 +618,15 @@ def list_active_appointments_by_chat_user_id(
                     a.doctor_id,
                     {booking_select} AS booking_number,
                     c.clinic_name,
+                    COALESCE(p.full_name, '') AS patient_name,
                     DATE_FORMAT(a.appointment_date, '%Y-%m-%d') AS slot_date,
                     TIME_FORMAT(a.start_time, '%H:%i') AS slot_time,
-                    COALESCE(p.{chat_col}, '') AS chat_user_value
+                    COALESCE(p.phone, '') AS patient_phone
                 FROM {appointment_table} a
                 JOIN patients p ON p.patient_id = a.patient_id
                 LEFT JOIN clinics c ON c.clinic_id = a.clinic_id
                 WHERE a.admin_id = %s
-                  AND TRIM(COALESCE(p.{chat_col}, '')) = %s
+                  AND ({owner_filter_sql})
                   AND a.status IN ('BOOKED', 'PENDING', 'CONFIRMED')
                   {doctor_sql}
                 ORDER BY a.appointment_id DESC
@@ -628,15 +642,16 @@ def list_active_appointments_by_chat_user_id(
                     a.doctor_id,
                     {booking_select} AS booking_number,
                     c.clinic_name,
+                    COALESCE(p.full_name, '') AS patient_name,
                     s.slot_date,
                     TIME_FORMAT(s.slot_time, '%H:%i') AS slot_time,
-                    COALESCE(p.{chat_col}, '') AS chat_user_value
+                    COALESCE(p.phone, '') AS patient_phone
                 FROM {appointment_table} a
                 JOIN patients p ON p.patient_id = a.patient_id
                 LEFT JOIN clinics c ON c.clinic_id = a.clinic_id
                 LEFT JOIN slots s ON s.slot_id = a.slot_id
                 WHERE a.admin_id = %s
-                  AND TRIM(COALESCE(p.{chat_col}, '')) = %s
+                  AND ({owner_filter_sql})
                   AND a.status IN ('BOOKED', 'PENDING', 'CONFIRMED')
                   {doctor_sql}
                 ORDER BY a.appointment_id DESC

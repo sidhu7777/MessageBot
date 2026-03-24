@@ -101,6 +101,10 @@ def handle_ask_name_state(fsm: "AppointmentFSM", text: str, lower: str) -> str:
             fsm.init_unclear_count = 1
             return fsm._respond(fsm._main_menu_prompt(), allow_polish=False)
         return fsm._respond(fsm._msg("invalid_name"))
+    normalized_name = " ".join(str(name or "").lower().split())
+    normalized_self_name = " ".join(str(fsm.known_patient_name or "").lower().split())
+    if not fsm.booking_for_self and normalized_name and normalized_self_name and normalized_name == normalized_self_name:
+        return fsm._respond(fsm._with_back(fsm._msg("other_person_name_must_differ")))
     fsm.context.patient_name = name
     fsm._ensure_actor_defaults()
     if fsm.in_edit_flow:

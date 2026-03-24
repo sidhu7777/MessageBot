@@ -67,4 +67,4 @@ VALUES
 
 # to generate the qr code 
 
-docker exec -it message-bot-app python tests/live_qr_generate_preview.py --base-url https://msgbot.duckdns.org --doctor-id 1 --clinic-id 5
+docker exec -it message-bot-app python tests/live_qr_generate_preview.py --base-url https://dapto-services.vinfocom.co.in --doctor-id 4 --clinic-id 11

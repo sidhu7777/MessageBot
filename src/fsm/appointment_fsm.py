@@ -62,6 +62,11 @@ from src.nlu.language_detector import update_response_language
 
 LOGGER = logging.getLogger(__name__)
 
+OTHER_ACTIVE_BOOKING_BLOCK_MESSAGE = (
+    "Another active appointment already exists for this other person. "
+    "Please cancel or complete the existing booking first."
+)
+
 ABUSE_TERMS_EN = {
     "fuck",
     "shit",
@@ -333,6 +338,8 @@ class AppointmentFSM:
             display_number = result.queue_number if result.queue_number is not None else result.appointment_id
             return self._msg("db_save_ok", appointment_id=display_number)
         LOGGER.warning("DB persistence returned failure: %s", result.message)
+        if result.message == OTHER_ACTIVE_BOOKING_BLOCK_MESSAGE:
+            return self._msg("other_active_booking_exists")
         return self._msg("db_save_failed")
 
     def _detect_confirm_intent(self, text: str) -> str:
@@ -391,7 +398,16 @@ class AppointmentFSM:
         self.pending_existing_action = None
 
     def _msg(self, key: str, **kwargs: object) -> str:
-        return get_message(self.response_language, key, **kwargs)
+        text = get_message(self.response_language, key, **kwargs)
+        if self._is_telegram_channel() and key == "confirm_summary":
+            for prefix in ("Clinic: ", "Date: ", "Time: ", "क्लिनिक: ", "तारीख: ", "समय: "):
+                text = re.sub(
+                    rf"^(?!\*)(%s[^\n]+)$" % re.escape(prefix),
+                    r"*\1*",
+                    text,
+                    flags=re.MULTILINE,
+                )
+        return text
 
     def _with_back(self, text: str, option_count: Optional[int] = None) -> str:
         if option_count is not None and option_count >= 1:
@@ -602,6 +618,9 @@ class AppointmentFSM:
         rows = self._active_booking_rows_for_chat_phone()
         if not rows:
             return None
+        if len(rows) >= 2:
+            self.state = "ASK_MAX_ACTIVE_BOOKINGS_ACTION"
+            return self._msg("max_active_bookings_actions")
         self._set_existing_booking_from_row(rows[0])
         self.state = "ASK_EXISTING_BOOKING_ACTION"
         display_number = rows[0].get("booking_number")
@@ -1130,6 +1149,77 @@ class AppointmentFSM:
         self.state = "ASK_TIME"
         return self._initial_time_prompt()
 
+    def _telegram_reschedule_conflict_exists(self, slot_time: str) -> bool:
+        if (
+            not self.booking_repository
+            or not self.doctor_id
+            or not self.context.appointment_date
+            or not self.existing_appointment_id
+        ):
+            return False
+        normalized_time = str(slot_time or "").strip()
+        if not normalized_time:
+            return False
+        conn = self.booking_repository._connect()
+        cur = conn.cursor(dictionary=True)
+        try:
+            appointment_table = self.booking_repository._appointment_table()
+            cur.execute(
+                f"""
+                SELECT appointment_id
+                FROM {appointment_table}
+                WHERE doctor_id = %s
+                  AND appointment_date = %s
+                  AND TIME_FORMAT(start_time, '%H:%i') = %s
+                  AND appointment_id <> %s
+                LIMIT 1
+                """,
+                (
+                    int(self.doctor_id),
+                    str(self.context.appointment_date),
+                    normalized_time,
+                    int(self.existing_appointment_id),
+                ),
+            )
+            return cur.fetchone() is not None
+        finally:
+            cur.close()
+            conn.close()
+
+    def _resolve_current_reschedule_time(self) -> Optional[str]:
+        if (
+            not self.in_reschedule_flow
+            or not self.scheduling_repository
+            or not self.doctor_id
+            or not self.context.clinic_id
+            or not self.context.appointment_date
+            or not self.context.appointment_time
+        ):
+            return self.context.appointment_time
+        selected_time = str(self.context.appointment_time or "").strip()
+        if not selected_time:
+            return None
+        available_times = list(
+            self.scheduling_repository.list_available_times(
+                doctor_id=int(self.doctor_id),
+                clinic_id=int(self.context.clinic_id),
+                slot_date=str(self.context.appointment_date),
+                admin_id=self.admin_id,
+                limit=60,
+            )
+            or []
+        )
+        hour_prefix = selected_time.split(":", 1)[0] if ":" in selected_time else ""
+        if not hour_prefix:
+            return None
+        for hhmm in available_times:
+            if not str(hhmm).startswith(f"{hour_prefix}:"):
+                continue
+            if self._telegram_reschedule_conflict_exists(str(hhmm)):
+                continue
+            return str(hhmm)
+        return None
+
     def _db_clinic_options(self) -> list[dict]:
         if not self.scheduling_repository or not self.doctor_id:
             return []
@@ -1205,8 +1295,9 @@ class AppointmentFSM:
     def _date_options_prompt(self, date_options: list[str]) -> str:
         if not date_options:
             return self._msg("no_date_available", clinic_name=self.context.clinic_name or "this clinic")
-        today_iso = date.today().isoformat()
-        tomorrow_iso = (date.today() + timedelta(days=1)).isoformat()
+        today = now_in_runtime_timezone().date()
+        today_iso = today.isoformat()
+        tomorrow_iso = (today + timedelta(days=1)).isoformat()
         def label(d: str) -> str:
             if d == today_iso:
                 return self._msg("date_label_today", date=d)
@@ -1232,18 +1323,19 @@ class AppointmentFSM:
                     admin_id=self.admin_id,
                 )
                 limit = max(1, min(14, int(accept_days) + 1))
-                today = date.today()
+                today = now_in_runtime_timezone().date()
                 return [(today + timedelta(days=i)).isoformat() for i in range(limit)]
             except Exception:
                 pass
         # Fallback: today + tomorrow
-        today = date.today()
+        today = now_in_runtime_timezone().date()
         return [today.isoformat(), (today + timedelta(days=1)).isoformat()]
 
     def _availability_date_options_prompt(self, date_options: list[str]) -> str:
         """Numbered menu for the ASK_AVAILABILITY_DATE state."""
-        today_iso = date.today().isoformat()
-        tomorrow_iso = (date.today() + timedelta(days=1)).isoformat()
+        today = now_in_runtime_timezone().date()
+        today_iso = today.isoformat()
+        tomorrow_iso = (today + timedelta(days=1)).isoformat()
 
         def label(d: str) -> str:
             if d == today_iso:

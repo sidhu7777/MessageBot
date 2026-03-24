@@ -2,6 +2,8 @@ import re
 from datetime import date, datetime, timedelta
 from typing import Any, Optional
 
+from src.timezone_utils import now_in_runtime_timezone
+
 
 def capture_prefill_entities(context: Any, text: str) -> None:
     if not getattr(context, "appointment_date", None):
@@ -263,7 +265,7 @@ def extract_phone(text: str) -> Optional[str]:
 
 def extract_date(text: str) -> Optional[str]:
     lower = text.strip().lower()
-    today = date.today()
+    today = now_in_runtime_timezone().date()
 
     if re.search(r"\btoday\b", lower):
         return today.isoformat()

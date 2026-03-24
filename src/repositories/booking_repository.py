@@ -246,7 +246,7 @@ class BookingRepository:
         )
 
     def ensure_appointment_columns(self) -> None:
-        """Ensure appointment table has runtime-required audit and booking columns."""
+        """Ensure appointment table has runtime-required audit, booking, and actor columns."""
         conn = self._connect()
         cur = conn.cursor()
         try:
@@ -266,8 +266,12 @@ class BookingRepository:
                 cur.execute(f"ALTER TABLE {appointment_table} ADD COLUMN cancelled_by VARCHAR(20) NULL")
             if "rescheduled_by" not in cols:
                 cur.execute(f"ALTER TABLE {appointment_table} ADD COLUMN rescheduled_by VARCHAR(20) NULL")
+            if "notify_telegram_chat_id" not in cols:
+                cur.execute(f"ALTER TABLE {appointment_table} ADD COLUMN notify_telegram_chat_id BIGINT NULL")
             if "booking_id" not in cols:
                 cur.execute(f"ALTER TABLE {appointment_table} ADD COLUMN booking_id INT NULL")
+            if "booked_for" not in cols:
+                cur.execute(f"ALTER TABLE {appointment_table} ADD COLUMN booked_for VARCHAR(10) NULL")
 
             conn.commit()
             self._invalidate_table_columns_cache(appointment_table)
