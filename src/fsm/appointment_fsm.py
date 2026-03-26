@@ -398,6 +398,8 @@ class AppointmentFSM:
         self.pending_existing_action = None
 
     def _msg(self, key: str, **kwargs: object) -> str:
+        if self._is_telegram_channel() and key in {"confirm_reschedule_summary", "confirm_reschedule_prompt"}:
+            key = f"{key}_telegram"
         text = get_message(self.response_language, key, **kwargs)
         if self._is_telegram_channel() and key == "confirm_summary":
             for prefix in ("Clinic: ", "Date: ", "Time: ", "क्लिनिक: ", "तारीख: ", "समय: "):
@@ -632,6 +634,46 @@ class AppointmentFSM:
             appointment_date=rows[0].get("slot_date") or "-",
             appointment_time=self._format_time_for_display(rows[0].get("slot_time") or "-"),
             clinic_name=rows[0].get("clinic_name") or "-",
+        )
+
+    def _existing_booking_response_for_context_identity(self) -> Optional[str]:
+        if not self.booking_repository:
+            return None
+        patient_name = " ".join(str(self.context.patient_name or "").strip().lower().split())
+        phone_number = self._normalize_phone(str(self.context.phone_number or "").strip())
+        if not patient_name or not phone_number:
+            return None
+        try:
+            rows = self.booking_repository.list_active_appointments_by_phone_number(
+                phone_number=phone_number,
+                admin_id=self.admin_id,
+                doctor_id=self.doctor_id,
+                limit=10,
+            )
+        except Exception:
+            rows = []
+        matched_rows: list[dict] = []
+        for row in rows or []:
+            existing_name = " ".join(str(row.get("patient_name") or "").strip().lower().split())
+            if existing_name and existing_name == patient_name:
+                matched_rows.append(row)
+        if not matched_rows:
+            return None
+        if len(matched_rows) >= 2:
+            self.active_booking_options_cache = matched_rows
+            self.state = "ASK_MAX_ACTIVE_BOOKINGS_ACTION"
+            return self._msg("max_active_bookings_actions")
+        self._set_existing_booking_from_row(matched_rows[0])
+        self.state = "ASK_EXISTING_BOOKING_ACTION"
+        display_number = matched_rows[0].get("booking_number")
+        if display_number is None:
+            display_number = matched_rows[0]["appointment_id"]
+        return self._msg(
+            "existing_booking_found",
+            appointment_id=display_number,
+            appointment_date=matched_rows[0].get("slot_date") or "-",
+            appointment_time=self._format_time_for_display(matched_rows[0].get("slot_time") or "-"),
+            clinic_name=matched_rows[0].get("clinic_name") or "-",
         )
 
     def _set_existing_booking_from_row(self, row: dict) -> None:

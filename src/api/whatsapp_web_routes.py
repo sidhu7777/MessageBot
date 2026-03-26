@@ -9,6 +9,7 @@ from fastapi import APIRouter, Request
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import HTMLResponse, JSONResponse
 
+from src.messages.templates import get_message
 from src.whatsapp_web.page_renderer import render_whatsapp_web_page_html
 
 
@@ -125,6 +126,31 @@ def register_whatsapp_web_routes(
         except Exception:
             return "Doctor"
 
+    def _resolve_doctor_id_by_slug(doctor_slug: str) -> int | None:
+        if not booking_repository:
+            return None
+        slug = str(doctor_slug or "").strip()
+        if not slug:
+            return None
+        conn = booking_repository._connect()
+        cur = conn.cursor(dictionary=True)
+        try:
+            cur.execute(
+                """
+                SELECT doctor_id
+                FROM doctors
+                WHERE TRIM(COALESCE(slug, '')) = %s
+                LIMIT 1
+                """,
+                (slug,),
+            )
+            row = cur.fetchone() or {}
+            value = row.get("doctor_id")
+            return int(value) if value is not None else None
+        finally:
+            cur.close()
+            conn.close()
+
     def _format_time(value: str) -> str:
         text = str(value or "").strip()
         if not text:
@@ -135,6 +161,9 @@ def register_whatsapp_web_routes(
             except ValueError:
                 continue
         return text
+
+    def _max_active_bookings_message(lang: str) -> str:
+        return get_message(lang, "max_active_bookings_reached")
 
     def _grouped_time_payload(
         times: list[str],
@@ -334,8 +363,7 @@ def register_whatsapp_web_routes(
         lang, _ = resolved_lang
         raise RuntimeError({"detail": "Booking repositories are not configured.", "lang": lang})
 
-    @router.get("/whatsapp/web", response_class=HTMLResponse)
-    async def whatsapp_web_page(request: Request, doctor_id: int | None = None):
+    async def _render_whatsapp_web_page(request: Request, doctor_id: int | None) -> HTMLResponse:
         resolved_lang, lock_language = _resolve_effective_language(request, {})
         if not doctor_id:
             return HTMLResponse("Missing doctor_id", status_code=400)
@@ -351,6 +379,10 @@ def register_whatsapp_web_routes(
                 lock_language=lock_language,
             )
         )
+
+    @router.get("/whatsapp/web", response_class=HTMLResponse)
+    async def whatsapp_web_page(request: Request, doctor_id: int | None = None):
+        return await _render_whatsapp_web_page(request, doctor_id)
 
     @router.get("/whatsapp/web/clinics")
     async def whatsapp_web_clinics(request: Request, doctor_id: int | None = None):
@@ -452,13 +484,14 @@ def register_whatsapp_web_routes(
         if doctor_id <= 0 or not phone_number:
             return JSONResponse({"detail": "Missing doctor_id or phone_number."}, status_code=400)
         admin_id = await run_in_threadpool(_resolve_admin_id, doctor_id)
-        appointments = await run_in_threadpool(
+        all_active_appointments = await run_in_threadpool(
             booking_repository.list_active_appointments_by_phone_number,
             phone_number,
             admin_id,
             doctor_id,
             10,
         )
+        appointments = list(all_active_appointments or [])
         if not booking_for_self and patient_name:
             same_as_self = await run_in_threadpool(
                 _other_name_matches_self_name,
@@ -479,6 +512,11 @@ def register_whatsapp_web_routes(
                 existing_name = " ".join(str(row.get("patient_name") or "").lower().split())
                 if existing_name and existing_name == normalized_name:
                     matched_same_identity.append(row)
+            if len(all_active_appointments or []) >= 2 and not matched_same_identity:
+                return JSONResponse(
+                    {"detail": _max_active_bookings_message(resolved_lang)},
+                    status_code=400,
+                )
             appointments = matched_same_identity
         return JSONResponse(
             {
@@ -518,6 +556,21 @@ def register_whatsapp_web_routes(
         if not all([doctor_id, clinic_id, patient_name, phone_number, slot_date, slot_time]):
             return JSONResponse({"detail": "Missing required booking fields."}, status_code=400)
         admin_id = await run_in_threadpool(_resolve_admin_id, doctor_id)
+        active_phone_appointments = await run_in_threadpool(
+            booking_repository.list_active_appointments_by_phone_number,
+            phone_number,
+            admin_id,
+            doctor_id,
+            10,
+        )
+        if len(active_phone_appointments or []) >= 2:
+            return JSONResponse(
+                {
+                    "status": "error",
+                    "message": _max_active_bookings_message(resolved_lang),
+                },
+                status_code=400,
+            )
         if not booking_for_self:
             same_as_self = await run_in_threadpool(
                 _other_name_matches_self_name,
@@ -690,5 +743,12 @@ def register_whatsapp_web_routes(
                 "booking_number": booking_number,
             }
         )
+
+    @router.get("/whatsapp/web/{doctor_slug}", response_class=HTMLResponse)
+    async def whatsapp_web_page_by_slug(request: Request, doctor_slug: str):
+        doctor_id = await run_in_threadpool(_resolve_doctor_id_by_slug, doctor_slug)
+        if not doctor_id:
+            return HTMLResponse("Doctor slug not found", status_code=404)
+        return await _render_whatsapp_web_page(request, doctor_id)
 
     app.include_router(router)

@@ -1,4 +1,0 @@
-[15:56:26.053]  QR_SUBMIT_RECEIVED                doctor_id=1  clinic_id=2  patient_name='Prem kumar'  phone='9879292787'
-[15:56:33.854]  QR_SUBMIT_SUCCEEDED               status='booked'  message='Appointment confirmed. Patient ID: 15.'  booking_id=158  appointment_date='2026-03-11'  appointment_time='16:00'  clinic_name='Health Plus Clinic'  doctor_name='Sanjay Vinayak'
-[17:21:00.623]  QR_SUBMIT_RECEIVED                doctor_id=1  clinic_id=2  patient_name='Prem kumar'  phone='9879292787'
-[17:21:03.161]  QR_SUBMIT_SUCCEEDED               status='active_booking'  message='You already have an active booking (#15) on 2026-03-11 16:00.'  booking_id=158  appointment_date='2026-03-11'  appointment_time='16:00'  clinic_name='Health Plus Clinic'  doctor_name='Sanjay Vinayak'

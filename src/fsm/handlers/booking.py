@@ -107,10 +107,15 @@ def handle_ask_name_state(fsm: "AppointmentFSM", text: str, lower: str) -> str:
         return fsm._respond(fsm._with_back(fsm._msg("other_person_name_must_differ")))
     fsm.context.patient_name = name
     fsm._ensure_actor_defaults()
+    if fsm._is_telegram_channel() and fsm.context.phone_number:
+        existing_reply = fsm._existing_booking_response_for_context_identity()
+        if existing_reply:
+            fsm.in_edit_flow = False
+            return fsm._respond(existing_reply)
     if fsm.in_edit_flow:
         fsm.in_edit_flow = False
         fsm.state = "CONFIRM"
-        return fsm._respond(fsm._msg("change_ack", step="ASK_NAME") + "\n\n" + fsm._msg("confirm_summary", **fsm._display_context()))
+        return fsm._respond(fsm._msg("confirm_summary", **fsm._display_context()))
     if fsm.booking_for_self:
         chat_phone = fsm._normalize_phone(fsm.chat_phone_number or "")
         if chat_phone and not fsm._is_telegram_channel():
@@ -167,10 +172,15 @@ def handle_ask_phone_state(fsm: "AppointmentFSM", text: str, lower: str) -> str:
         if not chat_phone:
             return fsm._respond(fsm._with_back(fsm._msg("invalid_phone_same_missing")))
         fsm.context.phone_number = chat_phone
+        if fsm._is_telegram_channel() and fsm.context.patient_name:
+            existing_reply = fsm._existing_booking_response_for_context_identity()
+            if existing_reply:
+                fsm.in_edit_flow = False
+                return fsm._respond(existing_reply)
         if fsm.in_edit_flow:
             fsm.in_edit_flow = False
             fsm.state = "CONFIRM"
-            return fsm._respond(fsm._msg("change_ack", step="ASK_PHONE") + "\n\n" + fsm._msg("confirm_summary", **fsm._display_context()))
+            return fsm._respond(fsm._msg("confirm_summary", **fsm._display_context()))
         auto = fsm._auto_select_single_clinic_after_phone()
         if auto:
             return fsm._respond(fsm._msg("phone_ack", phone_number=fsm.context.phone_number) + "\n\n" + fsm._with_back(auto))
@@ -185,10 +195,15 @@ def handle_ask_phone_state(fsm: "AppointmentFSM", text: str, lower: str) -> str:
     if not phone:
         return fsm._respond(fsm._with_back(fsm._msg("invalid_phone")))
     fsm.context.phone_number = phone
+    if fsm._is_telegram_channel() and fsm.context.patient_name:
+        existing_reply = fsm._existing_booking_response_for_context_identity()
+        if existing_reply:
+            fsm.in_edit_flow = False
+            return fsm._respond(existing_reply)
     if fsm.in_edit_flow:
         fsm.in_edit_flow = False
         fsm.state = "CONFIRM"
-        return fsm._respond(fsm._msg("change_ack", step="ASK_PHONE") + "\n\n" + fsm._msg("confirm_summary", **fsm._display_context()))
+        return fsm._respond(fsm._msg("confirm_summary", **fsm._display_context()))
     auto = fsm._auto_select_single_clinic_after_phone()
     if auto:
         return fsm._respond(fsm._msg("phone_ack", phone_number=phone) + "\n\n" + fsm._with_back(auto))
@@ -328,6 +343,6 @@ def handle_ask_time_state(fsm: "AppointmentFSM", text: str, lower: str) -> str:
     if fsm.in_edit_flow:
         fsm.in_edit_flow = False
         fsm.state = "CONFIRM"
-        return fsm._respond(fsm._msg("change_ack", step="ASK_TIME") + "\n\n" + fsm._msg("confirm_summary", **fsm._display_context()))
+        return fsm._respond(fsm._msg("confirm_summary", **fsm._display_context()))
     fsm.state = "CONFIRM"
     return fsm._respond(fsm._msg("time_ack", appointment_time=fsm._format_time_for_display(parsed_time)) + "\n\n" + fsm._msg("confirm_summary", **fsm._display_context()))

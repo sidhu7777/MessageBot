@@ -246,6 +246,8 @@ def handle_confirm_reschedule_state(fsm: "AppointmentFSM", lower: str) -> str:
             )
         return fsm._respond(fsm._msg("reschedule_failed"))
     if normalized == "2":
+        if fsm._is_telegram_channel():
+            return fsm._respond(fsm._msg("confirm_reschedule_prompt"))
         fsm.state = "ASK_TIME"
         return fsm._respond(fsm._time_prompt_for_edit_flow())
     if normalized == "0" or is_no(lower):

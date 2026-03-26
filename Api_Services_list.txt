@@ -1,0 +1,156 @@
+Simple Connection Diagram 
+
+Internet
+  |
+  v
+Nginx :443/:80
+  |
+  v
+FastAPI app :8000
+  |
+  +--> /telegram/webhook/{key}
+  |      -> route/account resolution
+  |      -> session/FSM
+  |      -> Kafka turn queue
+  |      -> ChannelDelivery reply to Telegram
+  |
+  +--> /whatsapp/webhook
+  |      -> inbound normalization
+  |      -> session/FSM
+  |      -> reply via WhatsApp provider
+  |
+  +--> /whatsapp/web
+  |      -> booking web UI
+  |      -> AJAX calls to /whatsapp/web/*
+  |
+  +--> /qr/checkin
+  |      -> patient check-in page
+  |      -> submit to /qr/checkin/submit
+  |
+  +--> /qr/generate
+         -> builds QR SVG
+         -> QR encodes /qr/checkin?doctor_id=...&clinic_id=...
+
+
+Backend Service Connections
+
+FastAPI app
+  |
+  +--> MySQL
+  |      patients
+  |      appointment
+  |      doctors
+  |      channel_accounts
+  |      doctor_channel_bindings
+  |
+  +--> Redis
+  |      session/cache/processing guards
+  |
+  +--> Kafka
+  |      msgbot.turns
+  |      msgbot.notifications
+  |
+  +--> Ollama
+  |      LLM/NLU extraction
+  |
+  +--> External providers
+         Telegram Bot API
+         Twilio / Meta WhatsApp / Infobip
+
+
+Domain Api Map
+
+https://dapto-services.vinfocom.co.in
+|
+|-- Health
+|   |-- GET  /health
+|   |-- GET  /health/queue
+|
+|-- QR
+|   |-- GET  /qr/checkin
+|   |-- POST /qr/checkin/submit
+|   |-- POST /qr/generate
+|   |-- GET  /qr/generate/download
+|
+|-- WhatsApp Web
+|   |-- GET  /whatsapp/web
+|   |-- GET  /whatsapp/web/clinics
+|   |-- GET  /whatsapp/web/dates
+|   |-- GET  /whatsapp/web/times
+|   |-- POST /whatsapp/web/lookup
+|   |-- POST /whatsapp/web/book
+|   |-- POST /whatsapp/web/cancel
+|   |-- POST /whatsapp/web/reschedule
+|
+|-- Webhooks
+|   |-- GET  /whatsapp/webhook
+|   |-- POST /whatsapp/webhook
+|   |-- POST /telegram/webhook
+|   |-- POST /telegram/webhook/{webhook_key}
+|   |-- POST /webhook
+|   |-- POST /twilio/status
+|   |-- POST /infobip/webhook
+|
+|-- Internal
+    |-- POST /internal/route-cache/invalidate
+
+
+Functional Diagram
+
+dapto-services.vinfocom.co.in
+|
++-- Health APIs
+|   +-- /health
+|   +-- /health/queue
+|
++-- QR APIs
+|   +-- /qr/generate
+|   +-- /qr/generate/download
+|   +-- /qr/checkin
+|   +-- /qr/checkin/submit
+|
++-- WhatsApp Web Booking APIs
+|   +-- /whatsapp/web
+|   +-- /whatsapp/web/clinics
+|   +-- /whatsapp/web/dates
+|   +-- /whatsapp/web/times
+|   +-- /whatsapp/web/lookup
+|   +-- /whatsapp/web/book
+|   +-- /whatsapp/web/cancel
+|   +-- /whatsapp/web/reschedule
+|
++-- Channel Webhook APIs
+|   +-- /whatsapp/webhook
+|   +-- /telegram/webhook
+|   +-- /telegram/webhook/{webhook_key}
+|   +-- /webhook
+|   +-- /twilio/status
+|   +-- /infobip/webhook
+|
++-- Internal APIs
+    +-- /internal/route-cache/invalidate
+
+
+
+Simple Request Grouping 
+
+Frontend-facing:
+- /qr/checkin
+- /qr/checkin/submit
+- /qr/generate
+- /qr/generate/download
+- /whatsapp/web
+- /whatsapp/web/*
+
+Provider-facing:
+- /whatsapp/webhook
+- /telegram/webhook
+- /telegram/webhook/{webhook_key}
+- /webhook
+- /twilio/status
+- /infobip/webhook
+
+Ops/Internal:
+- /health
+- /health/queue
+- /internal/route-cache/invalidate

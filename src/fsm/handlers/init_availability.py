@@ -15,6 +15,7 @@ from src.nlu.extractors import (
     resolve_change_target,
 )
 from src.nlu.initial_router import route_initial_decision
+from src.timezone_utils import now_in_runtime_timezone
 
 if TYPE_CHECKING:
     from src.fsm.appointment_fsm import AppointmentFSM
@@ -34,11 +35,7 @@ def handle_init_state(fsm: "AppointmentFSM", text: str, lower: str) -> str:
         )
 
     def _booking_continue_reply() -> str:
-        return (
-            fsm._msg("intent_ack")
-            + "\n\n"
-            + fsm._with_back(fsm._msg("ask_booking_for"), option_count=2)
-        )
+        return _booking_start_reply()
 
     def _language_choice(value: str) -> str | None:
         normalized = (value or "").strip().lower()
@@ -253,6 +250,10 @@ def handle_availability_details_state(fsm: "AppointmentFSM", text: str, lower: s
 def handle_confirm_state(fsm: "AppointmentFSM", text: str, lower: str) -> str:
     confirm_intent = fsm._detect_confirm_intent(text)
     if confirm_intent == "yes":
+        if fsm._is_telegram_channel():
+            existing_reply = fsm._existing_booking_response_for_context_identity()
+            if existing_reply:
+                return fsm._respond(existing_reply)
         fsm.state = "COMPLETED"
         confirmed = fsm._msg("confirmed", **fsm._display_context())
         persist_note = fsm._persist_confirmed_appointment()
@@ -275,6 +276,16 @@ def handle_confirm_state(fsm: "AppointmentFSM", text: str, lower: str) -> str:
             fsm.state = reroute_state
             if reroute_state == "ASK_CLINIC":
                 return fsm._respond(fsm._msg("change_ack") + "\n\n" + fsm._clinic_prompt())
+            if reroute_state == "ASK_DATE":
+                date_options = fsm._date_options()
+                if not date_options:
+                    fsm.state = "ASK_CLINIC"
+                    return fsm._respond(
+                        fsm._msg("no_date_available", clinic_name=fsm.context.clinic_name or "this clinic")
+                        + "\n\n"
+                        + fsm._clinic_prompt()
+                    )
+                return fsm._respond(fsm._msg("change_ack") + "\n\n" + fsm._date_options_prompt(date_options))
             if reroute_state == "ASK_TIME":
                 return fsm._respond(fsm._msg("change_ack") + "\n\n" + fsm._time_prompt_for_edit_flow())
             return fsm._respond(fsm._msg("change_ack", step=reroute_state))
@@ -307,21 +318,57 @@ def handle_change_field_state(fsm: "AppointmentFSM", text: str, lower: str) -> s
     fsm.state = reroute_state
     if reroute_state == "ASK_CLINIC":
         return fsm._respond(fsm._msg("change_ack") + "\n\n" + fsm._clinic_prompt())
+    if reroute_state == "ASK_DATE":
+        date_options = fsm._date_options()
+        if not date_options:
+            fsm.state = "ASK_CLINIC"
+            return fsm._respond(
+                fsm._msg("no_date_available", clinic_name=fsm.context.clinic_name or "this clinic")
+                + "\n\n"
+                + fsm._clinic_prompt()
+            )
+        return fsm._respond(fsm._msg("change_ack") + "\n\n" + fsm._date_options_prompt(date_options))
     if reroute_state == "ASK_TIME":
         return fsm._respond(fsm._msg("change_ack") + "\n\n" + fsm._time_prompt_for_edit_flow())
     return fsm._respond(fsm._msg("change_ack", step=reroute_state))
 
 
 def handle_completed_state(fsm: "AppointmentFSM", lower: str) -> str:
+    preserved_language = fsm.response_language
+    preserved_language_locked = fsm.language_locked
+    preserved_language_selected = fsm.language_selected_by_user
     fsm._reset_all(cancelled=False)
+    if preserved_language_selected and preserved_language in {"en", "hi", "hinglish"}:
+        fsm.response_language = preserved_language
+        fsm.language_locked = preserved_language_locked
+        fsm.language_selected_by_user = True
+        fsm._hydrate_known_patient_name()
     normalized = (lower or "").strip()
     if normalized == "1" or is_booking_intent(normalized) or is_restart_intent(normalized):
+        if fsm.language_selected_by_user:
+            existing_reply = fsm._existing_booking_entry_response()
+            if existing_reply:
+                return fsm._respond(existing_reply, allow_polish=False)
+            fsm.state = "ASK_BOOKING_FOR"
+            return fsm._respond(_booking_start_reply(), allow_polish=False)
         fsm.pending_init_intent = "BOOK_APPOINTMENT"
     elif normalized == "2":
+        if fsm.language_selected_by_user:
+            fsm.state = "ASK_AVAILABILITY_DATE"
+            fsm.availability_date_options_cache = []
+            date_opts = fsm._availability_date_options()
+            fsm.availability_date_options_cache = date_opts
+            return fsm._respond(fsm._availability_date_options_prompt(date_opts), allow_polish=False)
         fsm.pending_init_intent = "CHECK_AVAILABILITY"
     elif is_greeting_intent(normalized):
+        if fsm.language_selected_by_user:
+            fsm.state = "INIT"
+            return fsm._respond(fsm._welcome_greeting() + "\n" + fsm._main_menu_prompt(), allow_polish=False)
         fsm.pending_init_intent = "GREETING"
     else:
+        if fsm.language_selected_by_user:
+            fsm.state = "INIT"
+            return fsm._respond(fsm._welcome_greeting() + "\n" + fsm._main_menu_prompt(), allow_polish=False)
         fsm.pending_init_intent = "OTHER"
     fsm.state = "ASK_LANGUAGE"
     return fsm._respond(fsm._language_selection_prompt(), allow_polish=False)

@@ -68,3 +68,15 @@ VALUES
 # to generate the qr code 
 
 docker exec -it message-bot-app python tests/live_qr_generate_preview.py --base-url https://dapto-services.vinfocom.co.in --doctor-id 4 --clinic-id 11
+
+
+For 2 telegram Users
+
+For the two Telegram chat IDs you asked about, the patients table contains:
+
+telegram_chat_id = 8751045754 → patient_id = 49 → full_name = Vineeth
+telegram_chat_id = 1436550879 → patient_id = 50 → full_name = Vineeth
+Exact rows found:
+
+49 | Vineeth | admin_id 1 | doctor_id 4 | phone 8634879801 | 8751045754
+50 | Vineeth | admin_id 1 | doctor_id 4 | phone 1234567880 | 1436550879

@@ -1,2 +1,0 @@
-[17:21:16.795]  QR_SUBMIT_RECEIVED                doctor_id=1  clinic_id=2  patient_name='Prem kumar'  phone='9879292687'
-[17:21:24.254]  QR_SUBMIT_SUCCEEDED               status='booked'  message='Appointment confirmed. Patient ID: 17.'  booking_id=160  appointment_date='2026-03-11'  appointment_time='17:30'  clinic_name='Health Plus Clinic'  doctor_name='Sanjay Vinayak'

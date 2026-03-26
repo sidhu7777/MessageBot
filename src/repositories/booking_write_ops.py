@@ -429,12 +429,19 @@ def save_confirmed_appointment(
 
         patient_values: dict[str, object] = {}
         booking_for_self = getattr(context, "booking_for_self", None)
+        profile_type_value: Optional[str] = None
+        if booking_for_self is True:
+            profile_type_value = "SELF"
+        elif booking_for_self is False:
+            profile_type_value = "OTHER"
         if "full_name" in patient_columns:
             patient_values["full_name"] = context.patient_name
         if "admin_id" in patient_columns:
             patient_values["admin_id"] = actual_admin_id
         if "phone" in patient_columns:
             patient_values["phone"] = context.phone_number
+        if "profile_type" in patient_columns and profile_type_value is not None:
+            patient_values["profile_type"] = profile_type_value
         chat_user_id_value = repo._normalize_chat_user_id(
             str(getattr(context, "chat_user_id", "") or "")
         )
@@ -495,7 +502,7 @@ def save_confirmed_appointment(
 
         update_columns = [
             col
-            for col in ("phone", "age", "gender", "patient_type", "reason", mode_column, chat_column)
+            for col in ("full_name", "profile_type", "phone", "age", "gender", "patient_type", "reason", mode_column, chat_column)
             if col and col in patient_values
         ]
 
@@ -519,7 +526,7 @@ def save_confirmed_appointment(
         else:
             insert_columns = [
                 col
-                for col in ("full_name", "admin_id", "phone", "age", "gender", "patient_type", "reason", mode_column, chat_column)
+                for col in ("full_name", "admin_id", "profile_type", "phone", "age", "gender", "patient_type", "reason", mode_column, chat_column)
                 if col and col in patient_values
             ]
             if "full_name" not in insert_columns or "admin_id" not in insert_columns:

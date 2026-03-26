@@ -682,6 +682,16 @@ def render_whatsapp_web_page_html(
       periodWrap.classList.toggle("hidden", !enabled);
     }}
 
+    function resetLookupState() {{
+      activeAppointments = [];
+      pendingRescheduleId = null;
+      hideSections();
+      setStatus("");
+      document.getElementById("appointmentList").innerHTML = "";
+      document.getElementById("periodWrap").classList.add("hidden");
+      document.getElementById("reschedulePeriodWrap").classList.add("hidden");
+    }}
+
     function setStatus(message) {{
       const box = document.getElementById("statusLine");
       box.textContent = message || "";
@@ -927,13 +937,14 @@ def render_whatsapp_web_page_html(
       const name = document.getElementById("patientName").value.trim();
       const phone = document.getElementById("phoneNumber").value.trim();
       if (!doctorId) {{
-        setStatus(currentTexts().missingDoctor);
+        openResultModal("err", currentTexts().missingDoctor);
         return;
       }}
       if (!name || !phone) {{
-        setStatus(currentTexts().missingIdentity);
+        openResultModal("err", currentTexts().missingIdentity);
         return;
       }}
+      resetLookupState();
       setStatus(currentTexts().continueLoading);
       try {{
         const data = await fetchJson("/whatsapp/web/lookup", {{
@@ -954,7 +965,8 @@ def render_whatsapp_web_page_html(
         }}
         await showBookingSection();
       }} catch (err) {{
-        setStatus(String(err.message || currentTexts().requestFailed));
+        setStatus("");
+        openResultModal("warn", String(err.message || currentTexts().requestFailed));
       }}
     }}
 
@@ -1174,6 +1186,7 @@ def render_whatsapp_web_page_html(
 
     document.querySelectorAll('input[name="bookingFor"]').forEach((radio) => {{
       radio.addEventListener("change", () => {{
+        resetLookupState();
         toggleBookInsteadVisibility();
       }});
     }});

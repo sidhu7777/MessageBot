@@ -158,6 +158,16 @@ def get_message(response_language: str, key: str, **kwargs: object) -> str:
             "Reply with 1, 2, or 0."
         ),
         "confirm_reschedule_prompt": "1. Confirm\n2. Change details\n\n0. Go back\nReply with 1, 2, or 0.",
+        "confirm_reschedule_summary_telegram": (
+            "Please confirm reschedule:\n"
+            "Clinic: {clinic_name}\n"
+            "Old slot: {old_date} {old_time}\n"
+            "New slot: {new_date} {new_time}\n"
+            "1. Confirm\n"
+            "0. Go back\n"
+            "Reply with 1 or 0."
+        ),
+        "confirm_reschedule_prompt_telegram": "1. Confirm\n0. Go back\nReply with 1 or 0.",
         "reschedule_confirmed": (
             "Appointment rescheduled successfully.\n"
             "*Appointment ID: {appointment_id}*\n"
@@ -399,6 +409,16 @@ def get_message(response_language: str, key: str, **kwargs: object) -> str:
             "कृपया 1, 2, या 0 में उत्तर दें।"
         ),
         "confirm_reschedule_prompt": "1. पुष्टि करें\n2. विवरण बदलें\n0. वापस जाएं\nकृपया 1, 2, या 0 में उत्तर दें।",
+        "confirm_reschedule_summary_telegram": (
+            "कृपया पुनर्निर्धारण की पुष्टि करें:\n"
+            "क्लिनिक: {clinic_name}\n"
+            "पुराना स्लॉट: {old_date} {old_time}\n"
+            "नया स्लॉट: {new_date} {new_time}\n"
+            "1. पुष्टि करें\n"
+            "0. वापस जाएं\n"
+            "कृपया 1 या 0 में उत्तर दें।"
+        ),
+        "confirm_reschedule_prompt_telegram": "1. पुष्टि करें\n0. वापस जाएं\nकृपया 1 या 0 में उत्तर दें।",
         "reschedule_confirmed": (
             "अपॉइंटमेंट सफलतापूर्वक पुनर्निर्धारित हो गई।\n"
             "*अपॉइंटमेंट आईडी: {appointment_id}*\n"
@@ -625,6 +645,16 @@ def get_message(response_language: str, key: str, **kwargs: object) -> str:
             "Reply with 1, 2, or 0."
         ),
         "confirm_reschedule_prompt": "1. Confirm kariye\n2. Details badliye\n0. Go back\nReply with 1, 2, or 0.",
+        "confirm_reschedule_summary_telegram": (
+            "Please reschedule confirm kariye:\n"
+            "Clinic: {clinic_name}\n"
+            "Old slot: {old_date} {old_time}\n"
+            "New slot: {new_date} {new_time}\n"
+            "1. Confirm kariye\n"
+            "0. Go back\n"
+            "Reply with 1 or 0."
+        ),
+        "confirm_reschedule_prompt_telegram": "1. Confirm kariye\n0. Go back\nReply with 1 or 0.",
         "reschedule_confirmed": (
             "Appointment successfully reschedule ho gaya.\n"
             "*Appointment ID: {appointment_id}*\n"
