@@ -19,6 +19,7 @@ System_Diagrams_Presentation.pdf
 *.svg
 *.pdf
 *.xlsx
+!Dapto_logo.jpeg
 
 Code_Module_Responsibility.png
 Code_Module_Responsibility.svg

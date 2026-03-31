@@ -80,3 +80,142 @@ Exact rows found:
 
 49 | Vineeth | admin_id 1 | doctor_id 4 | phone 8634879801 | 8751045754
 50 | Vineeth | admin_id 1 | doctor_id 4 | phone 1234567880 | 1436550879
+
+
+
+
+My Sql data backup process
+
+create a backup folder command  
+
+mkdir -p /backup/mysql
+
+
+install required tools 
+
+apt update
+apt install -y mysql-client rclone msmtp msmtp-mta bsd-mailx gzip
+
+
+configure google drive with rclone 
+
+
+rclone config
+
+
+. Configure email with msmtp
+
+nano ~/.msmtprc
+
+code inside the file 
+
+defaults
+auth on
+tls on
+tls_trust_file /etc/ssl/certs/ca-certificates.crt
+
+account gmail
+host smtp.gmail.com
+port 587
+from YOUR_GMAIL@gmail.com
+user YOUR_GMAIL@gmail.com
+password YOUR_GMAIL_APP_PASSWORD
+
+account default : gmail
+
+Secure it:
+
+chmod 600 ~/.msmtprc
+
+
+Create MySQL credentials file:
+
+nano ~/.my.cnf
+
+file content
+ 
+[client]
+user=YOUR_DB_USER
+password=YOUR_DB_PASSWORD
+host=127.0.0.1
+
+Secure it:
+
+chmod 600 ~/.my.cnf
+
+Create backup folder:
+
+mkdir -p /backup/mysql
+
+
+Create backup script:
+
+
+nano /root/mysql_backup.sh
+
+
+file content
+
+#!/bin/bash
+
+DATE=$(date +%F_%H-%M-%S)
+BACKUP_DIR="/backup/mysql"
+DB_NAME="YOUR_DB_NAME"
+EMAIL="YOUR_GMAIL@gmail.com"
+FILE="$BACKUP_DIR/${DB_NAME}_$DATE.sql"
+ARCHIVE="$FILE.gz"
+
+mysqldump --defaults-extra-file=/root/.my.cnf "$DB_NAME" > "$FILE"
+
+if [ $? -eq 0 ] && [ -s "$FILE" ]; then
+    gzip "$FILE"
+
+    if [ -s "$ARCHIVE" ]; then
+        rclone copy "$ARCHIVE" gdrive:mysql-backups/
+
+        if [ $? -eq 0 ]; then
+            MESSAGE="SUCCESS: MySQL backup created and uploaded: $ARCHIVE"
+        else
+            MESSAGE="WARNING: Backup created locally but Google Drive upload failed: $ARCHIVE"
+        fi
+    else
+        MESSAGE="FAILED: Backup file compression failed"
+    fi
+else
+    MESSAGE="FAILED: mysqldump backup failed"
+fi
+
+echo "$MESSAGE" | mail -s "MySQL Backup Status" "$EMAIL"
+
+find /backup/mysql -type f -mtime +14 -delete
+
+
+
+Make it executable:
+
+chmod +x /root/mysql_backup.sh
+
+
+Test manually:
+
+/root/mysql_backup.sh
+
+
+Check local backup:
+
+
+ls -lh /backup/mysql
+
+
+Check Google Drive upload:
+
+rclone lsd gdrive:
+rclone ls gdrive:mysql-backups
+
+
+Add weekly Friday cron:
+
+crontab -e
+
+
+0 2 * * 5 /root/mysql_backup.sh

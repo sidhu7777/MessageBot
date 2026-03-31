@@ -10,9 +10,11 @@ services:
     environment:
       REDIS_HOST: "redis"
       KAFKA_BOOTSTRAP_SERVERS: "kafka:9092"
-      OLLAMA_BASE_URL: "http://ollama:11434"
+      OLLAMA_BASE_URL: "http://host.docker.internal:11434"
       OLLAMA_AUTO_START: "false"
       OLLAMA_AUTO_PULL: "false"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     depends_on:
       kafka:
         condition: service_healthy
@@ -35,47 +37,6 @@ services:
       interval: 10s
       timeout: 5s
       retries: 10
-
-  ollama:
-    image: ollama/ollama:latest
-    container_name: message-bot-ollama
-    restart: unless-stopped
-    ports:
-      - "11434:11434"
-    volumes:
-      - ollama:/root/.ollama
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: all
-              capabilities: [gpu]
-    healthcheck:
-      test: ["CMD", "ollama", "list"]
-      interval: 15s
-      timeout: 5s
-      retries: 20
-
-  ollama-pull:
-    image: ollama/ollama:latest
-    container_name: message-bot-ollama-pull
-    depends_on:
-      ollama:
-        condition: service_started
-    env_file:
-      - .env
-    environment:
-      OLLAMA_HOST: "http://ollama:11434"
-    volumes:
-      - ollama:/root/.ollama
-    restart: on-failure
-    entrypoint:
-      [
-        "/bin/sh",
-        "-c",
-        "MODEL=\"$${LLM_MODEL_NAME:-qwen3:0.6b}\"; TAGS=$$(wget -qO- http://ollama:11434/api/tags 2>/dev/null || true); if echo \"$$TAGS\" | grep -q \"\\\"name\\\":\\\"$$MODEL\\\"\"; then echo \"Model $$MODEL already present; skipping pull.\"; exit 0; fi; if [ -z \"$$TAGS\" ]; then echo \"Ollama not ready; skipping pull.\"; exit 0; fi; ollama pull \"$$MODEL\""
-      ]
 
   kafka:
     image: apache/kafka:3.8.0
@@ -122,4 +83,3 @@ services:
 volumes:
   kafka_data:
   redis_data:
-  ollama:

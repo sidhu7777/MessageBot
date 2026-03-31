@@ -1,5 +1,17 @@
+import base64
 import html as html_escape
 import json
+from functools import lru_cache
+from pathlib import Path
+
+
+@lru_cache(maxsize=1)
+def _dapto_logo_src() -> str:
+    logo_path = Path(__file__).resolve().parents[2] / "Dapto_logo.jpeg"
+    try:
+        return "data:image/jpeg;base64," + base64.b64encode(logo_path.read_bytes()).decode("ascii")
+    except OSError:
+        return ""
 
 
 def render_whatsapp_web_page_html(
@@ -9,6 +21,7 @@ def render_whatsapp_web_page_html(
     language: str = "en",
     lock_language: bool = False,
 ) -> str:
+    dapto_logo_src = _dapto_logo_src()
     doctor_name_safe = html_escape.escape(doctor_name or "Doctor")
     lang = language if language in {"en", "hi", "hinglish"} else "en"
     ui = {
@@ -508,6 +521,28 @@ def render_whatsapp_web_page_html(
       font-size: 16px;
       color: var(--ink);
     }}
+    .brand-footer {{
+      padding: 0 24px 24px 24px;
+      display: grid;
+      justify-items: center;
+      gap: 8px;
+      text-align: center;
+      color: var(--muted);
+      border-top: 1px solid #edf3ef;
+    }}
+    .brand-footer span {{
+      font-size: 12px;
+      font-weight: 600;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      padding-top: 18px;
+    }}
+    .brand-footer img {{
+      display: block;
+      width: min(170px, 42vw);
+      height: auto;
+      object-fit: contain;
+    }}
   </style>
 </head>
 <body>
@@ -598,6 +633,11 @@ def render_whatsapp_web_page_html(
       </div>
       <button id=\"rescheduleBtn\" type=\"button\">{ui["reschedule_submit"]}</button>
     </section>
+
+    <div class=\"brand-footer\">
+      <span>Powered by</span>
+      <img src="{dapto_logo_src}" alt="" onerror="this.style.display='none'" />
+    </div>
   </section>
 
   <div id=\"resultModal\" class=\"modal\" aria-hidden=\"true\">

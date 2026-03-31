@@ -5,10 +5,12 @@ import time
 import threading
 import uuid
 from contextlib import asynccontextmanager
+from pathlib import Path
 from threading import Lock
 from typing import Dict, Optional, Tuple
 
 from fastapi import FastAPI
+from fastapi.responses import FileResponse
 from twilio.rest import Client
 from twilio.request_validator import RequestValidator
 from dotenv import load_dotenv
@@ -296,6 +298,7 @@ async def _app_lifespan(_app: FastAPI):
 
 
 app = FastAPI(title=settings.app_name, lifespan=_app_lifespan)
+_DAPTO_LOGO_PATH = Path(__file__).resolve().parent / "Dapto_logo.jpeg"
 
 
 async def startup_validation() -> None:
@@ -421,6 +424,11 @@ async def health_queue() -> dict:
         },
         "automation": automation_scheduler.snapshot(),
     }
+
+
+@app.get("/branding/dapto-logo")
+async def dapto_logo() -> FileResponse:
+    return FileResponse(_DAPTO_LOGO_PATH, media_type="image/jpeg")
 
 
 register_qr_routes(

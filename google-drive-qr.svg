@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="320" height="360" viewBox="0 0 320 360" role="img" aria-labelledby="title desc">
+  <title id="title">Google Drive QR</title>
+  <desc id="desc">QR code that points to the provided Google Drive file URL.</desc>
+  <rect width="320" height="360" fill="#ffffff" />
+  <image
+    x="10"
+    y="10"
+    width="300"
+    height="300"
+    preserveAspectRatio="xMidYMid meet"
+    href="https://api.qrserver.com/v1/create-qr-code/?size=300x300&amp;format=svg&amp;data=https%3A%2F%2Fdrive.google.com%2Ffile%2Fd%2F1rudNf86g4mQvbC35J1dLClLGhQCnZHnh%2Fview%3Fusp%3Ddrivesdk"
+  />
+  <text x="160" y="332" text-anchor="middle" font-family="Arial, sans-serif" font-size="14" fill="#111111">
+    Scan to open the Google Drive file
+  </text>
+  <text x="160" y="350" text-anchor="middle" font-family="Arial, sans-serif" font-size="10" fill="#444444">
+    file id: 1rudNf86g4mQvbC35J1dLClLGhQCnZHnh
+  </text>
+</svg>

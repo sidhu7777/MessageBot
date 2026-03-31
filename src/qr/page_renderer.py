@@ -1,4 +1,16 @@
-﻿import html as html_escape
+﻿import base64
+import html as html_escape
+from functools import lru_cache
+from pathlib import Path
+
+
+@lru_cache(maxsize=1)
+def _dapto_logo_src() -> str:
+    logo_path = Path(__file__).resolve().parents[2] / "Dapto_logo.jpeg"
+    try:
+        return "data:image/jpeg;base64," + base64.b64encode(logo_path.read_bytes()).decode("ascii")
+    except OSError:
+        return ""
 
 
 def render_qr_page_html(
@@ -14,6 +26,7 @@ def render_qr_page_html(
     language: str = "en",
     lock_language: bool = False,
 ) -> str:
+    dapto_logo_src = _dapto_logo_src()
     doctor_name_safe = html_escape.escape(doctor_name or "Doctor")
     clinic_name_safe = html_escape.escape(clinic_name or "Clinic")
     patient_name_safe = html_escape.escape(patient_name or "")
@@ -236,6 +249,26 @@ def render_qr_page_html(
       margin-top: 0;
       min-width: 120px;
     }}
+    .brand-footer {{
+      padding: 0 24px 24px 24px;
+      display: grid;
+      justify-items: center;
+      gap: 8px;
+      text-align: center;
+      color: var(--muted);
+    }}
+    .brand-footer span {{
+      font-size: 12px;
+      font-weight: 600;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+    }}
+    .brand-footer img {{
+      display: block;
+      width: min(160px, 42vw);
+      height: auto;
+      object-fit: contain;
+    }}
   </style>
 </head>
 <body>
@@ -261,6 +294,10 @@ def render_qr_page_html(
       <input type=\"hidden\" id=\"doctorId\" value=\"{doctor_id}\" />
       <input type=\"hidden\" id=\"clinicId\" value=\"{clinic_id}\" />
     </form>
+    <div class=\"brand-footer\">
+      <span>Powered by</span>
+      <img src="{dapto_logo_src}" alt="" onerror="this.style.display='none'" />
+    </div>
   </section>
   <div id=\"resultModal\" class=\"modal\" aria-hidden=\"true\">
     <div class=\"modal-card\" role=\"dialog\" aria-modal=\"true\" aria-labelledby=\"modalTitle\">

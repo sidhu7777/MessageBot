@@ -506,6 +506,7 @@ def list_active_appointments_by_phone_number(
                     a.doctor_id,
                     {booking_select} AS booking_number,
                     c.clinic_name,
+                    COALESCE(p.full_name, '') AS patient_name,
                     DATE_FORMAT(a.appointment_date, '%Y-%m-%d') AS slot_date,
                     TIME_FORMAT(a.start_time, '%H:%i') AS slot_time,
                     COALESCE(p.phone, '') AS patient_phone
