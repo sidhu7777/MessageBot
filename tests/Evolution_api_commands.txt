@@ -1,0 +1,37 @@
+To delete the instance 
+
+ Invoke-RestMethod `
+>>   -Method DELETE `
+>>   -Uri "http://127.0.0.1:8081/instance/delete/codex-temp-test" `
+>>   -Headers @{ apikey = "my_super_secret_key_123" }
+>>
+
+
+to test the instance is deleted or not 
+
+Invoke-RestMethod `
+  -Method GET `
+  -Uri "http://127.0.0.1:8081/instance/fetchInstances?instanceName=codex-temp-test" `
+  -Headers @{ apikey = "my_super_secret_key_123" }
+
+# to open the evolution api
+
+
+http://127.0.0.1:8081/manager
+
+
+
+# to install lastest version of evolution 
+
+docker pull evoapicloud/evolution-api:v2.3.7
+
+
+# to update the evolution api compose  or docer instance of evolution 
+
+docker compose up -d evolution-api
+
+
+#to check the logs in the docker 
+
+docker logs --tail 200 message-bot-evolution-api
+

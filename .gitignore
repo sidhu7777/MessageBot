@@ -1,6 +1,6 @@
 .env
 venv/
-tests/
+
 __pycache__/
 data/
 
@@ -12,7 +12,14 @@ images/
 images/*
 images_mmd_generation/
 images_mmd_generation/*
-tests/
-tests/* 
+
+tests/testdata/
+tests/reports/
+tests/load/
+
 System_Diagrams_presentation.pdf
-S
+
+
+.env.example
+.env
+env_file_copy.txt
