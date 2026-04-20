@@ -1,0 +1,42 @@
+# to start the evolution
+
+docker start message-bot-evolution-api
+
+# open the evolution Manager 
+
+http://<your-server-ip>:8081/manager
+
+
+# setting the evoltion instance for the webhook integration 
+
+go to created instance and in events click webhook and in the url keep the webhook base url = "https://daptoservices.vinfocom.co.in/evolution/webhook
+"   and click enable off to on and same for the message upsert part 
+
+
+and click save
+
+
+
+# commands to bind the whatsapp account to the db 
+
+USE doctor_db;
+
+INSERT INTO doctor_evolution_bindings (
+  doctor_id,
+  evolution_instance_name,
+  status
+) VALUES (
+  <doctor_id>,
+  'Doctor_db',
+  'active'
+);
+
+
+# To verify:
+SELECT * FROM doctor_evolution_bindings;
+
+# To add the doctor slug 
+
+SELECT doctor_id, doctor_name, slug, phone
+FROM doctors
+WHERE doctor_id = <doctor_id>;

@@ -10,7 +10,7 @@ from urllib.parse import urlparse
 from fastapi import HTTPException, Request
 from fastapi.responses import PlainTextResponse
 
-from src.chat_logger import log_event
+from src.chat_logger import extract_chat_id, log_event
 from src.runtime import TurnTask
 from src.runtime.account_scope import build_scoped_user_id
 
@@ -811,8 +811,9 @@ def register_webhook_routes(
         if channel_account_id is not None:
             from_number = build_scoped_user_id(int(channel_account_id), raw_from_number)
             set_user_route_context(from_number, route_ctx)
+        telegram_log_id = extract_chat_id(from_number)
         try:
-            log_event(telegram_user_id, "WEBHOOK_ARRIVED", sid=inbound_sid, text=text[:100])
+            log_event(telegram_log_id, "WEBHOOK_ARRIVED", sid=inbound_sid, text=text[:100])
         except Exception:
             pass
 
@@ -843,7 +844,7 @@ def register_webhook_routes(
         try:
             acquired = user_processing_guard_local.acquire(from_number)
             try:
-                log_event(telegram_user_id, "LOCK_ACQUIRED" if acquired else "LOCK_BUSY")
+                log_event(telegram_log_id, "LOCK_ACQUIRED" if acquired else "LOCK_BUSY")
             except Exception:
                 pass
             if not acquired:

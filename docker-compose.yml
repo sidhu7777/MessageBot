@@ -90,7 +90,7 @@ services:
       - "8081:8080"
     environment:
       DATABASE_ENABLED: "true"
-      DATABASE_PROVIDER: "postgresql"
+      DATABASE_PROVIDER: "mysql"
       CACHE_REDIS_ENABLED: "true"
       CACHE_REDIS_URI: "redis://redis:6379/6"
     volumes:

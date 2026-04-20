@@ -273,13 +273,9 @@ class SchedulingRepository:
             return values
         now_hhmm = now_in_runtime_timezone().strftime("%H:%M")
         visible: list[str] = []
-        end_lookup = {str(k): str(v) for k, v in (end_times_by_start or {}).items() if str(k) and str(v)}
         for slot_start in values:
-            slot_end = end_lookup.get(slot_start)
-            if slot_end:
-                if slot_end > now_hhmm:
-                    visible.append(slot_start)
-            elif slot_start >= now_hhmm:
+            # For same-day booking, only slots that have not started yet should remain visible.
+            if slot_start >= now_hhmm:
                 visible.append(slot_start)
         return visible
 

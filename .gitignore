@@ -23,3 +23,13 @@ System_Diagrams_presentation.pdf
 .env.example
 .env
 env_file_copy.txt
+
+
+
+
+.venv310/
+__pycache__/
+*.pyc
+.pytest_cache/
+logs/
+.env

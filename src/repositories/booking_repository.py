@@ -272,6 +272,8 @@ class BookingRepository:
                 cur.execute(f"ALTER TABLE {appointment_table} ADD COLUMN booking_id INT NULL")
             if "booked_for" not in cols:
                 cur.execute(f"ALTER TABLE {appointment_table} ADD COLUMN booked_for VARCHAR(10) NULL")
+            if "channel" not in cols:
+                cur.execute(f"ALTER TABLE {appointment_table} ADD COLUMN channel VARCHAR(30) NULL")
 
             conn.commit()
             self._invalidate_table_columns_cache(appointment_table)

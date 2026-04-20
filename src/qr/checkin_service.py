@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import date, datetime, time, timedelta
 from types import SimpleNamespace
 from typing import Any, Optional
 
@@ -25,6 +26,10 @@ class QrCheckinService:
     def __init__(self, booking_repository: Any, scheduling_repository: Any) -> None:
         self.booking_repository = booking_repository
         self.scheduling_repository = scheduling_repository
+        self.qr_overflow_extension_minutes = max(
+            0,
+            int(os.getenv("QR_OVERFLOW_EXTENSION_MINUTES", "90")),
+        )
 
     @staticmethod
     def _normalize_language(language: str) -> str:
@@ -287,6 +292,135 @@ class QrCheckinService:
             return str(slot_date), str(times[0])
         return "", ""
 
+    def _today_schedules(self, *, doctor_id: int, clinic_id: int) -> list[tuple[time, time, int]]:
+        if not self.booking_repository:
+            return []
+        conn = self.booking_repository._connect()
+        cur = conn.cursor(dictionary=True)
+        today = now_in_runtime_timezone().date()
+        try:
+            cur.execute(
+                """
+                SELECT start_time, end_time, slot_duration
+                FROM doctor_clinic_schedule
+                WHERE doctor_id = %s
+                  AND clinic_id = %s
+                  AND effective_from <= %s
+                  AND effective_to >= %s
+                  AND day_of_week = MOD(WEEKDAY(%s) + 1, 7)
+                ORDER BY start_time
+                """,
+                (doctor_id, clinic_id, today, today, today),
+            )
+            schedules = cur.fetchall()
+            return self.booking_repository._normalize_schedules(schedules)
+        finally:
+            cur.close()
+            conn.close()
+
+    @staticmethod
+    def _session_slot_count(*, slot_date: date, start_t: time, end_t: time, duration: int) -> int:
+        total_minutes = int((datetime.combine(slot_date, end_t) - datetime.combine(slot_date, start_t)).total_seconds() // 60)
+        if total_minutes <= 0 or duration <= 0:
+            return 0
+        return total_minutes // duration
+
+    @staticmethod
+    def _select_overflow_session(
+        *,
+        slot_date: date,
+        schedules: list[tuple[time, time, int]],
+        now_dt: datetime,
+    ) -> tuple[time, time, int]:
+        now_time = now_dt.time().replace(second=0, microsecond=0)
+        for start_t, end_t, duration in schedules:
+            if start_t <= now_time < end_t:
+                return start_t, end_t, duration
+        future = [(start_t, end_t, duration) for start_t, end_t, duration in schedules if now_time < start_t]
+        if future:
+            return future[0]
+        return schedules[-1]
+
+    def _select_qr_overflow_session(
+        self,
+        *,
+        schedules: list[tuple[time, time, int]],
+        now_dt: datetime,
+    ) -> Optional[tuple[time, time, int]]:
+        if not schedules:
+            return None
+
+        now_local = now_dt.replace(tzinfo=None) if getattr(now_dt, "tzinfo", None) else now_dt
+        extension_delta = timedelta(minutes=self.qr_overflow_extension_minutes)
+        current_session: Optional[tuple[time, time, int]] = None
+        recent_session: Optional[tuple[time, time, int]] = None
+        recent_end_dt: Optional[datetime] = None
+
+        for start_t, end_t, duration in schedules:
+            start_dt = datetime.combine(now_local.date(), start_t)
+            end_dt = datetime.combine(now_local.date(), end_t)
+            if start_dt <= now_local < end_dt:
+                current_session = (start_t, end_t, duration)
+                break
+            if end_dt <= now_local <= end_dt + extension_delta:
+                if recent_end_dt is None or end_dt > recent_end_dt:
+                    recent_session = (start_t, end_t, duration)
+                    recent_end_dt = end_dt
+
+        return current_session or recent_session
+
+    def _should_prefer_regular_slot(
+        self,
+        *,
+        slot_date: str,
+        slot_time: str,
+        now_dt: datetime,
+    ) -> bool:
+        if not slot_date or not slot_time:
+            return False
+        now_local = now_dt.replace(tzinfo=None) if getattr(now_dt, "tzinfo", None) else now_dt
+        slot_day = datetime.strptime(str(slot_date), "%Y-%m-%d").date()
+        parsed_time = None
+        for fmt in ("%H:%M:%S", "%H:%M", "%I:%M %p", "%I:%M:%S %p"):
+            try:
+                parsed_time = datetime.strptime(str(slot_time).strip(), fmt).time()
+                break
+            except ValueError:
+                continue
+        if parsed_time is None:
+            return False
+        slot_dt = datetime.combine(slot_day, parsed_time)
+        return (
+            slot_dt >= now_local
+            and slot_dt <= now_local + timedelta(minutes=self.qr_overflow_extension_minutes)
+        )
+
+    @staticmethod
+    def _regular_slot_starts_for_day(
+        *,
+        slot_date: date,
+        schedules: list[tuple[time, time, int]],
+    ) -> set[str]:
+        values: set[str] = set()
+        for start_t, end_t, duration in schedules:
+            cursor = datetime.combine(slot_date, start_t)
+            end_dt = datetime.combine(slot_date, end_t)
+            step = timedelta(minutes=duration)
+            while cursor < end_dt:
+                values.add(cursor.strftime("%H:%M"))
+                cursor += step
+        return values
+
+    @staticmethod
+    def _round_up_to_slot_boundary(value: datetime, duration_minutes: int) -> datetime:
+        if duration_minutes <= 0:
+            return value.replace(second=0, microsecond=0)
+        normalized = value.replace(second=0, microsecond=0)
+        minute_mod = normalized.minute % duration_minutes
+        if minute_mod == 0:
+            return normalized
+        return normalized + timedelta(minutes=(duration_minutes - minute_mod))
+
     def _book_confirmed_overflow(
         self,
         *,
@@ -295,15 +429,18 @@ class QrCheckinService:
         clinic_id: int,
         patient_name: str,
         phone: str,
+        target_session: Optional[tuple[time, time, int]] = None,
     ) -> tuple[int, int, str, str]:
         conn = self.booking_repository._connect()
         cur = conn.cursor(dictionary=True)
-        today = now_in_runtime_timezone().date()
+        now_dt = now_in_runtime_timezone()
+        today = now_dt.date()
         try:
             conn.start_transaction()
             patient_columns = self.booking_repository._table_columns("patients")
             appointment_table = self.booking_repository._appointment_table()
             appointment_columns = self.booking_repository._table_columns(appointment_table)
+            has_channel_col = "channel" in appointment_columns
             if not self.booking_repository._use_appointment_mode():
                 conn.rollback()
                 raise RuntimeError("QR overflow booking currently requires appointment-mode schema.")
@@ -327,12 +464,21 @@ class QrCheckinService:
                 conn.rollback()
                 raise RuntimeError("Doctor schedule is not configured for this clinic.")
 
-            total_regular_slots = 0
-            slot_duration = normalized[0][2]
-            session_end = normalized[-1][1]
-            for start_t, end_t, duration in normalized:
-                total_regular_slots += int(((datetime.combine(today, end_t) - datetime.combine(today, start_t)).total_seconds() // 60) // duration)
-                slot_duration = duration
+            if target_session is not None:
+                session_start, session_end, slot_duration = target_session
+            else:
+                session_start, session_end, slot_duration = self._select_overflow_session(
+                    slot_date=today,
+                    schedules=normalized,
+                    now_dt=now_dt,
+                )
+            total_regular_slots = self._session_slot_count(
+                slot_date=today,
+                start_t=session_start,
+                end_t=session_end,
+                duration=slot_duration,
+            )
+            regular_slot_starts = self._regular_slot_starts_for_day(slot_date=today, schedules=normalized)
 
             phone_expr = self.booking_repository._normalized_phone_sql_expr("phone")
             cur.execute(
@@ -376,24 +522,43 @@ class QrCheckinService:
                     tuple(update_vals + [patient_id]),
                 )
 
+            channel_sql = ""
+            params: list[object] = [admin_id, doctor_id, clinic_id, today, session_end]
+            if has_channel_col:
+                channel_sql = "AND a.channel = %s"
+                params.append("qr_scan")
             cur.execute(
                 f"""
-                SELECT COALESCE(MAX(p.booking_id), 0) AS max_booking_id
+                SELECT a.start_time
                 FROM {appointment_table} a
-                JOIN patients p ON p.patient_id = a.patient_id
                 WHERE a.admin_id = %s
                   AND a.doctor_id = %s
                   AND a.clinic_id = %s
                   AND a.appointment_date = %s
                   AND a.status IN ('BOOKED', 'PENDING', 'CONFIRMED', 'COMPLETED')
+                  AND a.start_time > %s
+                  {channel_sql}
+                ORDER BY a.start_time
+                FOR UPDATE
                 """,
-                (admin_id, doctor_id, clinic_id, today),
+                tuple(params),
             )
-            max_row = cur.fetchone() or {}
-            next_booking_id = max(int(max_row.get("max_booking_id") or 0), total_regular_slots) + 1
+            overflow_count = 0
+            for row in cur.fetchall():
+                start_value = row.get("start_time")
+                if isinstance(start_value, time):
+                    hhmm = start_value.strftime("%H:%M")
+                else:
+                    parsed = self.booking_repository._parse_time_value(start_value)
+                    hhmm = parsed.strftime("%H:%M") if parsed else ""
+                if hhmm and hhmm not in regular_slot_starts:
+                    overflow_count += 1
 
-            overflow_index = next_booking_id - total_regular_slots
-            start_dt = datetime.combine(today, session_end) + timedelta(minutes=slot_duration * overflow_index)
+            overflow_index = overflow_count + 1
+            next_booking_id = total_regular_slots + overflow_index
+            now_local_dt = now_dt.replace(tzinfo=None) if getattr(now_dt, "tzinfo", None) else now_dt
+            overflow_base_dt = now_local_dt
+            start_dt = self._round_up_to_slot_boundary(overflow_base_dt, slot_duration)
             end_dt = start_dt + timedelta(minutes=slot_duration)
 
             while True:
@@ -414,23 +579,43 @@ class QrCheckinService:
                 appt_row = cur.fetchone()
                 if not appt_row:
                     if "booking_id" in appointment_columns:
-                        cur.execute(
-                            f"""
-                            INSERT INTO {appointment_table}
-                            (patient_id, doctor_id, clinic_id, admin_id, status, appointment_date, start_time, end_time, booking_id)
-                            VALUES (%s, %s, %s, %s, 'BOOKED', %s, %s, %s, %s)
-                            """,
-                            (patient_id, doctor_id, clinic_id, admin_id, today, start_time, end_time, next_booking_id),
-                        )
+                        if has_channel_col:
+                            cur.execute(
+                                f"""
+                                INSERT INTO {appointment_table}
+                                (patient_id, doctor_id, clinic_id, admin_id, status, appointment_date, start_time, end_time, booking_id, channel)
+                                VALUES (%s, %s, %s, %s, 'BOOKED', %s, %s, %s, %s, %s)
+                                """,
+                                (patient_id, doctor_id, clinic_id, admin_id, today, start_time, end_time, next_booking_id, "qr_scan"),
+                            )
+                        else:
+                            cur.execute(
+                                f"""
+                                INSERT INTO {appointment_table}
+                                (patient_id, doctor_id, clinic_id, admin_id, status, appointment_date, start_time, end_time, booking_id)
+                                VALUES (%s, %s, %s, %s, 'BOOKED', %s, %s, %s, %s)
+                                """,
+                                (patient_id, doctor_id, clinic_id, admin_id, today, start_time, end_time, next_booking_id),
+                            )
                     else:
-                        cur.execute(
-                            f"""
-                            INSERT INTO {appointment_table}
-                            (patient_id, doctor_id, clinic_id, admin_id, status, appointment_date, start_time, end_time)
-                            VALUES (%s, %s, %s, %s, 'BOOKED', %s, %s, %s)
-                            """,
-                            (patient_id, doctor_id, clinic_id, admin_id, today, start_time, end_time),
-                        )
+                        if has_channel_col:
+                            cur.execute(
+                                f"""
+                                INSERT INTO {appointment_table}
+                                (patient_id, doctor_id, clinic_id, admin_id, status, appointment_date, start_time, end_time, channel)
+                                VALUES (%s, %s, %s, %s, 'BOOKED', %s, %s, %s, %s)
+                                """,
+                                (patient_id, doctor_id, clinic_id, admin_id, today, start_time, end_time, "qr_scan"),
+                            )
+                        else:
+                            cur.execute(
+                                f"""
+                                INSERT INTO {appointment_table}
+                                (patient_id, doctor_id, clinic_id, admin_id, status, appointment_date, start_time, end_time)
+                                VALUES (%s, %s, %s, %s, 'BOOKED', %s, %s, %s)
+                                """,
+                                (patient_id, doctor_id, clinic_id, admin_id, today, start_time, end_time),
+                            )
                     appointment_id = int(cur.lastrowid)
                     break
 
@@ -438,34 +623,59 @@ class QrCheckinService:
                 appt_status = str(appt_row.get("status") or "").upper()
                 if appt_status in {"CANCELLED", "COMPLETED"}:
                     if "booking_id" in appointment_columns:
-                        cur.execute(
-                            f"""
-                            UPDATE {appointment_table}
-                            SET patient_id = %s,
-                                status = 'BOOKED',
-                                end_time = %s,
-                                booking_id = %s
-                            WHERE appointment_id = %s
-                            """,
-                            (patient_id, end_time, next_booking_id, appt_id),
-                        )
+                        if has_channel_col:
+                            cur.execute(
+                                f"""
+                                UPDATE {appointment_table}
+                                SET patient_id = %s,
+                                    status = 'BOOKED',
+                                    end_time = %s,
+                                    booking_id = %s,
+                                    channel = %s
+                                WHERE appointment_id = %s
+                                """,
+                                (patient_id, end_time, next_booking_id, "qr_scan", appt_id),
+                            )
+                        else:
+                            cur.execute(
+                                f"""
+                                UPDATE {appointment_table}
+                                SET patient_id = %s,
+                                    status = 'BOOKED',
+                                    end_time = %s,
+                                    booking_id = %s
+                                WHERE appointment_id = %s
+                                """,
+                                (patient_id, end_time, next_booking_id, appt_id),
+                            )
                     else:
-                        cur.execute(
-                            f"""
-                            UPDATE {appointment_table}
-                            SET patient_id = %s,
-                                status = 'BOOKED',
-                                end_time = %s
-                            WHERE appointment_id = %s
-                            """,
-                            (patient_id, end_time, appt_id),
-                        )
+                        if has_channel_col:
+                            cur.execute(
+                                f"""
+                                UPDATE {appointment_table}
+                                SET patient_id = %s,
+                                    status = 'BOOKED',
+                                    end_time = %s,
+                                    channel = %s
+                                WHERE appointment_id = %s
+                                """,
+                                (patient_id, end_time, "qr_scan", appt_id),
+                            )
+                        else:
+                            cur.execute(
+                                f"""
+                                UPDATE {appointment_table}
+                                SET patient_id = %s,
+                                    status = 'BOOKED',
+                                    end_time = %s
+                                WHERE appointment_id = %s
+                                """,
+                                (patient_id, end_time, appt_id),
+                            )
                     appointment_id = appt_id
                     break
 
-                next_booking_id += 1
-                overflow_index = next_booking_id - total_regular_slots
-                start_dt = datetime.combine(today, session_end) + timedelta(minutes=slot_duration * overflow_index)
+                start_dt += timedelta(minutes=slot_duration)
                 end_dt = start_dt + timedelta(minutes=slot_duration)
 
             if "booking_id" in patient_columns:
@@ -638,7 +848,19 @@ class QrCheckinService:
             clinic_id=clinic_id,
             admin_id=admin_id,
         )
-        if slot_date and slot_time:
+        now_dt = now_in_runtime_timezone()
+        today_schedules = self._today_schedules(doctor_id=doctor_id, clinic_id=clinic_id)
+        qr_overflow_session = self._select_qr_overflow_session(
+            schedules=today_schedules,
+            now_dt=now_dt,
+        )
+        should_use_regular_slot = self._should_prefer_regular_slot(
+            slot_date=slot_date,
+            slot_time=slot_time,
+            now_dt=now_dt,
+        )
+
+        if slot_date and slot_time and (should_use_regular_slot or qr_overflow_session is None):
             display_slot_time = self._format_time_12h(slot_time)
             context = SimpleNamespace(
                 patient_name=cleaned_name,
@@ -648,6 +870,7 @@ class QrCheckinService:
                 appointment_time=slot_time,
                 reason="QR Walk-in",
                 appointment_mode="walk-in",
+                booking_channel="qr_scan",
                 booking_for_self=True,
                 chat_user_id=None,
                 age=None,
@@ -662,11 +885,11 @@ class QrCheckinService:
             if save.ok:
                 number = save.queue_number if save.queue_number is not None else save.appointment_id
                 confirmation_message = get_qr_message(language, "qr_confirmed_token", token_id=number)
-                if slot_time:
+                if display_slot_time:
                     confirmation_message += "\n" + get_qr_message(
                         language,
                         "qr_estimated_time",
-                        estimated_time=slot_time,
+                        estimated_time=display_slot_time,
                     )
                 return QrCheckinResult(
                     status="booked",
@@ -685,6 +908,7 @@ class QrCheckinService:
                 clinic_id=clinic_id,
                 patient_name=cleaned_name,
                 phone=normalized_phone,
+                target_session=qr_overflow_session,
             )
         except Exception as exc:
             error_text = str(exc)

@@ -316,8 +316,10 @@ class AppointmentFSM:
         # Persist Telegram chat user id separately for Telegram channel lookups.
         if self._is_telegram_channel():
             setattr(self.context, "chat_user_id", self.chat_phone_number or "")
+            setattr(self.context, "booking_channel", "telegram")
         else:
             setattr(self.context, "chat_user_id", None)
+            setattr(self.context, "booking_channel", getattr(self.context, "booking_channel", None))
         setattr(self.context, "booking_for_self", self.booking_for_self)
         try:
             try:

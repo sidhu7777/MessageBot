@@ -1,0 +1,51 @@
+Install Netdata :
+
+bash <(curl -L https://my-netdata.io/kickstart.sh)
+
+Enable Email Alerts (Netdata)
+
+sudo nano /etc/netdata/health_alarm_notify.conf
+
+chnages to make 
+
+SEND_EMAIL="YES"
+DEFAULT_RECIPIENT_EMAIL="your-email@gmail.com"
+
+Restart Netdata
+
+sudo systemctl restart netdata
+
+
+check the status
+
+sudo systemctl status netdata
+
+Open dashboard
+
+http://YOUR_SERVER_IP:19999
+
+Install Uptime Kuma (Docker)
+
+docker run -d \
+  --restart=always \
+  -p 3001:3001 \
+  -v uptime-kuma:/app/data \
+  louislam/uptime-kuma
+
+open uptime kuma 
+
+http://YOUR_SERVER_IP:3001
+
+
+
+Configure Email (inside UI)
+
+Go to:
+
+Settings → Notifications → Add → SMTP
+
+Fill:
+
+SMTP Host: smtp.gmail.com
+Port: 587
+Email + App Password

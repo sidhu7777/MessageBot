@@ -1,7 +1,8 @@
 import sys
-from datetime import time
+from datetime import datetime, time
 from pathlib import Path
 from dataclasses import dataclass
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parent
 PROJECT_ROOT = ROOT.parent
@@ -9,6 +10,8 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from src.qr.checkin_service import QrCheckinService
+from src.repositories.scheduling_repository import SchedulingRepository
+from src.timezone_utils import now_in_runtime_timezone
 
 
 @dataclass
@@ -66,6 +69,7 @@ class _TestableQrService(QrCheckinService):
         self.doctor_name = "Sanjay"
         self.clinic_name = "Aditya"
         self.overflow_result = (88, 13, "2026-03-10", "10:05")
+        self.test_schedules = []
 
     def _resolve_admin_id(self, doctor_id: int):
         return self.admin_id
@@ -76,8 +80,20 @@ class _TestableQrService(QrCheckinService):
     def _active_booking(self, phone: str, admin_id: int, doctor_id: int, clinic_id: int):
         return self.booking_repository.active_rows[0] if self.booking_repository.active_rows else None
 
-    def _book_confirmed_overflow(self, *, admin_id: int, doctor_id: int, clinic_id: int, patient_name: str, phone: str):
+    def _book_confirmed_overflow(
+        self,
+        *,
+        admin_id: int,
+        doctor_id: int,
+        clinic_id: int,
+        patient_name: str,
+        phone: str,
+        target_session=None,
+    ):
         return self.overflow_result
+
+    def _today_schedules(self, *, doctor_id: int, clinic_id: int):
+        return list(self.test_schedules)
 
 
 def test_qr_service_active_booking_guard() -> None:
@@ -108,8 +124,9 @@ def test_qr_service_active_booking_guard() -> None:
 def test_qr_service_books_first_available_slot() -> None:
     br = _FakeBookingRepo()
     sr = _FakeSchedulingRepo()
-    sr.dates = ["2026-03-10"]
-    sr.times_by_date = {"2026-03-10": ["09:00", "09:15"]}
+    today = now_in_runtime_timezone().date().isoformat()
+    sr.dates = [today]
+    sr.times_by_date = {today: ["09:00", "09:15"]}
     svc = _TestableQrService(br, sr)
 
     result = svc.process_checkin(
@@ -122,13 +139,15 @@ def test_qr_service_books_first_available_slot() -> None:
     assert result.status == "booked"
     assert result.booking_id == 77
     assert br.saved_context is not None
-    assert br.saved_context.appointment_date == "2026-03-10"
+    assert br.saved_context.appointment_date
     assert br.saved_context.appointment_time == "09:00"
     assert br.saved_context.phone_number == "919876543210"
     assert br.saved_admin_id == 10
     assert br.saved_doctor_id == 1
     assert sr.date_calls == 0
     assert len(sr.time_calls) == 1
+    assert result.appointment_time == "9:00 AM"
+    assert "Estimated Time: 9:00 AM." in result.message
 
 
 def test_qr_service_overflow_when_no_slots() -> None:
@@ -146,7 +165,72 @@ def test_qr_service_overflow_when_no_slots() -> None:
     assert result.status == "booked"
     assert result.booking_id == 88
     assert result.appointment_time == "10:05"
-    assert "Patient ID: 13" in result.message
+    assert "Appointment ID: 13" in result.message
+    assert br.saved_context is None
+
+
+def test_qr_prefers_near_future_regular_slot_within_extension_window() -> None:
+    br = _FakeBookingRepo()
+    sr = _FakeSchedulingRepo()
+    today = "2026-03-10"
+    sr.times_by_date = {today: ["10:30"]}
+    svc = _TestableQrService(br, sr)
+    svc.test_schedules = [(time(9, 0), time(10, 0), 5)]
+
+    with patch("src.qr.checkin_service.now_in_runtime_timezone", return_value=datetime(2026, 3, 10, 10, 5)):
+        result = svc.process_checkin(
+            doctor_id=1,
+            clinic_id=2,
+            patient_name="Vineeth",
+            phone="+91 98765 43210",
+        )
+
+    assert result.status == "booked"
+    assert result.appointment_time == "10:30 AM"
+    assert br.saved_context is not None
+
+
+def test_qr_uses_recent_session_overflow_when_future_slot_is_beyond_extension_window() -> None:
+    br = _FakeBookingRepo()
+    sr = _FakeSchedulingRepo()
+    today = "2026-03-10"
+    sr.times_by_date = {today: ["15:00"]}
+    svc = _TestableQrService(br, sr)
+    svc.test_schedules = [(time(9, 0), time(10, 0), 5), (time(15, 0), time(17, 0), 30)]
+
+    with patch("src.qr.checkin_service.now_in_runtime_timezone", return_value=datetime(2026, 3, 10, 10, 5)):
+        result = svc.process_checkin(
+            doctor_id=1,
+            clinic_id=2,
+            patient_name="Vineeth",
+            phone="+91 98765 43210",
+        )
+
+    assert result.status == "booked"
+    assert result.booking_id == 88
+    assert result.appointment_time == "10:05"
+    assert br.saved_context is None
+
+
+def test_qr_overflow_does_not_assign_past_time_after_recent_session_end() -> None:
+    br = _FakeBookingRepo()
+    sr = _FakeSchedulingRepo()
+    today = "2026-03-10"
+    sr.times_by_date = {today: ["15:00"]}
+    svc = _TestableQrService(br, sr)
+    svc.test_schedules = [(time(11, 0), time(11, 30), 5), (time(15, 0), time(17, 0), 30)]
+    svc.overflow_result = (88, 4, today, "12:10")
+
+    with patch("src.qr.checkin_service.now_in_runtime_timezone", return_value=datetime(2026, 3, 10, 12, 10)):
+        result = svc.process_checkin(
+            doctor_id=1,
+            clinic_id=2,
+            patient_name="Vineeth",
+            phone="+91 98765 43210",
+        )
+
+    assert result.status == "booked"
+    assert result.appointment_time == "12:10"
     assert br.saved_context is None
 
 
@@ -156,6 +240,7 @@ class _OverflowCursor:
         self._many = []
         self.lastrowid = 0
         self.inserted_start_time = None
+        self.inserted_booking_id = None
         self.conflict_checks = []
         self._first_conflict_open = True
 
@@ -170,8 +255,8 @@ class _OverflowCursor:
         if "select patient_id from patients" in q and "for update" in q:
             self._one = {"patient_id": 42}
             return
-        if "select coalesce(max(p.booking_id), 0) as max_booking_id" in q:
-            self._one = {"max_booking_id": 12}
+        if "select a.start_time from appointment a" in q and "for update" in q:
+            self._many = []
             return
         if "select appointment_id, status from appointment" in q and "for update" in q:
             self.conflict_checks.append(tuple(params or ()))
@@ -181,7 +266,8 @@ class _OverflowCursor:
             return
         if q.startswith("insert into appointment"):
             self.lastrowid = 901
-            self.inserted_start_time = params[-2]
+            self.inserted_start_time = params[-3]
+            self.inserted_booking_id = params[-1]
             return
         if q.startswith("update patients set booking_id"):
             return
@@ -235,6 +321,8 @@ class _OverflowRepo(_FakeBookingRepo):
     def _table_columns(self, table_name: str) -> set[str]:
         if table_name == "patients":
             return {"patient_id", "full_name", "admin_id", "doctor_id", "phone", "booking_id"}
+        if table_name == "appointment":
+            return {"appointment_id", "patient_id", "doctor_id", "clinic_id", "admin_id", "status", "appointment_date", "start_time", "end_time", "booking_id"}
         return set()
 
     def _normalized_phone_sql_expr(self, column_name: str) -> str:
@@ -258,11 +346,12 @@ def test_qr_overflow_skips_doctor_time_conflict_across_clinics() -> None:
     )
 
     assert appointment_id == 901
-    assert booking_id == 14
+    assert booking_id == 12
     assert overflow_date
-    assert overflow_time == "13:10"
+    assert overflow_time == "1:05 PM"
     assert len(br.conn.cursor_obj.conflict_checks) == 2
-    assert br.conn.cursor_obj.inserted_start_time.strftime("%H:%M") == "13:10"
+    assert br.conn.cursor_obj.inserted_start_time.strftime("%H:%M") == "13:05"
+    assert br.conn.cursor_obj.inserted_booking_id == 12
 
 
 class _SlotActiveCursor:
@@ -305,6 +394,9 @@ class _SlotActiveRepo(_FakeBookingRepo):
     def _use_appointment_mode(self) -> bool:
         return False
 
+    def _column_exists(self, table_name: str, column_name: str) -> bool:
+        return column_name == "booking_id"
+
     def _normalized_phone_sql_expr(self, column_name: str) -> str:
         return column_name
 
@@ -323,4 +415,16 @@ def test_qr_active_booking_detects_slot_based_same_day_booking() -> None:
 
     assert result.status == "active_booking"
     assert "#12" in result.message
-    assert result.appointment_time == "13:00"
+    assert result.appointment_time == "1:00 PM"
+
+
+def test_today_visibility_hides_slots_that_already_started() -> None:
+    fake_now = datetime.strptime("2026-03-10 11:11", "%Y-%m-%d %H:%M")
+    with patch("src.repositories.scheduling_repository.now_in_runtime_timezone", return_value=fake_now):
+        visible = SchedulingRepository._filter_runtime_visible_times(
+            slot_date="2026-03-10",
+            times=["11:00", "11:30", "12:00"],
+            end_times_by_start={"11:00": "11:30", "11:30": "12:00", "12:00": "12:30"},
+        )
+
+    assert visible == ["11:30", "12:00"]

@@ -1,10 +1,13 @@
 from dataclasses import dataclass
 import os
+from pathlib import Path
 
-from dotenv import load_dotenv
+from dotenv import dotenv_values, load_dotenv
 
 
 load_dotenv()
+_ROOT_DIR = Path(__file__).resolve().parent.parent
+_EVOLUTION_ENV = dotenv_values(_ROOT_DIR / ".env.example")
 
 
 def _as_bool(value: str, default: bool = False) -> bool:
@@ -20,6 +23,19 @@ def _normalize_whatsapp_sender(value: str) -> str:
     if raw.startswith("whatsapp:"):
         return raw
     return f"whatsapp:{raw}"
+
+
+def _evolution_env_value(*keys: str, default: str = "") -> str:
+    for key in keys:
+        value = _EVOLUTION_ENV.get(key)
+        text = str(value or "").strip()
+        if text:
+            return text
+    for key in keys:
+        text = os.getenv(key, "").strip()
+        if text:
+            return text
+    return default
 
 
 @dataclass(frozen=True)
@@ -97,6 +113,16 @@ class Settings:
     doctor_reminder_interval_seconds: int = 60
     doctor_reminder_lead_minutes: int = 10
     doctor_reminder_window_seconds: int = 30
+    evolution_api_base_url: str = ""
+    evolution_api_key: str = ""
+    evolution_webhook_url: str = ""
+    evolution_webhook_secret: str = ""
+    evolution_send_text_path_template: str = "/message/sendText/{instance}"
+    evolution_booking_base_url: str = ""
+    evolution_booking_path_prefix: str = "/whatsapp/web"
+    evolution_session_window_seconds: int = 6 * 60 * 60
+    evolution_welcome_template: str = ""
+    evolution_warning_text: str = ""
 
 
 
@@ -129,7 +155,8 @@ def load_settings() -> Settings:
         whatsapp_phone_number_id=os.getenv("WHATSAPP_PHONE_NUMBER_ID", "").strip(),
         whatsapp_business_account_id=os.getenv("WHATSAPP_BUSINESS_ACCOUNT_ID", "").strip(),
         whatsapp_webhook_verify_token=(
-            os.getenv("WHATSAPP_WEBHOOK_VERIFY_TOKEN", "").strip()
+            os.getenv("META_WHATSAPP_VERIFY_TOKEN", "").strip()
+            or os.getenv("WHATSAPP_WEBHOOK_VERIFY_TOKEN", "").strip()
             or os.getenv("WHATSAPP_VERIFY_TOKEN", "").strip()
             or os.getenv("WEBHOOK_VERIFY_TOKEN", "").strip()
         ),
@@ -188,4 +215,35 @@ def load_settings() -> Settings:
         doctor_reminder_interval_seconds=int(os.getenv("DOCTOR_REMINDER_INTERVAL_SECONDS", "60")),
         doctor_reminder_lead_minutes=int(os.getenv("DOCTOR_REMINDER_LEAD_MINUTES", "10")),
         doctor_reminder_window_seconds=int(os.getenv("DOCTOR_REMINDER_WINDOW_SECONDS", "30")),
+        evolution_api_base_url=_evolution_env_value(
+            "EVOLUTION_API_BASE_URL",
+            "EVOLUTION_API_MANAGER_URL",
+            default="",
+        ).rstrip("/"),
+        evolution_api_key=(
+            _evolution_env_value("EVOLUTION_API_KEY", "AUTHENTICATION_API_KEY", default="")
+        ),
+        evolution_webhook_url=_evolution_env_value("EVOLUTION_WEBHOOK_URL", default=""),
+        evolution_webhook_secret=_evolution_env_value("EVOLUTION_WEBHOOK_SECRET", default=""),
+        evolution_send_text_path_template=(
+            _evolution_env_value("EVOLUTION_SEND_TEXT_PATH_TEMPLATE", default="/message/sendText/{instance}").strip()
+            or "/message/sendText/{instance}"
+        ),
+        evolution_booking_base_url=(
+            _evolution_env_value(
+                "EVOLUTION_BOOKING_BASE_URL",
+                "DOCTER_EVOLUTION_API_BASE_URL",
+                "QR_BASE_URL",
+                default="",
+            ).strip()
+        ),
+        evolution_booking_path_prefix=(
+            _evolution_env_value("EVOLUTION_BOOKING_PATH_PREFIX", default="/whatsapp/web").strip()
+            or "/whatsapp/web"
+        ),
+        evolution_session_window_seconds=int(
+            _evolution_env_value("EVOLUTION_SESSION_WINDOW_SECONDS", default=str(6 * 60 * 60))
+        ),
+        evolution_welcome_template=_evolution_env_value("EVOLUTION_WELCOME_TEMPLATE", default=""),
+        evolution_warning_text=_evolution_env_value("EVOLUTION_WARNING_TEXT", default=""),
     )

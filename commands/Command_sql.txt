@@ -1,0 +1,59 @@
+# Check all databases
+
+SHOW DATABASES;
+
+# Check current user
+
+SELECT USER(), CURRENT_USER();
+
+List all MySQL users
+
+SELECT user, host FROM mysql.user;
+
+# . Check which user has access to which DB
+
+SELECT user, host, db FROM mysql.db;
+
+# Check privileges of a specific user
+
+SHOW GRANTS FOR 'username'@'host';
+
+
+
+Check schema-level privileges (detailed)
+
+SELECT grantee, table_schema, privilege_type 
+FROM information_schema.schema_privileges;
+
+
+# . Check tables inside a database
+
+USE database_name;
+SHOW TABLES;
+
+
+# Check if DB exists but hidden (permissions issue)
+
+SHOW DATABASES LIKE 'database_name';
+
+# Grant access to a database
+
+GRANT ALL PRIVILEGES ON database_name.* TO 'username'@'host';
+FLUSH PRIVILEGES;
+
+# Revoke access (if needed)
+
+
+REVOKE ALL PRIVILEGES ON database_name.* FROM 'username'@'host';
+FLUSH PRIVILEGES;
+
+
+# Refresh privileges
+
+FLUSH PRIVILEGES;
+
+# Check current connection info
+
+STATUS;
+
+

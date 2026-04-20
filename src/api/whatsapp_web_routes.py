@@ -336,6 +336,67 @@ def register_whatsapp_web_routes(
     def _normalized_person_name(value: str) -> str:
         return " ".join(str(value or "").strip().lower().split())
 
+    def _find_self_name_by_phone_number(
+        *,
+        phone_number: str,
+        doctor_id: int,
+        admin_id: int | None,
+    ) -> str:
+        if not booking_repository:
+            return ""
+        target = booking_repository._normalize_phone(phone_number)
+        actual_admin_id = admin_id or booking_repository.default_admin_id()
+        if not target or not actual_admin_id:
+            return ""
+
+        phone_candidates: list[str] = []
+
+        def _add_candidate(raw_value: str) -> None:
+            value = str(raw_value or "").strip()
+            if value and value not in phone_candidates:
+                phone_candidates.append(value)
+
+        _add_candidate(target)
+        _add_candidate(f"+{target}")
+        _add_candidate(f"whatsapp:+{target}")
+        if len(target) == 10:
+            _add_candidate(f"91{target}")
+            _add_candidate(f"+91{target}")
+            _add_candidate(f"whatsapp:+91{target}")
+        if len(target) == 12 and target.startswith("91"):
+            local10 = target[-10:]
+            _add_candidate(local10)
+            _add_candidate(f"+{target}")
+            _add_candidate(f"+91{local10}")
+            _add_candidate(f"whatsapp:+{target}")
+            _add_candidate(f"whatsapp:+91{local10}")
+
+        if not phone_candidates:
+            return ""
+
+        conn = booking_repository._connect()
+        cur = conn.cursor(dictionary=True)
+        try:
+            placeholders = ", ".join(["%s"] * len(phone_candidates))
+            cur.execute(
+                f"""
+                SELECT p.full_name
+                FROM patients p
+                WHERE p.admin_id = %s
+                  AND p.doctor_id = %s
+                  AND UPPER(COALESCE(p.profile_type, '')) = 'SELF'
+                  AND COALESCE(p.phone, '') IN ({placeholders})
+                ORDER BY p.patient_id DESC
+                LIMIT 1
+                """,
+                tuple([actual_admin_id, int(doctor_id)] + phone_candidates),
+            )
+            row = cur.fetchone() or {}
+            return str(row.get("full_name") or "").strip()
+        finally:
+            cur.close()
+            conn.close()
+
     def _other_name_matches_self_name(
         *,
         patient_name: str,
@@ -348,13 +409,33 @@ def register_whatsapp_web_routes(
         normalized_candidate = _normalized_person_name(patient_name)
         if not normalized_candidate:
             return False
-        known_name = booking_repository.find_patient_name_by_phone_number(
+        known_name = _find_self_name_by_phone_number(
             phone_number=phone_number,
-            admin_id=admin_id,
             doctor_id=doctor_id,
+            admin_id=admin_id,
         )
         normalized_known = _normalized_person_name(str(known_name or ""))
         return bool(normalized_known and normalized_candidate == normalized_known)
+
+    def _self_name_mismatch(
+        *,
+        patient_name: str,
+        phone_number: str,
+        doctor_id: int,
+        admin_id: int | None,
+    ) -> str:
+        normalized_candidate = _normalized_person_name(patient_name)
+        if not normalized_candidate:
+            return ""
+        known_name = _find_self_name_by_phone_number(
+            phone_number=phone_number,
+            doctor_id=doctor_id,
+            admin_id=admin_id,
+        )
+        normalized_known = _normalized_person_name(known_name)
+        if not normalized_known or normalized_candidate == normalized_known:
+            return ""
+        return known_name
 
     async def _require_repos(request: Request, payload: dict[str, object] | None = None) -> tuple[str, bool] | None:
         resolved_lang = _resolve_effective_language(request, payload)
@@ -484,6 +565,24 @@ def register_whatsapp_web_routes(
         if doctor_id <= 0 or not phone_number:
             return JSONResponse({"detail": "Missing doctor_id or phone_number."}, status_code=400)
         admin_id = await run_in_threadpool(_resolve_admin_id, doctor_id)
+        if booking_for_self and patient_name:
+            self_name = await run_in_threadpool(
+                _self_name_mismatch,
+                patient_name=patient_name,
+                phone_number=phone_number,
+                doctor_id=doctor_id,
+                admin_id=admin_id,
+            )
+            if self_name:
+                return JSONResponse(
+                    {
+                        "detail": (
+                            f"This phone number is linked to self name {self_name}. "
+                            "Use that name for Self, or choose Someone Else."
+                        )
+                    },
+                    status_code=400,
+                )
         all_active_appointments = await run_in_threadpool(
             booking_repository.list_active_appointments_by_phone_number,
             phone_number,
@@ -556,6 +655,25 @@ def register_whatsapp_web_routes(
         if not all([doctor_id, clinic_id, patient_name, phone_number, slot_date, slot_time]):
             return JSONResponse({"detail": "Missing required booking fields."}, status_code=400)
         admin_id = await run_in_threadpool(_resolve_admin_id, doctor_id)
+        if booking_for_self:
+            self_name = await run_in_threadpool(
+                _self_name_mismatch,
+                patient_name=patient_name,
+                phone_number=phone_number,
+                doctor_id=doctor_id,
+                admin_id=admin_id,
+            )
+            if self_name:
+                return JSONResponse(
+                    {
+                        "status": "error",
+                        "message": (
+                            f"This phone number is linked to self name {self_name}. "
+                            "Use that name for Self, or choose Someone Else."
+                        ),
+                    },
+                    status_code=400,
+                )
         active_phone_appointments = await run_in_threadpool(
             booking_repository.list_active_appointments_by_phone_number,
             phone_number,
@@ -616,6 +734,7 @@ def register_whatsapp_web_routes(
             appointment_time=slot_time,
             reason="WhatsApp Web Booking",
             appointment_mode="whatsapp-web",
+            booking_channel="whatsapp_web",
             booking_for_self=booking_for_self,
             chat_user_id=None,
             age=None,

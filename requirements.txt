@@ -12,3 +12,8 @@ openpyxl
 redis
 kafka-python
 qrcode
+pytest
+numpy
+sounddevice
+openai-whisper
+faster-whisper

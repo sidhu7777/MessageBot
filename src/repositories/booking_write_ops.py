@@ -426,6 +426,22 @@ def save_confirmed_appointment(
             or getattr(context, "symptoms", None)
         )
         reason_value = getattr(context, "reason", None) or "General"
+        appointment_table = repo._appointment_table()
+        has_notify_chat_col = repo._column_exists(appointment_table, "notify_telegram_chat_id")
+        has_appointment_booking_col = repo._column_exists(appointment_table, "booking_id")
+        has_booked_for_col = repo._column_exists(appointment_table, "booked_for")
+        has_channel_col = repo._column_exists(appointment_table, "channel")
+        raw_channel_value = str(getattr(context, "booking_channel", "") or "").strip().lower()
+        if not raw_channel_value:
+            appointment_mode = str(getattr(context, "appointment_mode", "") or "").strip().lower()
+            if appointment_mode == "whatsapp-web":
+                raw_channel_value = "whatsapp_web"
+            elif appointment_mode == "walk-in":
+                raw_channel_value = "qr_scan"
+            elif repo._normalize_chat_user_id(str(getattr(context, "chat_user_id", "") or "").strip()):
+                raw_channel_value = "telegram"
+        valid_channel_values = {"qr_scan", "whatsapp_web", "telegram", "app"}
+        channel_value = raw_channel_value if raw_channel_value in valid_channel_values else ""
 
         patient_values: dict[str, object] = {}
         booking_for_self = getattr(context, "booking_for_self", None)
@@ -612,10 +628,6 @@ def save_confirmed_appointment(
                     raise
                 _update_patient_from_values(int(patient_id))
 
-        appointment_table = repo._appointment_table()
-        has_notify_chat_col = repo._column_exists(appointment_table, "notify_telegram_chat_id")
-        has_appointment_booking_col = repo._column_exists(appointment_table, "booking_id")
-        has_booked_for_col = repo._column_exists(appointment_table, "booked_for")
         booked_for_value: Optional[str] = None
         if booking_for_self is True:
             booked_for_value = "SELF"
@@ -761,6 +773,9 @@ def save_confirmed_appointment(
                 if has_booked_for_col and booked_for_value is not None:
                     existing_updates.append("booked_for = %s")
                     existing_params.append(booked_for_value)
+                if has_channel_col and channel_value:
+                    existing_updates.append("channel = %s")
+                    existing_params.append(channel_value)
                 if existing_updates:
                     existing_params.append(int(existing["appointment_id"]))
                     cur.execute(
@@ -842,6 +857,9 @@ def save_confirmed_appointment(
                             if has_booked_for_col and booked_for_value is not None:
                                 update_sql += ",\n                                    booked_for = %s"
                                 update_params.append(booked_for_value)
+                            if has_channel_col and channel_value:
+                                update_sql += ",\n                                    channel = %s"
+                                update_params.append(channel_value)
                             update_sql += "\n                                WHERE appointment_id = %s"
                             update_params.append(slot_appointment_id)
                             cur.execute(update_sql, tuple(update_params))
@@ -865,6 +883,9 @@ def save_confirmed_appointment(
                             if has_booked_for_col and booked_for_value is not None:
                                 update_sql += ",\n                                    booked_for = %s"
                                 update_params.append(booked_for_value)
+                            if has_channel_col and channel_value:
+                                update_sql += ",\n                                    channel = %s"
+                                update_params.append(channel_value)
                             update_sql += "\n                                WHERE appointment_id = %s"
                             update_params.append(slot_appointment_id)
                             cur.execute(update_sql, tuple(update_params))
@@ -889,6 +910,9 @@ def save_confirmed_appointment(
                             if has_booked_for_col and booked_for_value is not None:
                                 update_sql += ",\n                                    booked_for = %s"
                                 update_params.append(booked_for_value)
+                            if has_channel_col and channel_value:
+                                update_sql += ",\n                                    channel = %s"
+                                update_params.append(channel_value)
                             update_sql += "\n                                WHERE appointment_id = %s"
                             update_params.append(slot_appointment_id)
                             cur.execute(update_sql, tuple(update_params))
@@ -910,6 +934,9 @@ def save_confirmed_appointment(
                             if has_booked_for_col and booked_for_value is not None:
                                 update_sql += ",\n                                    booked_for = %s"
                                 update_params.append(booked_for_value)
+                            if has_channel_col and channel_value:
+                                update_sql += ",\n                                    channel = %s"
+                                update_params.append(channel_value)
                             update_sql += "\n                                WHERE appointment_id = %s"
                             update_params.append(slot_appointment_id)
                             cur.execute(update_sql, tuple(update_params))
@@ -962,6 +989,9 @@ def save_confirmed_appointment(
                         if has_booked_for_col and booked_for_value is not None:
                             insert_cols.append("booked_for")
                             insert_vals.append(booked_for_value)
+                        if has_channel_col and channel_value:
+                            insert_cols.append("channel")
+                            insert_vals.append(channel_value)
                         cur.execute(
                             f"""
                             INSERT INTO {appointment_table}
@@ -996,6 +1026,9 @@ def save_confirmed_appointment(
                         if has_booked_for_col and booked_for_value is not None:
                             insert_cols.append("booked_for")
                             insert_vals.append(booked_for_value)
+                        if has_channel_col and channel_value:
+                            insert_cols.append("channel")
+                            insert_vals.append(channel_value)
                         cur.execute(
                             f"""
                             INSERT INTO {appointment_table}
@@ -1031,6 +1064,9 @@ def save_confirmed_appointment(
                         if has_booked_for_col and booked_for_value is not None:
                             insert_cols.append("booked_for")
                             insert_vals.append(booked_for_value)
+                        if has_channel_col and channel_value:
+                            insert_cols.append("channel")
+                            insert_vals.append(channel_value)
                         cur.execute(
                             f"""
                             INSERT INTO {appointment_table}
@@ -1063,6 +1099,9 @@ def save_confirmed_appointment(
                         if has_booked_for_col and booked_for_value is not None:
                             insert_cols.append("booked_for")
                             insert_vals.append(booked_for_value)
+                        if has_channel_col and channel_value:
+                            insert_cols.append("channel")
+                            insert_vals.append(channel_value)
                         cur.execute(
                             f"""
                             INSERT INTO {appointment_table}
@@ -1163,6 +1202,15 @@ def save_confirmed_appointment(
                     """,
                     (booked_for_value, int(existing["appointment_id"])),
                 )
+            if has_channel_col and channel_value:
+                cur.execute(
+                    f"""
+                    UPDATE {appointment_table}
+                    SET channel = %s
+                    WHERE appointment_id = %s
+                    """,
+                    (channel_value, int(existing["appointment_id"])),
+                )
             conn.commit()
             appt_id = int(existing["appointment_id"])
             return BookingResult(
@@ -1257,6 +1305,9 @@ def save_confirmed_appointment(
                 if has_booked_for_col and booked_for_value is not None:
                     insert_cols.append("booked_for")
                     insert_vals.append(booked_for_value)
+                if has_channel_col and channel_value:
+                    insert_cols.append("channel")
+                    insert_vals.append(channel_value)
                 cur.execute(
                     f"""
                     INSERT INTO {appointment_table}
@@ -1287,6 +1338,9 @@ def save_confirmed_appointment(
                 if has_booked_for_col and booked_for_value is not None:
                     insert_cols.append("booked_for")
                     insert_vals.append(booked_for_value)
+                if has_channel_col and channel_value:
+                    insert_cols.append("channel")
+                    insert_vals.append(channel_value)
                 cur.execute(
                     f"""
                     INSERT INTO {appointment_table}
@@ -1318,6 +1372,9 @@ def save_confirmed_appointment(
                 if has_booked_for_col and booked_for_value is not None:
                     insert_cols.append("booked_for")
                     insert_vals.append(booked_for_value)
+                if has_channel_col and channel_value:
+                    insert_cols.append("channel")
+                    insert_vals.append(channel_value)
                 cur.execute(
                     f"""
                     INSERT INTO {appointment_table}
@@ -1346,6 +1403,9 @@ def save_confirmed_appointment(
                 if has_booked_for_col and booked_for_value is not None:
                     insert_cols.append("booked_for")
                     insert_vals.append(booked_for_value)
+                if has_channel_col and channel_value:
+                    insert_cols.append("channel")
+                    insert_vals.append(channel_value)
                 cur.execute(
                     f"""
                     INSERT INTO {appointment_table}

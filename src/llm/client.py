@@ -42,8 +42,22 @@ class LLMClient:
         try:
             with urllib.request.urlopen(request, timeout=self.timeout_seconds) as response:
                 raw = response.read().decode("utf-8")
+        except urllib.error.HTTPError as exc:
+            body = ""
+            try:
+                body = exc.read().decode("utf-8", errors="replace").strip()
+            except Exception:
+                body = ""
+            detail = f"HTTP {exc.code} {exc.reason}"
+            if body:
+                detail = f"{detail}: {body}"
+            raise RuntimeError(f"Ollama chat request failed: {detail}") from exc
         except urllib.error.URLError as exc:
             raise RuntimeError(f"Failed to call Ollama: {exc}") from exc
+        except TimeoutError as exc:
+            raise RuntimeError(
+                f"Ollama chat request timed out after {self.timeout_seconds:.1f}s"
+            ) from exc
 
         data = json.loads(raw)
         content = data.get("message", {}).get("content", "").strip()
