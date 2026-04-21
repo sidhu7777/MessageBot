@@ -142,7 +142,7 @@ def list_pending_notification_events(
                 WHERE l.status = 'PENDING'
                   AND l.dead_at IS NULL
                   AND (l.next_retry_at IS NULL OR l.next_retry_at <= CONVERT_TZ(UTC_TIMESTAMP(), '+00:00', '+05:30'))
-                  AND l.event_type IN ('CANCELLED', 'RESCHEDULED', 'DOCTOR_DELAYED')
+                  AND l.event_type IN ('CONFIRMATION', 'CANCELLED', 'RESCHEDULED', 'DOCTOR_DELAYED')
                   {admin_sql}
                 ORDER BY l.notification_id
                 LIMIT {safe_limit}
@@ -181,7 +181,7 @@ def list_pending_notification_events(
                 WHERE l.status = 'PENDING'
                   AND l.dead_at IS NULL
                   AND (l.next_retry_at IS NULL OR l.next_retry_at <= CONVERT_TZ(UTC_TIMESTAMP(), '+00:00', '+05:30'))
-                  AND l.event_type IN ('CANCELLED', 'RESCHEDULED', 'DOCTOR_DELAYED')
+                  AND l.event_type IN ('CONFIRMATION', 'CANCELLED', 'RESCHEDULED', 'DOCTOR_DELAYED')
                   {admin_sql}
                 ORDER BY l.notification_id
                 LIMIT {safe_limit}
