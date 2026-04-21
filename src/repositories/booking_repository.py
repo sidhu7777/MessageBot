@@ -806,6 +806,18 @@ class BookingRepository:
             # Log SMS confirmation notification (scheduler decides if SMS should send based on .env SMS_ENABLED_CHANNELS)
             appointment_id = result.appointment_id
             channel_value = str(getattr(context, "booking_channel", "") or "").strip().lower()
+            
+            # Debug logging
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.info(
+                "QR Booking notification check: appointment_id=%s channel_value='%s' phone_number='%s' condition=%s",
+                appointment_id,
+                channel_value,
+                phone_number[:4] + "****" if phone_number and len(phone_number) > 4 else phone_number,
+                bool(appointment_id and channel_value and phone_number),
+            )
+            
             if appointment_id and channel_value and phone_number:
                 try:
                     import json
