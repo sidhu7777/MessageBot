@@ -815,8 +815,23 @@ class BookingRepository:
 
                     logger = logging.getLogger(__name__)
                     sms_service = SMSNotificationService(load_settings(), logger)
+                    
+                    # Check if SMS is enabled for this channel
                     if not sms_service.is_sms_enabled_for_channel(channel_value):
+                        logger.info(
+                            "SMS notification not logged: SMS disabled for channel '%s' (appointment_id=%s)",
+                            channel_value,
+                            appointment_id,
+                        )
                         return result
+                    
+                    # Log the notification
+                    logger.info(
+                        "Logging SMS confirmation notification: appointment_id=%s channel=%s phone=%s",
+                        appointment_id,
+                        channel_value,
+                        phone_number[:4] + "****" if len(phone_number) > 4 else phone_number,
+                    )
                     self.log_notification_event(
                         appointment_id=appointment_id,
                         event_type="CONFIRMATION",
@@ -826,9 +841,15 @@ class BookingRepository:
                         admin_id=actual_admin_id,
                         doctor_id=doctor_id,
                     )
+                    logger.info("SMS confirmation notification logged successfully: appointment_id=%s", appointment_id)
                 except Exception as exc:
                     # Log but don't fail appointment booking if notification logging fails
-                    logger.warning("Failed to log SMS confirmation notification: %s", exc)
+                    logger.error(
+                        "Failed to log SMS confirmation notification: appointment_id=%s error=%s",
+                        appointment_id,
+                        exc,
+                        exc_info=True,
+                    )
         return result
 
     def get_appointment_status(self, appointment_id: int) -> Optional[dict]:
