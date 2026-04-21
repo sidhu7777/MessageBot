@@ -240,6 +240,10 @@ class NotificationRepository:
                 cur.execute(
                     "ALTER TABLE appointment_notification_log ADD COLUMN delivery_updated_at DATETIME NULL"
                 )
+            if "source_channel" not in log_cols:
+                cur.execute(
+                    "ALTER TABLE appointment_notification_log ADD COLUMN source_channel VARCHAR(30) NULL"
+                )
             cur.execute(
                 """
                 CREATE TABLE IF NOT EXISTS message_delivery_status (

@@ -447,31 +447,44 @@ class AutomationScheduler:
             doctor_id = int(event.doctor_id) if getattr(event, "doctor_id", None) is not None else None
             channel_account_id: Optional[int] = None
 
-            # Handle SMS channel separately
+            # Handle SMS channel separately — ONLY use SMS service, never fall back to Twilio
             if channel == "sms":
+                from src.runtime.sms_notification_service import SMSNotificationService
+
+                sms_service = SMSNotificationService(self._settings, LOGGER)
+                source_channel = (getattr(event, "source_channel", "") or "").strip().lower()
+                sms_allowed = (
+                    sms_service.is_sms_enabled_for_channel(source_channel)
+                    if source_channel
+                    else sms_service.sms_enabled
+                )
+                
+                if not sms_allowed:
+                    self._mark_notification_event_status(
+                        notification_id=event.notification_id,
+                        status="SKIPPED",
+                        error_text=(
+                            f"SMS disabled for source channel '{source_channel or 'unknown'}'."
+                        ),
+                        doctor_id=doctor_id,
+                        admin_id=event.admin_id,
+                    )
+                    return True
+
+                # Build message based on event type
+                message = self._build_sms_message(event)
+                if not message:
+                    backoff = min(1800, 60 * (2 ** max(0, int(event.attempt_count))))
+                    self._booking_repository.mark_notification_event_retry(
+                        notification_id=event.notification_id,
+                        error_text="Could not build SMS message",
+                        backoff_seconds=backoff,
+                        max_attempts=max_attempts,
+                    )
+                    return False
+
+                # Send SMS via SMS service ONLY
                 try:
-                    from src.runtime.sms_notification_service import SMSNotificationService
-
-                    sms_service = SMSNotificationService(self._settings, LOGGER)
-                    source_channel = (getattr(event, "source_channel", "") or "").strip().lower()
-                    if not sms_service.is_sms_enabled_for_channel(source_channel):
-                        self._mark_notification_event_status(
-                            notification_id=event.notification_id,
-                            status="SKIPPED",
-                            error_text=(
-                                f"SMS disabled for source channel '{source_channel or 'unknown'}'."
-                            ),
-                            doctor_id=doctor_id,
-                            admin_id=event.admin_id,
-                        )
-                        return True
-
-                    # Build message based on event type
-                    message = self._build_sms_message(event)
-                    if not message:
-                        raise Exception("Could not build SMS message")
-
-                    # Send SMS
                     success, provider_sid = sms_service.send_sms(
                         phone_number=to_number,
                         message=message,
@@ -487,12 +500,21 @@ class AutomationScheduler:
                         )
                         return True
                     else:
-                        raise Exception("SMS send returned false")
+                        # SMS service returned False - mark for retry with real reason
+                        backoff = min(1800, 60 * (2 ** max(0, int(event.attempt_count))))
+                        self._booking_repository.mark_notification_event_retry(
+                            notification_id=event.notification_id,
+                            error_text="SMS API returned failure (check SMS service logs for details)",
+                            backoff_seconds=backoff,
+                            max_attempts=max_attempts,
+                        )
+                        return False
                 except Exception as exc:
+                    # SMS service threw exception - mark for retry with actual error
                     backoff = min(1800, 60 * (2 ** max(0, int(event.attempt_count))))
                     self._booking_repository.mark_notification_event_retry(
                         notification_id=event.notification_id,
-                        error_text=str(exc),
+                        error_text=f"SMS send failed: {str(exc)}",
                         backoff_seconds=backoff,
                         max_attempts=max_attempts,
                     )

@@ -135,7 +135,7 @@ def list_pending_notification_events(
                     COALESCE(p.phone, '') AS patient_phone,
                     {chat_select} AS patient_telegram_chat_id
                 FROM appointment_notification_log l
-                JOIN {appointment_table} a ON a.appointment_id = l.appointment_id
+                LEFT JOIN {appointment_table} a ON a.appointment_id = l.appointment_id
                 LEFT JOIN doctors d ON d.doctor_id = a.doctor_id
                 LEFT JOIN patients p ON p.patient_id = a.patient_id
                 LEFT JOIN clinics c ON c.clinic_id = a.clinic_id
@@ -173,7 +173,7 @@ def list_pending_notification_events(
                     COALESCE(p.phone, '') AS patient_phone,
                     {chat_select} AS patient_telegram_chat_id
                 FROM appointment_notification_log l
-                JOIN {appointment_table} a ON a.appointment_id = l.appointment_id
+                LEFT JOIN {appointment_table} a ON a.appointment_id = l.appointment_id
                 LEFT JOIN slots s ON s.slot_id = a.slot_id
                 LEFT JOIN doctors d ON d.doctor_id = a.doctor_id
                 LEFT JOIN patients p ON p.patient_id = a.patient_id
@@ -395,7 +395,7 @@ def claim_pending_notification_events(
                     COALESCE(p.phone, '') AS patient_phone,
                     {chat_select} AS patient_telegram_chat_id
                 FROM appointment_notification_log l
-                JOIN {appointment_table} a ON a.appointment_id = l.appointment_id
+                LEFT JOIN {appointment_table} a ON a.appointment_id = l.appointment_id
                 LEFT JOIN doctors d ON d.doctor_id = a.doctor_id
                 LEFT JOIN patients p ON p.patient_id = a.patient_id
                 LEFT JOIN clinics c ON c.clinic_id = a.clinic_id
@@ -428,7 +428,7 @@ def claim_pending_notification_events(
                     COALESCE(p.phone, '') AS patient_phone,
                     {chat_select} AS patient_telegram_chat_id
                 FROM appointment_notification_log l
-                JOIN {appointment_table} a ON a.appointment_id = l.appointment_id
+                LEFT JOIN {appointment_table} a ON a.appointment_id = l.appointment_id
                 LEFT JOIN slots s ON s.slot_id = a.slot_id
                 LEFT JOIN doctors d ON d.doctor_id = a.doctor_id
                 LEFT JOIN patients p ON p.patient_id = a.patient_id
