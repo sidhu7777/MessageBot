@@ -772,12 +772,18 @@ class BookingRepository:
         admin_id: Optional[int] = None,
         doctor_id: Optional[int] = None,
     ) -> BookingResult:
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.info("save_confirmed_appointment called: context=%s", type(context).__name__)
+        
         result = _save_confirmed_appointment(
             self,
             context=context,
             admin_id=admin_id,
             doctor_id=doctor_id,
         )
+        logger.info("save_confirmed_appointment result: ok=%s appointment_id=%s", result.ok, getattr(result, 'appointment_id', None))
+        
         if result.ok:
             actual_admin_id = admin_id or self.default_admin_id()
             patient_name = str(getattr(context, "patient_name", "") or "").strip()
