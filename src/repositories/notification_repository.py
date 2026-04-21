@@ -24,6 +24,8 @@ class NotificationEvent:
     doctor_id: Optional[int] = None
     channel_account_id: Optional[int] = None
     attempt_count: int = 0
+    source_channel: str = ""
+    doctor_name: str = ""
 
 
 class NotificationRepository:

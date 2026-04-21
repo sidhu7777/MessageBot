@@ -35,9 +35,9 @@ LLMClient = _load_test_llm_client()
 load_dotenv()
 
 
-MODEL_NAME = os.getenv("WHISPER_MODEL", "small")
+MODEL_NAME = os.getenv("WHISPER_MODEL", "medium")
 LANGUAGE = os.getenv("WHISPER_LANGUAGE", "en")
-LLM_MODEL_NAME = os.getenv("LLM_MODEL_NAME", "qwen3:0.6b").strip() or "qwen3:0.6b"
+LLM_MODEL_NAME = os.getenv("LLM_MODEL_NAME", "qwen3:1.7b").strip() or "qwen3:1.7b"
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://127.0.0.1:11434").strip() or "http://127.0.0.1:11434"
 WHISPER_DEVICE = os.getenv("WHISPER_DEVICE", "auto").strip().lower() or "auto"
 WHISPER_COMPUTE_TYPE = os.getenv("WHISPER_COMPUTE_TYPE", "").strip().lower()
@@ -51,12 +51,12 @@ CLEAN_REQUEST_TIMEOUT_SECONDS = max(
 PARCHI_REQUEST_TIMEOUT_SECONDS = max(
     10.0, float(os.getenv("WHISPER_PARCHI_REQUEST_TIMEOUT_SECONDS", str(LLM_TIMEOUT_SECONDS + 30.0)))
 )
-CHUNK_SECONDS = max(2.0, float(os.getenv("WHISPER_CHUNK_SECONDS", "4.0")))
+CHUNK_SECONDS = max(2.0, float(os.getenv("WHISPER_CHUNK_SECONDS", "8.0")))
 CHUNK_MS = int(CHUNK_SECONDS * 1000)
-MAX_SEGMENT_SECONDS = max(CHUNK_SECONDS, float(os.getenv("WHISPER_MAX_SEGMENT_SECONDS", "8.0")))
-MIN_SPEECH_SECONDS = max(0.4, float(os.getenv("WHISPER_MIN_SPEECH_SECONDS", "1.0")))
-SILENCE_SECONDS = max(0.3, float(os.getenv("WHISPER_SILENCE_SECONDS", "0.9")))
-VAD_THRESHOLD = max(0.003, float(os.getenv("WHISPER_VAD_THRESHOLD", "0.012")))
+MAX_SEGMENT_SECONDS = max(CHUNK_SECONDS, float(os.getenv("WHISPER_MAX_SEGMENT_SECONDS", "14.0")))
+MIN_SPEECH_SECONDS = max(0.4, float(os.getenv("WHISPER_MIN_SPEECH_SECONDS", "1.2")))
+SILENCE_SECONDS = max(0.3, float(os.getenv("WHISPER_SILENCE_SECONDS", "1.5")))
+VAD_THRESHOLD = max(0.003, float(os.getenv("WHISPER_VAD_THRESHOLD", "0.015")))
 SPEECH_START_SECONDS = max(0.1, float(os.getenv("WHISPER_SPEECH_START_SECONDS", "0.25")))
 PROMPT_TAIL_CHARS = max(80, int(os.getenv("WHISPER_PROMPT_TAIL_CHARS", "180")))
 TARGET_SAMPLE_RATE = int(os.getenv("WHISPER_TARGET_SAMPLE_RATE", "16000"))
@@ -73,10 +73,10 @@ MEDICAL_PROMPT = os.getenv(
         "mg, ml, twice daily, once daily, follow-up after 7 days. Dolo 650 is a medicine name, not money."
     ),
 ).strip()
-TRIM_SILENCE_THRESHOLD = max(0.0015, float(os.getenv("WHISPER_TRIM_SILENCE_THRESHOLD", "0.006")))
+TRIM_SILENCE_THRESHOLD = max(0.0015, float(os.getenv("WHISPER_TRIM_SILENCE_THRESHOLD", "0.003")))
 MIN_CHUNK_RMS = max(50, int(os.getenv("WHISPER_MIN_CHUNK_RMS", "350")))
 MIN_SPEECH_RATIO = max(0.05, float(os.getenv("WHISPER_MIN_SPEECH_RATIO", "0.22")))
-DEDUPE_SIMILARITY = max(0.7, float(os.getenv("WHISPER_DEDUPE_SIMILARITY", "0.9")))
+DEDUPE_SIMILARITY = max(0.7, float(os.getenv("WHISPER_DEDUPE_SIMILARITY", "0.98")))
 MIN_ACCEPTED_WORDS = max(2, int(os.getenv("WHISPER_MIN_ACCEPTED_WORDS", "3")))
 SAVE_AUDIO_DIR = Path(
     os.getenv("WHISPER_SAVE_AUDIO_DIR", "tests/artifacts/live_whisper_audio")
@@ -237,19 +237,64 @@ def _strip_code_fences(text: str) -> str:
 
 
 def _extract_json_object(text: str) -> Dict[str, Any]:
+    """Extract valid JSON object from LLM output, handling medicines array specially."""
     cleaned = _strip_code_fences(text)
+    
+    # Try direct JSON parse first
     try:
         payload = json.loads(cleaned)
-        return payload if isinstance(payload, dict) else {}
+        if isinstance(payload, dict):
+            # If medicines is missing but we have partial medicine data, wrap it
+            if "medicines" not in payload and "name" in payload:
+                payload = {"medicines": [payload]}
+            return payload
     except Exception:
-        start = cleaned.find("{")
-        end = cleaned.rfind("}")
-        if start >= 0 and end > start:
-            try:
-                payload = json.loads(cleaned[start : end + 1])
-                return payload if isinstance(payload, dict) else {}
-            except Exception:
-                return {}
+        pass
+    
+    # Try to extract valid JSON object
+    start = cleaned.find("{")
+    end = cleaned.rfind("}")
+    if start >= 0 and end > start:
+        try:
+            potential = cleaned[start : end + 1]
+            payload = json.loads(potential)
+            if isinstance(payload, dict):
+                if "medicines" not in payload and "name" in payload:
+                    payload = {"medicines": [payload]}
+                return payload
+        except Exception:
+            pass
+    
+    # If we got here and text contains multiple medicine objects, try to wrap them
+    if cleaned.count("{") > 1 and "name" in cleaned:
+        try:
+            # Extract all medicine-like objects
+            medicines = []
+            current_obj = ""
+            brace_count = 0
+            for char in cleaned:
+                if char == "{":
+                    brace_count += 1
+                    current_obj += char
+                elif char == "}":
+                    current_obj += char
+                    brace_count -= 1
+                    if brace_count == 0 and current_obj.strip():
+                        try:
+                            med = json.loads(current_obj)
+                            if isinstance(med, dict) and "name" in med:
+                                medicines.append(med)
+                        except Exception:
+                            pass
+                        current_obj = ""
+                elif brace_count > 0:
+                    current_obj += char
+            
+            if medicines:
+                return {"medicines": medicines}
+        except Exception:
+            pass
+    
     return {}
 
 
@@ -468,6 +513,11 @@ def _fallback_parchi_payload(cleaned_text: str) -> Dict[str, Any]:
         "complaints": "",
         "diagnosis": "",
         "medicines": [],
+        "vital_signs": {
+            "blood_pressure": "",
+            "temperature": "",
+            "weight": ""
+        },
         "advice": normalized,
         "tests": "",
         "follow_up": "",
@@ -483,21 +533,55 @@ def _build_parchi_payload(cleaned_text: str) -> Tuple[Dict[str, Any], float]:
         return _fallback_parchi_payload(normalized), 0.0
     system_prompt = (
         "Extract prescription as JSON ONLY. No markdown, no explanation.\n\n"
-        "SCHEMA:\n"
-        '{"patient_name":"","complaints":"","diagnosis":"","medicines":[{"name":"","dose":"","frequency":"","duration":"","notes":""}],"advice":"","tests":"","follow_up":""}\n\n'
+        "SCHEMA (MUST USE THIS EXACT FORMAT):\n"
+        '{"patient_name":"","complaints":"","diagnosis":"","medicines":[{"name":"","frequency":"","timing":"","duration":"","notes":""}],"vital_signs":{"blood_pressure":"","temperature":"","weight":""},"advice":"","tests":"","follow_up":""}\n\n'
+        "IMPORTANT: medicines MUST ALWAYS be an ARRAY with square brackets []\n\n"
+        "FIELD DEFINITIONS (MUST FOLLOW EXACTLY):\n"
+        "MEDICINES FIELDS:\n"
+        "1. name: medicine name ONLY (e.g., 'Cyra-D', 'Paracetamol', 'Dolo 650')\n"
+        "2. frequency: HOW MANY TIMES (e.g., 'OD'=once, 'BD'=twice, 'TDS'=3 times, 'QID'=4 times, 'once daily', 'twice daily')\n"
+        "3. timing: WHEN DURING DAY (e.g., 'Morning', 'Afternoon', 'Evening', 'Morning and Evening') - NOTHING ELSE!\n"
+        "4. duration: HOW LONG TO TAKE (e.g., '5 days', '7 days', 'for 1 week')\n"
+        "5. notes: HOW TO TAKE IT (ONLY: 'before food', 'after food', 'empty stomach') - NOTHING ELSE!\n\n"
+        "FIELD SEPARATION RULES (CRITICAL):\n"
+        "- frequency ≠ timing (frequency is 'how many times', timing is 'when during day')\n"
+        "- timing ≠ notes (timing is 'Morning/Evening', notes is 'before food/after food')\n"
+        "- duration ≠ timing (duration is '5 days', timing is 'Morning')\n"
+        "- NEVER put timing in frequency field\n"
+        "- NEVER put duration in timing field\n"
+        "- NEVER put 'after 7 days' in timing (that's follow-up, not timing)\n"
+        "- NEVER put 'after food' in timing (that's notes, not timing)\n"
+        "- NEVER put 'once daily' in timing (that's frequency, not timing)\n\n"
+        "VITAL SIGNS FIELDS:\n"
+        "1. blood_pressure: e.g., '120/80 mm Hg', '130/85 mmHg'\n"
+        "2. temperature: e.g., '98.6°F', '37°C'\n"
+        "3. weight: e.g., '70 kg', '75 kg'\n\n"
+        "DETAILED EXAMPLES:\n\n"
+        "EXAMPLE 1A - Correct:\n"
+        'Input: "Dolo 650 once daily in the morning for 7 days"\n'
+        'CORRECT: {"name":"Dolo 650","frequency":"once daily","timing":"Morning","duration":"7 days","notes":""}\n'
+        'WRONG: {"name":"Dolo 650","frequency":"Morning","timing":"once daily"} ❌\n\n'
+        "EXAMPLE 1B - Correct:\n"
+        'Input: "Paracetamol twice daily after food for 5 days"\n'
+        'CORRECT: {"name":"Paracetamol","frequency":"twice daily","timing":"","duration":"5 days","notes":"after food"}\n'
+        'WRONG: {"name":"Paracetamol","frequency":"twice daily","timing":"after food"} ❌\n\n'
+        "EXAMPLE 2 - With Morning and Evening:\n"
+        'Input: "Aldactone OD morning and evening for 5 days"\n'
+        'CORRECT: {"name":"Aldactone","frequency":"OD","timing":"Morning and Evening","duration":"5 days","notes":""}\n'
+        'WRONG: {"name":"Aldactone","frequency":"OD","timing":"twice daily"} ❌\n\n'
         "EXTRACTION RULES:\n"
-        "1. MEDICINES: Extract EACH medicine separately\n"
-        "   name: exact medicine name (Dolo 650, Crocin, Pantop, etc)\n"
-        "   dose: strength like '650mg', '500mg' or empty string\n"
-        "   frequency: 'once daily', 'twice daily', 'TDS', 'QID', 'every 2 days', or exact wording, or empty\n"
-        "   duration: like '5 days', '7 days', 'one week', or empty\n"
-        "   notes: 'before food', 'after food', 'empty stomach', or empty\n"
-        "2. FOLLOW_UP: e.g. '7 days', '1 week', '10 days'\n"
-        "3. ADVICE: general advice only, NOT medicine instructions\n"
-        "4. Return raw JSON only, no code blocks or markdown\n\n"
-        "CRITICAL: Keep medicine names and frequencies EXACTLY as said. Do not normalize frequency - keep as spoken.\n\n"
-        "Example:  'Give Dolo 650 twice daily 5 days. Follow up 7 days.'\n"
-        'Returns: {"medicines":[{"name":"Dolo 650","dose":"","frequency":"twice daily","duration":"5 days","notes":""}],"follow_up":"7 days","patient_name":"","complaints":"","diagnosis":"","advice":"","tests":""}'
+        "1. medicines MUST ALWAYS be wrapped in an ARRAY []\n"
+        "2. Extract frequency from how many times mentioned\n"
+        "3. Extract timing ONLY if Morning/Afternoon/Evening mentioned (NOT frequency/duration/notes values)\n"
+        "4. Extract duration from days/weeks mentioned\n"
+        "5. Extract notes ONLY if food instructions mentioned\n"
+        "6. Leave empty if not mentioned\n\n"
+        "CRITICAL RULES (DO NOT VIOLATE):\n"
+        "- ALWAYS separate frequency, timing, duration, notes into different fields\n"
+        "- timing field MUST be empty or ONLY: Morning, Afternoon, Evening, Morning and Evening\n"
+        "- notes field MUST be empty or ONLY: before food, after food, empty stomach\n"
+        "- DO NOT mix fields\n"
+        "- ONLY extract what is explicitly spoken"
     )
     user_prompt = f"{normalized}"
     started_at = time.perf_counter()
@@ -515,17 +599,75 @@ def _build_parchi_payload(cleaned_text: str) -> Tuple[Dict[str, Any], float]:
     payload["advice"] = _coerce_text(payload.get("advice"))
     payload["tests"] = _coerce_text(payload.get("tests"))
     payload["follow_up"] = _coerce_text(payload.get("follow_up"))
+    
+    # Process vital signs if present
+    vital_signs_input = payload.get("vital_signs", {})
+    if not isinstance(vital_signs_input, dict):
+        vital_signs_input = {}
+    payload["vital_signs"] = {
+        "blood_pressure": str(vital_signs_input.get("blood_pressure") or "").strip(),
+        "temperature": str(vital_signs_input.get("temperature") or "").strip(),
+        "weight": str(vital_signs_input.get("weight") or "").strip(),
+    }
+    
     medicines: List[Dict[str, str]] = []
     for item in payload.get("medicines", []) if isinstance(payload.get("medicines"), list) else []:
         if not isinstance(item, dict):
             continue
+        
+        # Extract and clean fields
+        name = str(item.get("name") or "").strip()
+        frequency = str(item.get("frequency") or "").strip()
+        timing = str(item.get("timing") or "").strip()
+        duration = str(item.get("duration") or "").strip()
+        notes = str(item.get("notes") or "").strip()
+        
+        # VALIDATION: Fix field mixing errors
+        # If timing contains frequency keywords, move to frequency
+        timing_lower = timing.lower()
+        if any(kw in timing_lower for kw in ["daily", "od", "bd", "tds", "qid", "once", "twice", "thrice"]):
+            if not frequency:
+                frequency = timing
+                timing = ""
+        
+        # If timing contains notes keywords, move to notes
+        if any(kw in timing_lower for kw in ["food", "stomach"]):
+            if not notes:
+                notes = timing
+                timing = ""
+        
+        # If timing contains duration keywords, move to duration
+        if any(kw in timing_lower for kw in ["day", "week", "month", "hour"]):
+            if not duration and ("day" in timing_lower or "week" in timing_lower):
+                duration = timing
+                timing = ""
+        
+        # If notes contains frequency keywords, move to frequency
+        notes_lower = notes.lower()
+        if any(kw in notes_lower for kw in ["od", "bd", "tds", "qid", "daily", "once", "twice"]):
+            if not frequency:
+                frequency = notes
+                notes = ""
+        
+        # Validate timing: MUST be one of the allowed values
+        timing_lower = timing.lower()
+        valid_timings = ["morning", "afternoon", "evening", "morning and evening"]
+        if timing and not any(vt in timing_lower for vt in valid_timings):
+            timing = ""  # Clear if invalid
+        
+        # Validate notes: MUST be one of the allowed values
+        notes_lower = notes.lower()
+        valid_notes = ["before food", "after food", "empty stomach"]
+        if notes and not any(vn in notes_lower for vn in valid_notes):
+            notes = ""  # Clear if invalid
+        
         medicines.append(
             {
-                "name": str(item.get("name") or "").strip(),
-                "dose": str(item.get("dose") or "").strip(),
-                "frequency": str(item.get("frequency") or "").strip(),
-                "duration": str(item.get("duration") or "").strip(),
-                "notes": str(item.get("notes") or "").strip(),
+                "name": name,
+                "frequency": frequency,
+                "timing": timing,
+                "duration": duration,
+                "notes": notes,
             }
         )
     payload["medicines"] = medicines
@@ -670,10 +812,10 @@ def _transcribe_chunk_blocking(temp_path: Path, prompt_tail: str) -> Tuple[str, 
     segments, _ = model.transcribe(
         str(temp_path),
         language=LANGUAGE,
-        condition_on_previous_text=True,
+        condition_on_previous_text=False,
         initial_prompt=prompt_tail or None,
         temperature=0.0,
-        beam_size=5,
+        beam_size=8,
         no_speech_threshold=WHISPER_NO_SPEECH_THRESHOLD,
         vad_filter=True,
         vad_parameters={
@@ -1010,11 +1152,22 @@ def live_page() -> HTMLResponse:
     }
     .med-row-edit {
       display: grid;
-      grid-template-columns: 1.2fr 0.8fr 1fr 1fr 1fr 80px;
-      gap: 8px;
+      grid-template-columns: 1.3fr 1fr 1fr 1fr 1.2fr 60px;
+      gap: 6px;
       padding: 8px 0;
       align-items: center;
       border-bottom: 1px dotted #e2d8c6;
+    }
+    @media (max-width: 1200px) {
+      .med-row-edit {
+        grid-template-columns: 1.2fr 0.9fr 0.9fr 0.9fr 1fr 50px;
+      }
+    }
+    @media (max-width: 900px) {
+      .med-row-edit {
+        grid-template-columns: 1fr;
+        gap: 8px;
+      }
     }
     .med-row-edit:last-child {
       border-bottom: 0;
@@ -1050,7 +1203,7 @@ def live_page() -> HTMLResponse:
     .med-head,
     .med-row {
       display: grid;
-      grid-template-columns: 1.2fr 0.8fr 1fr 1fr 1fr;
+      grid-template-columns: 1.3fr 1fr 1fr 1.2fr 1.2fr;
       gap: 8px;
       padding: 6px 0;
       align-items: start;
@@ -1182,6 +1335,14 @@ def live_page() -> HTMLResponse:
                 <div id="parchiComplaints">-</div>
               </div>
               <div class="parchi-section wide">
+                <div class="parchi-label">Vital Signs</div>
+                <div id="parchiVitalSigns" style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 12px; margin-top: 8px;">
+                  <div><strong>BP:</strong> <span id="parchiBloodPressure">-</span></div>
+                  <div><strong>Temp:</strong> <span id="parchiTemperature">-</span></div>
+                  <div><strong>Weight:</strong> <span id="parchiWeight">-</span></div>
+                </div>
+              </div>
+              <div class="parchi-section wide">
                 <div class="parchi-label">Medicines</div>
                 <div id="parchiMedicines">-</div>
               </div>
@@ -1195,9 +1356,9 @@ def live_page() -> HTMLResponse:
               </div>
             </div>
             <div class="parchi-footer" style="display: flex; gap: 8px; padding: 12px 18px; border-top: 1px solid #ddd0bc; justify-content: flex-end;">
-              <button id="parchiEditBtn" style="display: inline-block; border: 0; border-radius: 6px; padding: 10px 16px; font-size: 13px; cursor: pointer; background: var(--accent); color: white;">Edit</button>
-              <button id="parchiSaveBtn" style="display: none; border: 0; border-radius: 6px; padding: 10px 16px; font-size: 13px; cursor: pointer; background: #059669; color: white;">Save</button>
-              <button id="parchiCancelBtn" style="display: none; border: 0; border-radius: 6px; padding: 10px 16px; font-size: 13px; cursor: pointer; background: #b45309; color: white;">Cancel</button>
+              <button id="parchiEditBtn" onclick="window.enterParchiEditMode()" style="display: inline-block; border: 0; border-radius: 6px; padding: 10px 16px; font-size: 13px; cursor: pointer; background: var(--accent); color: white;">Edit</button>
+              <button id="parchiSaveBtn" onclick="window.saveParchiChanges()" style="display: none; border: 0; border-radius: 6px; padding: 10px 16px; font-size: 13px; cursor: pointer; background: #059669; color: white;">Save</button>
+              <button id="parchiCancelBtn" onclick="window.cancelParchiEdit()" style="display: none; border: 0; border-radius: 6px; padding: 10px 16px; font-size: 13px; cursor: pointer; background: #b45309; color: white;">Cancel</button>
             </div>
           </div>
         </div>
@@ -1262,11 +1423,7 @@ def live_page() -> HTMLResponse:
     const TRIM_SILENCE_THRESHOLD = __TRIM_SILENCE_THRESHOLD__;
     const MIN_CHUNK_RMS = __MIN_CHUNK_RMS__;
 
-    // Initialize button event listeners
-    document.getElementById("parchiEditBtn").addEventListener("click", window.enterParchiEditMode);
-    document.getElementById("parchiSaveBtn").addEventListener("click", window.saveParchiChanges);
-    document.getElementById("parchiCancelBtn").addEventListener("click", window.cancelParchiEdit);
-    console.log("[INIT] Parchi button event listeners attached");
+    console.log("[INIT] Parchi system initialized - using inline onclick handlers");
 
     function setStatus(value) {
       statusValue.textContent = value;
@@ -1401,7 +1558,7 @@ def live_page() -> HTMLResponse:
           cleanTranscriptFromRaw(payload.accumulated_text).catch((error) => {
             logLine(`Cleaning failed: ${error.message}`);
           });
-        }, 2500);
+        }, 1500);
       }
       setStatus(isStopping ? "Finalizing..." : "Listening");
     }
@@ -1469,16 +1626,16 @@ def live_page() -> HTMLResponse:
       return `
         <div class="med-head">
           <div>Medicine</div>
-          <div>Dose</div>
           <div>Frequency</div>
+          <div>Timing</div>
           <div>Duration</div>
           <div>Notes</div>
         </div>
       ` + medicines.map((item) => `
         <div class="med-row">
           <div><strong>${escapeHtml(item.name || "-")}</strong></div>
-          <div>${escapeHtml(item.dose || "-")}</div>
           <div>${escapeHtml(item.frequency || "-")}</div>
+          <div>${escapeHtml(item.timing || "-")}</div>
           <div>${escapeHtml(item.duration || "-")}</div>
           <div>${escapeHtml(item.notes || "-")}</div>
         </div>
@@ -1495,20 +1652,32 @@ def live_page() -> HTMLResponse:
       const rows = medicines.map((item, idx) => `
         <div class="med-row-edit" data-med-idx="${idx}">
           <input type="text" class="med-input" placeholder="Medicine name" value="${escapeHtml(item.name || "")}" data-field="name" />
-          <input type="text" class="med-input" placeholder="Dose" value="${escapeHtml(item.dose || "")}" data-field="dose" />
-          <select class="med-select" data-field="frequency">
-            <option ${item.frequency === "once daily" ? "selected" : ""}>once daily</option>
-            <option ${item.frequency === "twice daily" ? "selected" : ""}>twice daily</option>
-            <option ${item.frequency === "TDS" ? "selected" : ""}>TDS</option>
-            <option ${item.frequency === "QID" ? "selected" : ""}>QID</option>
-            <option ${item.frequency === "" ? "selected" : ""}>(not set)</option>
+          <select class="med-select" data-field="frequency" title="Select frequency">
+            <option value="">Frequency</option>
+            <option value="OD" ${item.frequency === "OD" ? "selected" : ""}>OD</option>
+            <option value="BD" ${item.frequency === "BD" ? "selected" : ""}>BD</option>
+            <option value="TDS" ${item.frequency === "TDS" ? "selected" : ""}>TDS</option>
+            <option value="QID" ${item.frequency === "QID" ? "selected" : ""}>QID</option>
+            <option value="once daily" ${item.frequency === "once daily" ? "selected" : ""}>Once daily</option>
+            <option value="twice daily" ${item.frequency === "twice daily" ? "selected" : ""}>Twice daily</option>
+            <option value="" ${item.frequency === "" ? "selected" : ""}>(not set)</option>
+          </select>
+          <select class="med-select" data-field="timing" title="Select timing">
+            <option value="">Timing</option>
+            <option value="Morning" ${item.timing === "Morning" ? "selected" : ""}>Morning</option>
+            <option value="Afternoon" ${item.timing === "Afternoon" ? "selected" : ""}>Afternoon</option>
+            <option value="Evening" ${item.timing === "Evening" ? "selected" : ""}>Evening</option>
+            <option value="Morning and Evening" ${item.timing === "Morning and Evening" ? "selected" : ""}>Morning & Evening</option>
+            <option value="After meals" ${item.timing === "After meals" ? "selected" : ""}>After meals</option>
+            <option value="" ${item.timing === "" ? "selected" : ""}>(not set)</option>
           </select>
           <input type="text" class="med-input" placeholder="Duration" value="${escapeHtml(item.duration || "")}" data-field="duration" />
-          <select class="med-select" data-field="notes">
-            <option ${item.notes === "before food" ? "selected" : ""}>before food</option>
-            <option ${item.notes === "after food" ? "selected" : ""}>after food</option>
-            <option ${item.notes === "empty stomach" ? "selected" : ""}>empty stomach</option>
-            <option ${item.notes === "" ? "selected" : ""}>(not set)</option>
+          <select class="med-select" data-field="notes" title="Select notes">
+            <option value="">Notes</option>
+            <option value="before food" ${item.notes === "before food" ? "selected" : ""}>Before food</option>
+            <option value="after food" ${item.notes === "after food" ? "selected" : ""}>After food</option>
+            <option value="empty stomach" ${item.notes === "empty stomach" ? "selected" : ""}>Empty stomach</option>
+            <option value="" ${item.notes === "" ? "selected" : ""}>(not set)</option>
           </select>
           <button class="med-delete-btn" onclick="deleteMedicine(${idx})">Delete</button>
         </div>
@@ -1531,8 +1700,8 @@ def live_page() -> HTMLResponse:
       }
       parchiData.medicines.push({
         name: "",
-        dose: "",
         frequency: "",
+        timing: "",
         duration: "",
         notes: ""
       });
@@ -1553,7 +1722,7 @@ def live_page() -> HTMLResponse:
         inputs.forEach(inp => {
           med[inp.dataset.field] = inp.value;
         });
-        if (med.name || med.dose || med.frequency || med.duration) {
+        if (med.name || med.frequency || med.duration) {
           medicines.push(med);
         }
       });
@@ -1567,19 +1736,21 @@ def live_page() -> HTMLResponse:
       updateParchiDisplay();
       parchiPreviewEl.hidden = false;
       console.log("[PARCHI] Preview visible, Edit button accessible");
-      
-      // Attach event listeners NOW that buttons exist
-      setTimeout(() => {
-        document.getElementById("parchiEditBtn").addEventListener("click", window.enterParchiEditMode);
-        document.getElementById("parchiSaveBtn").addEventListener("click", window.saveParchiChanges);
-        document.getElementById("parchiCancelBtn").addEventListener("click", window.cancelParchiEdit);
-        console.log("[PARCHI] Button event listeners attached");
-      }, 10);
     }
 
     function updateParchiDisplay() {
       document.getElementById("parchiDate").textContent = `Date: ${new Date().toLocaleDateString()}`;
       document.getElementById("parchiFollowUp").textContent = parchiData.follow_up ? `Follow-up: ${parchiData.follow_up}` : "";
+      
+      // Update vital signs with null checks
+      const bpEl = document.getElementById("parchiBloodPressure");
+      const tempEl = document.getElementById("parchiTemperature");
+      const wtEl = document.getElementById("parchiWeight");
+      
+      const vs = parchiData.vital_signs || {};
+      if (bpEl) bpEl.textContent = escapeHtml(vs.blood_pressure || "-");
+      if (tempEl) tempEl.textContent = escapeHtml(vs.temperature || "-");
+      if (wtEl) wtEl.textContent = escapeHtml(vs.weight || "-");
       
       if (parchiEditMode) {
         // Edit mode
@@ -1589,6 +1760,16 @@ def live_page() -> HTMLResponse:
         document.getElementById("parchiAdvice").innerHTML = `<textarea class="parchi-edit-textarea" id="editAdvice">${escapeHtml(parchiData.advice || "")}</textarea>`;
         document.getElementById("parchiTests").innerHTML = `<input type="text" class="parchi-edit-input" id="editTests" value="${escapeHtml(parchiData.tests || "")}" />`;
         document.getElementById("parchiMedicines").innerHTML = renderMedicinesEditable(parchiData.medicines || []);
+        
+        // Add vital signs edit fields
+        const vsEditEl = document.getElementById("parchiVitalSigns");
+        if (vsEditEl) {
+          vsEditEl.innerHTML = `
+            <div><strong>BP:</strong> <input type="text" class="parchi-edit-input" id="editBloodPressure" value="${escapeHtml(vs.blood_pressure || "")}" placeholder="e.g., 120/80 mmHg" /></div>
+            <div><strong>Temp:</strong> <input type="text" class="parchi-edit-input" id="editTemperature" value="${escapeHtml(vs.temperature || "")}" placeholder="e.g., 98.6°F" /></div>
+            <div><strong>Weight:</strong> <input type="text" class="parchi-edit-input" id="editWeight" value="${escapeHtml(vs.weight || "")}" placeholder="e.g., 70 kg" /></div>
+          `;
+        }
         
         document.getElementById("parchiEditBtn").style.display = "none";
         document.getElementById("parchiSaveBtn").style.display = "inline-block";
@@ -1602,6 +1783,23 @@ def live_page() -> HTMLResponse:
         document.getElementById("parchiTests").innerHTML = `<div class="parchi-value">${escapeHtml(parchiData.tests || "-")}</div>`;
         document.getElementById("parchiMedicines").innerHTML = renderMedicines(parchiData.medicines || []);
         
+        // Vital signs display mode (already updated above)
+        const vsDisplayEl = document.getElementById("parchiVitalSigns");
+        if (vsDisplayEl) {
+          vsDisplayEl.innerHTML = `
+            <div><strong>BP:</strong> <span id="parchiBloodPressure">-</span></div>
+            <div><strong>Temp:</strong> <span id="parchiTemperature">-</span></div>
+            <div><strong>Weight:</strong> <span id="parchiWeight">-</span></div>
+          `;
+          // Update after rendering
+          const bpSpan = document.getElementById("parchiBloodPressure");
+          const tempSpan = document.getElementById("parchiTemperature");
+          const wtSpan = document.getElementById("parchiWeight");
+          if (bpSpan) bpSpan.textContent = escapeHtml(vs.blood_pressure || "-");
+          if (tempSpan) tempSpan.textContent = escapeHtml(vs.temperature || "-");
+          if (wtSpan) wtSpan.textContent = escapeHtml(vs.weight || "-");
+        }
+        
         document.getElementById("parchiEditBtn").style.display = "inline-block";
         document.getElementById("parchiSaveBtn").style.display = "none";
         document.getElementById("parchiCancelBtn").style.display = "none";
@@ -1614,15 +1812,34 @@ def live_page() -> HTMLResponse:
     };
 
     window.saveParchiChanges = function () {
-      parchiData.patient_name = document.getElementById("editPatientName").value;
-      parchiData.complaints = document.getElementById("editComplaints").value;
-      parchiData.diagnosis = document.getElementById("editDiagnosis").value;
-      parchiData.advice = document.getElementById("editAdvice").value;
-      parchiData.tests = document.getElementById("editTests").value;
-      parchiData.medicines = collectEditedMedicines();
-      parchiEditMode = false;
-      updateParchiDisplay();
-      logLine("Prescription saved.");
+      try {
+        console.log("[PARCHI_EDIT] Saving changes...");
+        parchiData.patient_name = document.getElementById("editPatientName").value || "";
+        parchiData.complaints = document.getElementById("editComplaints").value || "";
+        parchiData.diagnosis = document.getElementById("editDiagnosis").value || "";
+        parchiData.advice = document.getElementById("editAdvice").value || "";
+        parchiData.tests = document.getElementById("editTests").value || "";
+        parchiData.medicines = collectEditedMedicines();
+        
+        // Save vital signs
+        const bpEl = document.getElementById("editBloodPressure");
+        const tempEl = document.getElementById("editTemperature");
+        const wtEl = document.getElementById("editWeight");
+        
+        parchiData.vital_signs = {
+          blood_pressure: (bpEl?.value || "").trim(),
+          temperature: (tempEl?.value || "").trim(),
+          weight: (wtEl?.value || "").trim()
+        };
+        
+        console.log("[PARCHI_EDIT] Data collected:", parchiData);
+        parchiEditMode = false;
+        updateParchiDisplay();
+        logLine("✓ Prescription saved successfully.");
+      } catch (error) {
+        console.error("[PARCHI_EDIT] Error saving:", error);
+        logLine("✗ Error saving prescription: " + error.message);
+      }
     };
 
     window.cancelParchiEdit = function () {
@@ -1655,6 +1872,15 @@ def live_page() -> HTMLResponse:
       cleanedTranscriptEl.value = payload.cleaned_text || "";
       cleanedTranscriptEl.readOnly = true;
       setCleanLatency(payload.clean_elapsed_seconds || 0);
+      
+      // Auto-render Parchi after cleaning is done
+      try {
+        logLine("Cleaning complete. Rendering prescription...");
+        await confirmParchi();
+      } catch (error) {
+        console.error("[PARCHI] Auto-render failed:", error);
+        logLine(`Auto-render failed: ${error.message}. Click Confirm to retry.`);
+      }
     }
 
     async function confirmParchi() {
@@ -1672,7 +1898,12 @@ def live_page() -> HTMLResponse:
         throw new Error(payload.detail || "Parchi render failed");
       }
       renderParchi(payload.parchi || {});
-      logLine(`Parchi rendered in ${Number(payload.parchi_elapsed_seconds || 0).toFixed(2)}s.`);
+      logLine(`✓ Prescription rendered in ${Number(payload.parchi_elapsed_seconds || 0).toFixed(2)}s.`);
+      
+      // Hide the Confirm/Edit/Cancel buttons after successful rendering
+      confirmCleanBtn.style.display = "none";
+      editCleanBtn.style.display = "none";
+      cancelCleanBtn.style.display = "none";
     }
 
     async function flushSpeechBuffer(force = false) {

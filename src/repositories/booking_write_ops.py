@@ -440,7 +440,7 @@ def save_confirmed_appointment(
                 raw_channel_value = "qr_scan"
             elif repo._normalize_chat_user_id(str(getattr(context, "chat_user_id", "") or "").strip()):
                 raw_channel_value = "telegram"
-        valid_channel_values = {"qr_scan", "whatsapp_web", "telegram", "app"}
+        valid_channel_values = {"qr_scan", "whatsapp_web", "telegram", "app", "web"}
         channel_value = raw_channel_value if raw_channel_value in valid_channel_values else ""
 
         patient_values: dict[str, object] = {}

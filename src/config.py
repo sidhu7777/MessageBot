@@ -123,6 +123,14 @@ class Settings:
     evolution_session_window_seconds: int = 6 * 60 * 60
     evolution_welcome_template: str = ""
     evolution_warning_text: str = ""
+    sms_enabled: bool = False
+    sms_api_url: str = ""
+    sms_api_key: str = ""
+    sms_sender: str = "Dappto"
+    sms_message_type: str = "TXT"
+    sms_response: str = "Y"
+    sms_enabled_channels: str = ""
+    frontend_base_url: str = ""
 
 
 
@@ -246,4 +254,12 @@ def load_settings() -> Settings:
         ),
         evolution_welcome_template=_evolution_env_value("EVOLUTION_WELCOME_TEMPLATE", default=""),
         evolution_warning_text=_evolution_env_value("EVOLUTION_WARNING_TEXT", default=""),
+        sms_enabled=_as_bool(os.getenv("SMS_ENABLED", "false")),
+        sms_api_url=os.getenv("SMS_API_URL", "").strip(),
+        sms_api_key=os.getenv("SMS_API_KEY", "").strip(),
+        sms_sender=os.getenv("SMS_SENDER", "Dappto").strip() or "Dappto",
+        sms_message_type=os.getenv("SMS_MESSAGE_TYPE", "TXT").strip() or "TXT",
+        sms_response=os.getenv("SMS_RESPONSE", "Y").strip() or "Y",
+        sms_enabled_channels=os.getenv("SMS_ENABLED_CHANNELS", "").strip(),
+        frontend_base_url=os.getenv("FRONTEND_BASE_URL", "").strip(),
     )

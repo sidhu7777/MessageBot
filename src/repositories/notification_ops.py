@@ -94,6 +94,11 @@ def list_pending_notification_events(
             if callable(has_column) and has_column(appointment_table, "doctor_id")
             else "NULL AS doctor_id"
         )
+        source_channel_select = (
+            "COALESCE(a.channel, '') AS source_channel"
+            if callable(has_column) and has_column(appointment_table, "channel")
+            else "'' AS source_channel"
+        )
         channel_account_select = (
             "l.channel_account_id AS channel_account_id"
             if callable(has_column) and has_column("appointment_notification_log", "channel_account_id")
@@ -120,7 +125,9 @@ def list_pending_notification_events(
                     COALESCE(l.meta_json, '') AS meta_json,
                     l.admin_id,
                     {doctor_select},
+                    {source_channel_select},
                     {channel_account_select},
+                    COALESCE(NULLIF(TRIM(d.doctor_name), ''), 'Doctor') AS doctor_name,
                     COALESCE(p.full_name, '') AS patient_name,
                     COALESCE(c.clinic_name, '') AS clinic_name,
                     DATE_FORMAT(a.appointment_date, '%Y-%m-%d') AS slot_date,
@@ -129,6 +136,7 @@ def list_pending_notification_events(
                     {chat_select} AS patient_telegram_chat_id
                 FROM appointment_notification_log l
                 JOIN {appointment_table} a ON a.appointment_id = l.appointment_id
+                LEFT JOIN doctors d ON d.doctor_id = a.doctor_id
                 LEFT JOIN patients p ON p.patient_id = a.patient_id
                 LEFT JOIN clinics c ON c.clinic_id = a.clinic_id
                 WHERE l.status = 'PENDING'
@@ -155,7 +163,9 @@ def list_pending_notification_events(
                     COALESCE(l.meta_json, '') AS meta_json,
                     l.admin_id,
                     {doctor_select},
+                    {source_channel_select},
                     {channel_account_select},
+                    COALESCE(NULLIF(TRIM(d.doctor_name), ''), 'Doctor') AS doctor_name,
                     COALESCE(p.full_name, '') AS patient_name,
                     COALESCE(c.clinic_name, '') AS clinic_name,
                     DATE_FORMAT(s.slot_date, '%Y-%m-%d') AS slot_date,
@@ -165,6 +175,7 @@ def list_pending_notification_events(
                 FROM appointment_notification_log l
                 JOIN {appointment_table} a ON a.appointment_id = l.appointment_id
                 LEFT JOIN slots s ON s.slot_id = a.slot_id
+                LEFT JOIN doctors d ON d.doctor_id = a.doctor_id
                 LEFT JOIN patients p ON p.patient_id = a.patient_id
                 LEFT JOIN clinics c ON c.clinic_id = a.clinic_id
                 WHERE l.status = 'PENDING'
@@ -200,6 +211,8 @@ def list_pending_notification_events(
                     doctor_id=int(row["doctor_id"]) if row.get("doctor_id") is not None else None,
                     channel_account_id=int(row["channel_account_id"]) if row.get("channel_account_id") is not None else None,
                     attempt_count=int(row.get("attempt_count") or 0),
+                    source_channel=str(row.get("source_channel") or "").strip().lower(),
+                    doctor_name=str(row.get("doctor_name") or "").strip(),
                 )
             )
         return events
@@ -347,6 +360,11 @@ def claim_pending_notification_events(
             if callable(has_column) and has_column(appointment_table, "doctor_id")
             else "NULL AS doctor_id"
         )
+        source_channel_select = (
+            "COALESCE(a.channel, '') AS source_channel"
+            if callable(has_column) and has_column(appointment_table, "channel")
+            else "'' AS source_channel"
+        )
         channel_account_select = (
             "l.channel_account_id AS channel_account_id"
             if callable(has_column) and has_column("appointment_notification_log", "channel_account_id")
@@ -367,7 +385,9 @@ def claim_pending_notification_events(
                     COALESCE(l.meta_json, '') AS meta_json,
                     l.admin_id,
                     {doctor_select},
+                    {source_channel_select},
                     {channel_account_select},
+                    COALESCE(NULLIF(TRIM(d.doctor_name), ''), 'Doctor') AS doctor_name,
                     COALESCE(p.full_name, '') AS patient_name,
                     COALESCE(c.clinic_name, '') AS clinic_name,
                     DATE_FORMAT(a.appointment_date, '%Y-%m-%d') AS slot_date,
@@ -376,6 +396,7 @@ def claim_pending_notification_events(
                     {chat_select} AS patient_telegram_chat_id
                 FROM appointment_notification_log l
                 JOIN {appointment_table} a ON a.appointment_id = l.appointment_id
+                LEFT JOIN doctors d ON d.doctor_id = a.doctor_id
                 LEFT JOIN patients p ON p.patient_id = a.patient_id
                 LEFT JOIN clinics c ON c.clinic_id = a.clinic_id
                 WHERE l.notification_id IN ({placeholders})
@@ -397,7 +418,9 @@ def claim_pending_notification_events(
                     COALESCE(l.meta_json, '') AS meta_json,
                     l.admin_id,
                     {doctor_select},
+                    {source_channel_select},
                     {channel_account_select},
+                    COALESCE(NULLIF(TRIM(d.doctor_name), ''), 'Doctor') AS doctor_name,
                     COALESCE(p.full_name, '') AS patient_name,
                     COALESCE(c.clinic_name, '') AS clinic_name,
                     DATE_FORMAT(s.slot_date, '%Y-%m-%d') AS slot_date,
@@ -407,6 +430,7 @@ def claim_pending_notification_events(
                 FROM appointment_notification_log l
                 JOIN {appointment_table} a ON a.appointment_id = l.appointment_id
                 LEFT JOIN slots s ON s.slot_id = a.slot_id
+                LEFT JOIN doctors d ON d.doctor_id = a.doctor_id
                 LEFT JOIN patients p ON p.patient_id = a.patient_id
                 LEFT JOIN clinics c ON c.clinic_id = a.clinic_id
                 WHERE l.notification_id IN ({placeholders})
@@ -440,6 +464,8 @@ def claim_pending_notification_events(
                     doctor_id=int(row["doctor_id"]) if row.get("doctor_id") is not None else None,
                     channel_account_id=int(row["channel_account_id"]) if row.get("channel_account_id") is not None else None,
                     attempt_count=int(row.get("attempt_count") or 0),
+                    source_channel=str(row.get("source_channel") or "").strip().lower(),
+                    doctor_name=str(row.get("doctor_name") or "").strip(),
                 )
             )
         conn.commit()

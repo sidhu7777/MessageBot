@@ -803,6 +803,32 @@ class BookingRepository:
                     full_name=patient_name,
                     phone_number=phone_number,
                 )
+            # Log SMS confirmation notification if SMS is enabled for this channel
+            appointment_id = result.appointment_id
+            channel_value = str(getattr(context, "booking_channel", "") or "").strip().lower()
+            should_log_confirmation = result.ok
+            if appointment_id and channel_value and phone_number and should_log_confirmation:
+                try:
+                    from src.config import load_settings
+                    from src.runtime.sms_notification_service import SMSNotificationService
+                    import logging
+
+                    logger = logging.getLogger(__name__)
+                    sms_service = SMSNotificationService(load_settings(), logger)
+                    if not sms_service.is_sms_enabled_for_channel(channel_value):
+                        return result
+                    self.log_notification_event(
+                        appointment_id=appointment_id,
+                        event_type="CONFIRMATION",
+                        channel="sms",
+                        destination=phone_number,
+                        status="PENDING",
+                        admin_id=actual_admin_id,
+                        doctor_id=doctor_id,
+                    )
+                except Exception as exc:
+                    # Log but don't fail appointment booking if notification logging fails
+                    logger.warning("Failed to log SMS confirmation notification: %s", exc)
         return result
 
     def get_appointment_status(self, appointment_id: int) -> Optional[dict]:

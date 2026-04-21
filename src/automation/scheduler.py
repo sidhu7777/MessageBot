@@ -6,7 +6,7 @@ import time
 import uuid
 from datetime import datetime
 from zoneinfo import ZoneInfo
-from typing import Callable, Optional
+from typing import Any, Callable, Optional
 
 from openpyxl import Workbook
 from openpyxl.styles import Font
@@ -85,6 +85,7 @@ class AutomationScheduler:
     def __init__(
         self,
         *,
+        settings: Optional[Any] = None,
         booking_repository: Optional[BookingRepository],
         send_message_fn: Callable[[str, str], object],
         send_document_fn: Optional[Callable[[str, str, str], None]] = None,
@@ -98,6 +99,7 @@ class AutomationScheduler:
         resolve_channel_account_id_fn: Optional[Callable[[str, int], Optional[int]]] = None,
         notification_bridge: Optional[KafkaNotificationBridge] = None,
     ) -> None:
+        self._settings = settings
         self._booking_repository = booking_repository
         self._send_message_fn = send_message_fn
         self._send_document_fn = send_document_fn
@@ -444,6 +446,59 @@ class AutomationScheduler:
             channel = (event.channel or "").strip().lower()
             doctor_id = int(event.doctor_id) if getattr(event, "doctor_id", None) is not None else None
             channel_account_id: Optional[int] = None
+
+            # Handle SMS channel separately
+            if channel == "sms":
+                try:
+                    from src.runtime.sms_notification_service import SMSNotificationService
+
+                    sms_service = SMSNotificationService(self._settings, LOGGER)
+                    source_channel = (getattr(event, "source_channel", "") or "").strip().lower()
+                    if not sms_service.is_sms_enabled_for_channel(source_channel):
+                        self._mark_notification_event_status(
+                            notification_id=event.notification_id,
+                            status="SKIPPED",
+                            error_text=(
+                                f"SMS disabled for source channel '{source_channel or 'unknown'}'."
+                            ),
+                            doctor_id=doctor_id,
+                            admin_id=event.admin_id,
+                        )
+                        return True
+
+                    # Build message based on event type
+                    message = self._build_sms_message(event)
+                    if not message:
+                        raise Exception("Could not build SMS message")
+
+                    # Send SMS
+                    success, provider_sid = sms_service.send_sms(
+                        phone_number=to_number,
+                        message=message,
+                    )
+
+                    if success:
+                        self._mark_notification_event_status(
+                            notification_id=event.notification_id,
+                            status="SENT",
+                            provider_message_sid=str(provider_sid or ""),
+                            doctor_id=doctor_id,
+                            admin_id=event.admin_id,
+                        )
+                        return True
+                    else:
+                        raise Exception("SMS send returned false")
+                except Exception as exc:
+                    backoff = min(1800, 60 * (2 ** max(0, int(event.attempt_count))))
+                    self._booking_repository.mark_notification_event_retry(
+                        notification_id=event.notification_id,
+                        error_text=str(exc),
+                        backoff_seconds=backoff,
+                        max_attempts=max_attempts,
+                    )
+                    return False
+
+            # Handle Telegram/WhatsApp/other channels via send_message_fn
             if (
                 self._resolve_channel_account_id_fn
                 and doctor_id is not None
@@ -459,7 +514,7 @@ class AutomationScheduler:
 
             text = self._event_message_text(event)
             provider_sid = self._send_message_fn(to_number, text)
-            self._booking_repository.mark_notification_event_status(
+            self._mark_notification_event_status(
                 notification_id=event.notification_id,
                 status="SENT",
                 provider_message_sid=str(provider_sid or ""),
@@ -488,6 +543,7 @@ class AutomationScheduler:
                 return f"telegram:{destination}"
             if channel == "whatsapp":
                 return self._normalize_whatsapp_number(destination)
+            return destination
 
         chat_id = self._normalize_telegram_chat_id(event.patient_telegram_chat_id or "")
         phone = self._normalize_whatsapp_number(event.patient_phone or "")
@@ -543,6 +599,39 @@ class AutomationScheduler:
                 f"{delay_text}"
             )
         return f"Appointment update for {clinic} on {when}."
+
+    def _build_sms_message(self, event: NotificationEvent) -> str:
+        """
+        Build SMS message for notification event using SMSNotificationService.
+
+        Args:
+            event: NotificationEvent with appointment details
+
+        Returns:
+            Formatted SMS message text
+        """
+        try:
+            from src.runtime.sms_notification_service import SMSNotificationService
+
+            sms_service = SMSNotificationService(self._settings, LOGGER)
+            patient_name = event.patient_name or "Valued Patient"
+            doctor_name = getattr(event, "doctor_name", "") or "Doctor"
+            appointment_date = event.slot_date or ""
+            appointment_time = event.slot_time or ""
+            clinic_name = event.clinic_name or "the clinic"
+
+            message = sms_service.build_message_by_event_type(
+                event_type=event.event_type,
+                patient_name=patient_name,
+                doctor_name=doctor_name,
+                appointment_date=appointment_date,
+                appointment_time=appointment_time,
+                clinic_name=clinic_name,
+            )
+            return message
+        except Exception as exc:
+            LOGGER.error("Failed to build SMS message: %s", exc)
+            return ""
 
     def _build_doctor_report_xlsx(
         self,
@@ -645,6 +734,16 @@ class AutomationScheduler:
     def _inc_metric(self, name: str, value: int) -> None:
         with self._metrics_lock:
             self._metrics[name] = int(self._metrics.get(name, 0)) + int(value)
+
+    def _mark_notification_event_status(self, **kwargs) -> None:
+        if not self._booking_repository:
+            return
+        try:
+            self._booking_repository.mark_notification_event_status(**kwargs)
+        except TypeError:
+            fallback_keys = ("notification_id", "status", "error_text", "provider_message_sid")
+            fallback_kwargs = {key: kwargs[key] for key in fallback_keys if key in kwargs}
+            self._booking_repository.mark_notification_event_status(**fallback_kwargs)
 
     @staticmethod
     def _normalize_whatsapp_number(value: str) -> str:

@@ -286,6 +286,7 @@ if _raw_lead_list:
         )
 
 automation_scheduler = AutomationScheduler(
+    settings=settings,
     booking_repository=booking_repository if settings.enable_db_booking else None,
     send_message_fn=lambda to_number, body: _send_plain_channel_message(to_number=to_number, body=body),
     send_document_fn=lambda to_number, file_path, caption: _send_plain_channel_document(

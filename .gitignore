@@ -33,3 +33,8 @@ __pycache__/
 .pytest_cache/
 logs/
 .env
+
+
+# audio test artifacts
+tests/artifacts/
+*.wav

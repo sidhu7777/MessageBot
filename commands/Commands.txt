@@ -298,3 +298,20 @@ bash scripts/start_live_whisper_gpu.sh
 # To open in the brower of the live test 
 
 https://daptoservices.vinfocom.co.in/live-whisper-test/
+
+
+
+# to run the llm on gpu 
+
+bash scripts/start_ollama_gpu_host.sh
+
+
+# to run the test case live whisper
+
+PYTHONPATH=/root/MessageBot WHISPER_DEVICE=cuda WHISPER_COMPUTE_TYPE=float16 OLLAMA_NUM_GPU=1 python -m uvicorn tests.live_whisper_browser_stream:app --host 127.0.0.1 --port 8010
+
+
+to activate venv
+
+source /root/MessageBot/.venv310/bin/activate
+
