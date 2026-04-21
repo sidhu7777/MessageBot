@@ -803,35 +803,25 @@ class BookingRepository:
                     full_name=patient_name,
                     phone_number=phone_number,
                 )
-            # Log SMS confirmation notification if SMS is enabled for this channel
+            # Log SMS confirmation notification (scheduler decides if SMS should send based on .env SMS_ENABLED_CHANNELS)
             appointment_id = result.appointment_id
             channel_value = str(getattr(context, "booking_channel", "") or "").strip().lower()
-            should_log_confirmation = result.ok
-            if appointment_id and channel_value and phone_number and should_log_confirmation:
+            if appointment_id and channel_value and phone_number:
                 try:
-                    from src.config import load_settings
-                    from src.runtime.sms_notification_service import SMSNotificationService
+                    import json
                     import logging
 
                     logger = logging.getLogger(__name__)
-                    sms_service = SMSNotificationService(load_settings(), logger)
                     
-                    # Check if SMS is enabled for this channel
-                    if not sms_service.is_sms_enabled_for_channel(channel_value):
-                        logger.info(
-                            "SMS notification not logged: SMS disabled for channel '%s' (appointment_id=%s)",
-                            channel_value,
-                            appointment_id,
-                        )
-                        return result
-                    
-                    # Log the notification
+                    # Always log notification event - scheduler decides what to send based on .env
                     logger.info(
-                        "Logging SMS confirmation notification: appointment_id=%s channel=%s phone=%s",
+                        "Logging SMS confirmation notification: appointment_id=%s source_channel=%s phone=%s",
                         appointment_id,
                         channel_value,
                         phone_number[:4] + "****" if len(phone_number) > 4 else phone_number,
                     )
+                    # Store source channel in meta_json for audit trail
+                    meta = json.dumps({"source_channel": channel_value})
                     self.log_notification_event(
                         appointment_id=appointment_id,
                         event_type="CONFIRMATION",
@@ -840,8 +830,9 @@ class BookingRepository:
                         status="PENDING",
                         admin_id=actual_admin_id,
                         doctor_id=doctor_id,
+                        meta_json=meta,
                     )
-                    logger.info("SMS confirmation notification logged successfully: appointment_id=%s", appointment_id)
+                    logger.info("SMS confirmation notification logged successfully: appointment_id=%s source_channel=%s", appointment_id, channel_value)
                 except Exception as exc:
                     # Log but don't fail appointment booking if notification logging fails
                     logger.error(
