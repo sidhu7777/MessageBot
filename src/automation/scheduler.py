@@ -447,11 +447,12 @@ class AutomationScheduler:
             doctor_id = int(event.doctor_id) if getattr(event, "doctor_id", None) is not None else None
             channel_account_id: Optional[int] = None
 
-            # DEBUG: Log the channel value
-            LOGGER.info(f"DEBUG: Processing notification event - channel='{channel}' appointment_id={event.appointment_id}")
+            # DEBUG: Log the channel value and event details
+            LOGGER.info(f"DEBUG: Processing notification event - channel='{channel}' appointment_id={event.appointment_id} event_type={event.event_type} destination={event.destination}")
 
             # Handle SMS channel separately — ONLY use SMS service, never fall back to Twilio
             if channel == "sms":
+                LOGGER.info(f"DEBUG: SMS channel detected - using SMSNotificationService for appointment_id={event.appointment_id}")
                 from src.runtime.sms_notification_service import SMSNotificationService
 
                 sms_service = SMSNotificationService(self._settings, LOGGER)
@@ -550,6 +551,7 @@ class AutomationScheduler:
                     return False
 
             # Handle Telegram/WhatsApp/other channels via send_message_fn
+            LOGGER.info(f"DEBUG: Non-SMS channel detected - using send_message_fn for channel='{channel}' appointment_id={event.appointment_id}")
             if (
                 self._resolve_channel_account_id_fn
                 and doctor_id is not None

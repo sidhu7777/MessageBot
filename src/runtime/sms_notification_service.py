@@ -478,14 +478,36 @@ class SMSNotificationService:
         # Step 1: Reserve SMS credit
         credit_reserved, credit_reason = self.reserve_sms_credit(doctor_id, appointment_id)
         
+        # FALLBACK: If credit API is not accessible, proceed without credit check
         if not credit_reserved:
-            self.logger.warning(
-                "SMS not sent - credit reservation failed: doctor_id=%s appointment_id=%s reason=%s",
-                doctor_id,
-                appointment_id,
-                credit_reason,
-            )
-            return False, None, credit_reason
+            if credit_reason in ("API_TIMEOUT", "API_ERROR", "UNEXPECTED_ERROR"):
+                self.logger.warning(
+                    "Credit API unavailable - proceeding without credit check: doctor_id=%s appointment_id=%s reason=%s",
+                    doctor_id,
+                    appointment_id,
+                    credit_reason,
+                )
+                # Send SMS directly without credit management
+                sms_success, provider_message_id = self.send_sms(phone_number, message, meta_json)
+                if sms_success:
+                    self.logger.info(
+                        "SMS sent successfully (no credit check): doctor_id=%s appointment_id=%s phone=%s",
+                        doctor_id,
+                        appointment_id,
+                        phone_number,
+                    )
+                    return True, provider_message_id, ""
+                else:
+                    return False, None, "SMS_SEND_FAILED"
+            else:
+                # Credit API responded but denied (CREDITS_EXHAUSTED, SERVICE_DISABLED, etc.)
+                self.logger.warning(
+                    "SMS not sent - credit reservation failed: doctor_id=%s appointment_id=%s reason=%s",
+                    doctor_id,
+                    appointment_id,
+                    credit_reason,
+                )
+                return False, None, credit_reason
         
         # Step 2: Send SMS (using existing send_sms method - NO CHANGES)
         sms_success, provider_message_id = self.send_sms(phone_number, message, meta_json)
