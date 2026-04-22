@@ -33,7 +33,7 @@
   - Mark task complete when tests are written, run, and passing on unfixed code
   - _Requirements: Preservation Requirements from design (3.1, 3.2, 3.3, 3.4, 3.5)_
 
-- [-] 3. Fix for QR overflow booking notification logging
+- [x] 3. Fix for QR overflow booking notification logging
 
   - [x] 3.1 Implement the fix in `_book_confirmed_overflow` method
     - Open `src/qr/checkin_service.py` and locate the `_book_confirmed_overflow` method (lines 461-695)
@@ -51,7 +51,7 @@
     - _Preservation: Appointment creation logic, patient handling, slot calculation, transaction behavior remain unchanged_
     - _Requirements: 2.1, 2.2, 2.3, 3.1, 3.2, 3.3, 3.4, 3.5_
 
-  - [ ] 3.2 Verify bug condition exploration test now passes
+  - [x] 3.2 Verify bug condition exploration test now passes
     - **Property 1: Expected Behavior** - QR Overflow Bookings Log Notifications
     - **IMPORTANT**: Re-run the SAME test from task 1 - do NOT write a new test
     - The test from task 1 encodes the expected behavior
@@ -61,7 +61,7 @@
     - Verify notification log entry exists with correct event_type, channel, status, and meta_json
     - _Requirements: Expected Behavior Properties from design (2.1, 2.2, 2.3)_
 
-  - [ ] 3.3 Verify preservation tests still pass
+  - [x] 3.3 Verify preservation tests still pass
     - **Property 2: Preservation** - Non-Overflow Booking Behavior Unchanged
     - **IMPORTANT**: Re-run the SAME tests from task 2 - do NOT write new tests
     - Run preservation property tests from step 2
@@ -71,7 +71,7 @@
     - Verify appointment creation logic in `_book_confirmed_overflow` remains unchanged
     - _Requirements: Preservation Requirements from design (3.1, 3.2, 3.3, 3.4, 3.5)_
 
-- [ ] 4. Checkpoint - Ensure all tests pass
+- [x] 4. Checkpoint - Ensure all tests pass
   - Run all unit tests for `_book_confirmed_overflow` and `save_confirmed_appointment`
   - Run all property-based tests for bug condition and preservation
   - Run integration tests for full QR overflow booking flow

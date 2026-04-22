@@ -452,7 +452,16 @@ class AutomationScheduler:
                 from src.runtime.sms_notification_service import SMSNotificationService
 
                 sms_service = SMSNotificationService(self._settings, LOGGER)
-                source_channel = (getattr(event, "source_channel", "") or "").strip().lower()
+                
+                # Extract source_channel from meta_json (it's stored as JSON, not as an attribute)
+                source_channel = ""
+                try:
+                    import json
+                    meta = json.loads(event.meta_json or "{}")
+                    source_channel = str(meta.get("source_channel", "")).strip().lower()
+                except Exception:
+                    pass
+                
                 sms_allowed = (
                     sms_service.is_sms_enabled_for_channel(source_channel)
                     if source_channel
