@@ -9,6 +9,8 @@ from typing import Any, Optional
 from urllib import error as urlerror
 from urllib import request as urlrequest
 
+import requests
+
 
 class SMSNotificationService:
     """
@@ -41,10 +43,14 @@ class SMSNotificationService:
         enabled_channels_raw = (getattr(settings, "sms_enabled_channels", "") or "").strip()
         self.enabled_channels = self._parse_channels(enabled_channels_raw)
 
+        # SMS Credit Management API base URL
+        self.credit_api_base_url = "http://10.5.63.167:3000"
+
         self.logger.info(
-            "SMS Service initialized: enabled=%s channels=%s",
+            "SMS Service initialized: enabled=%s channels=%s credit_api=%s",
             self.sms_enabled,
             self.enabled_channels,
+            self.credit_api_base_url,
         )
 
     @staticmethod
@@ -305,6 +311,193 @@ class SMSNotificationService:
             error_msg = f"Unexpected error: {str(exc)}"
             self.logger.error("SMS send failed: %s", error_msg)
             return False, None
+
+    def reserve_sms_credit(self, doctor_id: int, appointment_id: int) -> tuple[bool, str]:
+        """
+        Reserve one SMS credit before sending.
+        
+        Args:
+            doctor_id: Doctor ID
+            appointment_id: Appointment ID
+            
+        Returns:
+            Tuple of (success: bool, reason: str)
+            - success: True if credit reserved successfully
+            - reason: Reason if failed (SERVICE_DISABLED, CREDITS_EXHAUSTED, etc.)
+        """
+        try:
+            url = f"{self.credit_api_base_url}/api/internal/doctors/{doctor_id}/sms-consume"
+            payload = {"appointmentId": appointment_id}
+            
+            self.logger.info(
+                "Reserving SMS credit: doctor_id=%s appointment_id=%s url=%s",
+                doctor_id,
+                appointment_id,
+                url,
+            )
+            
+            response = requests.post(url, json=payload, timeout=5)
+            data = response.json()
+            
+            self.logger.info(
+                "SMS credit reserve response: status=%s data=%s",
+                response.status_code,
+                data,
+            )
+            
+            success = data.get("success", False)
+            reserved = data.get("reserved", False)
+            already_consumed = data.get("alreadyConsumed", False)
+            reason = data.get("reason", "")
+            remaining = data.get("remainingCredits", 0)
+            
+            if success and (reserved or already_consumed):
+                self.logger.info(
+                    "SMS credit reserved successfully: doctor_id=%s appointment_id=%s remaining=%s already_consumed=%s",
+                    doctor_id,
+                    appointment_id,
+                    remaining,
+                    already_consumed,
+                )
+                return True, ""
+            else:
+                self.logger.warning(
+                    "SMS credit reservation failed: doctor_id=%s appointment_id=%s reason=%s remaining=%s",
+                    doctor_id,
+                    appointment_id,
+                    reason,
+                    remaining,
+                )
+                return False, reason or "UNKNOWN"
+                
+        except requests.exceptions.Timeout:
+            self.logger.error("SMS credit API timeout: doctor_id=%s appointment_id=%s", doctor_id, appointment_id)
+            return False, "API_TIMEOUT"
+        except requests.exceptions.RequestException as exc:
+            self.logger.error("SMS credit API error: doctor_id=%s appointment_id=%s error=%s", doctor_id, appointment_id, exc)
+            return False, "API_ERROR"
+        except Exception as exc:
+            self.logger.error("SMS credit reservation unexpected error: doctor_id=%s appointment_id=%s error=%s", doctor_id, appointment_id, exc)
+            return False, "UNEXPECTED_ERROR"
+
+    def release_sms_credit(self, doctor_id: int, appointment_id: int) -> bool:
+        """
+        Release SMS credit if SMS send failed after reservation.
+        
+        Args:
+            doctor_id: Doctor ID
+            appointment_id: Appointment ID
+            
+        Returns:
+            True if credit released successfully
+        """
+        try:
+            url = f"{self.credit_api_base_url}/api/internal/doctors/{doctor_id}/sms-release"
+            payload = {"appointmentId": appointment_id}
+            
+            self.logger.info(
+                "Releasing SMS credit: doctor_id=%s appointment_id=%s url=%s",
+                doctor_id,
+                appointment_id,
+                url,
+            )
+            
+            response = requests.post(url, json=payload, timeout=5)
+            data = response.json()
+            
+            self.logger.info(
+                "SMS credit release response: status=%s data=%s",
+                response.status_code,
+                data,
+            )
+            
+            success = data.get("success", False)
+            released = data.get("released", False)
+            
+            if success:
+                self.logger.info(
+                    "SMS credit released: doctor_id=%s appointment_id=%s released=%s",
+                    doctor_id,
+                    appointment_id,
+                    released,
+                )
+                return True
+            else:
+                self.logger.warning(
+                    "SMS credit release failed: doctor_id=%s appointment_id=%s",
+                    doctor_id,
+                    appointment_id,
+                )
+                return False
+                
+        except Exception as exc:
+            self.logger.error(
+                "SMS credit release error: doctor_id=%s appointment_id=%s error=%s",
+                doctor_id,
+                appointment_id,
+                exc,
+            )
+            return False
+
+    def send_sms_with_credit_check(
+        self,
+        doctor_id: int,
+        appointment_id: int,
+        phone_number: str,
+        message: str,
+        meta_json: str = "",
+    ) -> tuple[bool, Optional[str], str]:
+        """
+        Send SMS with credit check (reserve → send → release if failed).
+        
+        This is the NEW method that wraps the existing send_sms() with credit management.
+        
+        Args:
+            doctor_id: Doctor ID
+            appointment_id: Appointment ID
+            phone_number: Recipient phone number
+            message: SMS message text
+            meta_json: Optional metadata JSON
+            
+        Returns:
+            Tuple of (success: bool, provider_message_id: Optional[str], failure_reason: str)
+            - success: True if SMS sent successfully
+            - provider_message_id: API response message ID or None
+            - failure_reason: Reason if failed (NO_CREDITS, SMS_FAILED, etc.)
+        """
+        # Step 1: Reserve SMS credit
+        credit_reserved, credit_reason = self.reserve_sms_credit(doctor_id, appointment_id)
+        
+        if not credit_reserved:
+            self.logger.warning(
+                "SMS not sent - credit reservation failed: doctor_id=%s appointment_id=%s reason=%s",
+                doctor_id,
+                appointment_id,
+                credit_reason,
+            )
+            return False, None, credit_reason
+        
+        # Step 2: Send SMS (using existing send_sms method - NO CHANGES)
+        sms_success, provider_message_id = self.send_sms(phone_number, message, meta_json)
+        
+        if sms_success:
+            # SMS sent successfully - credit consumed
+            self.logger.info(
+                "SMS sent successfully with credit check: doctor_id=%s appointment_id=%s phone=%s",
+                doctor_id,
+                appointment_id,
+                phone_number,
+            )
+            return True, provider_message_id, ""
+        else:
+            # Step 3: SMS failed - release the reserved credit
+            self.logger.warning(
+                "SMS send failed - releasing credit: doctor_id=%s appointment_id=%s",
+                doctor_id,
+                appointment_id,
+            )
+            self.release_sms_credit(doctor_id, appointment_id)
+            return False, None, "SMS_SEND_FAILED"
 
     @staticmethod
     def _normalize_phone(phone_number: str) -> str:

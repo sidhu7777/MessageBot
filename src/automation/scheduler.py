@@ -492,9 +492,12 @@ class AutomationScheduler:
                     )
                     return False
 
-                # Send SMS via SMS service ONLY
+                # Send SMS via SMS service with credit check
                 try:
-                    success, provider_sid = sms_service.send_sms(
+                    # Use new method with credit check
+                    success, provider_sid, failure_reason = sms_service.send_sms_with_credit_check(
+                        doctor_id=doctor_id,
+                        appointment_id=event.appointment_id,
                         phone_number=to_number,
                         message=message,
                     )
@@ -509,11 +512,25 @@ class AutomationScheduler:
                         )
                         return True
                     else:
-                        # SMS service returned False - mark for retry with real reason
+                        # SMS service returned False - mark for retry with actual reason
+                        error_text = f"SMS send failed: {failure_reason}" if failure_reason else "SMS API returned failure"
+                        
+                        # Don't retry if credits exhausted or service disabled
+                        if failure_reason in ("CREDITS_EXHAUSTED", "SERVICE_DISABLED"):
+                            self._mark_notification_event_status(
+                                notification_id=event.notification_id,
+                                status="FAILED",
+                                error_text=error_text,
+                                doctor_id=doctor_id,
+                                admin_id=event.admin_id,
+                            )
+                            return True  # Don't retry
+                        
+                        # Retry for other failures
                         backoff = min(1800, 60 * (2 ** max(0, int(event.attempt_count))))
                         self._booking_repository.mark_notification_event_retry(
                             notification_id=event.notification_id,
-                            error_text="SMS API returned failure (check SMS service logs for details)",
+                            error_text=error_text,
                             backoff_seconds=backoff,
                             max_attempts=max_attempts,
                         )

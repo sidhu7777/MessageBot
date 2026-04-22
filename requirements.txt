@@ -7,6 +7,7 @@ python-dotenv
 mysql-connector-python==8.0.33
 
 httpx
+requests
 openpyxl
 
 redis
