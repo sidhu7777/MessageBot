@@ -447,6 +447,9 @@ class AutomationScheduler:
             doctor_id = int(event.doctor_id) if getattr(event, "doctor_id", None) is not None else None
             channel_account_id: Optional[int] = None
 
+            # DEBUG: Log the channel value
+            LOGGER.info(f"DEBUG: Processing notification event - channel='{channel}' appointment_id={event.appointment_id}")
+
             # Handle SMS channel separately — ONLY use SMS service, never fall back to Twilio
             if channel == "sms":
                 from src.runtime.sms_notification_service import SMSNotificationService
