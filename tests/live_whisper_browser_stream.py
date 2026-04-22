@@ -41,6 +41,8 @@ LLM_MODEL_NAME = os.getenv("LLM_MODEL_NAME", "qwen3:1.7b").strip() or "qwen3:1.7
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://127.0.0.1:11434").strip() or "http://127.0.0.1:11434"
 WHISPER_DEVICE = os.getenv("WHISPER_DEVICE", "auto").strip().lower() or "auto"
 WHISPER_COMPUTE_TYPE = os.getenv("WHISPER_COMPUTE_TYPE", "").strip().lower()
+
+
 LLM_TIMEOUT_SECONDS = max(10.0, float(os.getenv("WHISPER_LLM_TIMEOUT_SECONDS", "45.0")))
 WHISPER_REQUEST_TIMEOUT_SECONDS = max(
     10.0, float(os.getenv("WHISPER_REQUEST_TIMEOUT_SECONDS", "60.0"))
@@ -524,154 +526,257 @@ def _fallback_parchi_payload(cleaned_text: str) -> Dict[str, Any]:
     }
 
 
+# ============================================================================
+# HYBRID ARCHITECTURE: Rules (80%) + LLM Disambiguation (20%)
+# ============================================================================
+
+def _extract_medicine_names(text: str) -> List[str]:
+    """Extract medicine names using rules (high precision)."""
+    # Common medicine patterns
+    medicines = []
+    
+    # Pattern 1: Brand names with numbers (Dolo 650, Crocin 500, Pantop 40)
+    pattern1 = re.findall(r'\b([A-Z][a-z]+(?:-[A-Z])?)\s+(\d+)\b', text)
+    for name, strength in pattern1:
+        medicines.append(f"{name} {strength}")
+    
+    # Pattern 2: Common medicine names (case-insensitive)
+    common_meds = [
+        "paracetamol", "dolo", "crocin", "pantop", "azithral", "augmentin",
+        "amoxicillin", "ibuprofen", "aspirin", "metformin", "atorvastatin",
+        "omeprazole", "pantoprazole", "azithromycin", "ciprofloxacin"
+    ]
+    for med in common_meds:
+        if re.search(rf'\b{med}\b', text, re.I):
+            # Extract with context (e.g., "Dolo 650")
+            match = re.search(rf'\b({med}(?:\s+\d+)?)\b', text, re.I)
+            if match:
+                medicines.append(match.group(1))
+    
+    return list(set(medicines))  # Remove duplicates
+
+
+def _extract_duration(text: str) -> str:
+    """Extract duration using rules (high precision)."""
+    # Pattern: "5 days", "7 days", "1 week", "2 weeks"
+    match = re.search(r'(\d+)\s+(day|days|week|weeks|month|months)', text, re.I)
+    if match:
+        return f"{match.group(1)} {match.group(2).lower()}"
+    return ""
+
+
+def _extract_notes(text: str) -> str:
+    """Extract notes using rules (high precision)."""
+    text_lower = text.lower()
+    if "before food" in text_lower or "before meal" in text_lower:
+        return "Before food"
+    if "after food" in text_lower or "after meal" in text_lower:
+        return "After food"
+    if "empty stomach" in text_lower:
+        return "Empty stomach"
+    return ""
+
+
+def _extract_timing(text: str) -> str:
+    """Extract timing using rules (high precision)."""
+    text_lower = text.lower()
+    
+    # Check for combinations first (order matters!)
+    if "morning" in text_lower and "afternoon" in text_lower and "evening" in text_lower and "night" in text_lower:
+        return "Morning Afternoon Evening and Night"
+    if "morning" in text_lower and "afternoon" in text_lower and "evening" in text_lower:
+        return "Morning Afternoon and Evening"
+    if "morning" in text_lower and "afternoon" in text_lower and "night" in text_lower:
+        return "Morning Afternoon and Night"
+    if "morning" in text_lower and "evening" in text_lower and "night" in text_lower:
+        return "Morning Evening and Night"
+    if "afternoon" in text_lower and "evening" in text_lower and "night" in text_lower:
+        return "Afternoon Evening and Night"
+    if "morning" in text_lower and "afternoon" in text_lower:
+        return "Morning and Afternoon"
+    if "morning" in text_lower and "evening" in text_lower:
+        return "Morning and Evening"
+    if "morning" in text_lower and "night" in text_lower:
+        return "Morning and Night"
+    if "afternoon" in text_lower and "evening" in text_lower:
+        return "Afternoon and Evening"
+    if "afternoon" in text_lower and "night" in text_lower:
+        return "Afternoon and Night"
+    if "evening" in text_lower and "night" in text_lower:
+        return "Evening and Night"
+    
+    # Single timing
+    if "morning" in text_lower:
+        return "Morning"
+    if "afternoon" in text_lower:
+        return "Afternoon"
+    if "evening" in text_lower:
+        return "Evening"
+    if "night" in text_lower:
+        return "Night"
+    
+    return ""
+
+
+def _extract_frequency_raw(text: str) -> str:
+    """Extract frequency pattern (may be ambiguous)."""
+    text_lower = text.lower()
+    
+    # Clear patterns (no LLM needed)
+    if re.search(r'\bOD\b', text, re.I):
+        return "OD"
+    if re.search(r'\bBD\b', text, re.I):
+        return "BD"
+    if re.search(r'\bTDS\b', text, re.I):
+        return "TDS"
+    if re.search(r'\bQID\b', text, re.I):
+        return "QID"
+    if "once daily" in text_lower or "once a day" in text_lower:
+        return "once daily"
+    if "twice daily" in text_lower or "twice a day" in text_lower:
+        return "twice daily"
+    if "three times daily" in text_lower or "thrice daily" in text_lower:
+        return "three times daily"
+    if "four times daily" in text_lower:
+        return "four times daily"
+    
+    # Ambiguous patterns (need LLM)
+    if "daily twice" in text_lower or "twice" in text_lower:
+        return "AMBIGUOUS:twice"
+    if "daily once" in text_lower or "once" in text_lower:
+        return "AMBIGUOUS:once"
+    if "daily" in text_lower:
+        return "AMBIGUOUS:daily"
+    
+    return ""
+
+
+def _disambiguate_frequency_with_llm(ambiguous_text: str) -> str:
+    """Use LLM ONLY for disambiguation (micro-task)."""
+    system_prompt = (
+        "You are a frequency classifier. Return ONLY ONE of these exact values:\n"
+        "- OD\n"
+        "- BD\n"
+        "- TDS\n"
+        "- QID\n"
+        "Return ONLY the abbreviation, nothing else."
+    )
+    user_prompt = f"Classify this frequency: '{ambiguous_text}'"
+    
+    try:
+        with _llm_lock:
+            result = _llm_client.generate(system_prompt, user_prompt).strip().upper()
+        
+        # Validate result
+        if result in ["OD", "BD", "TDS", "QID"]:
+            return result
+        
+        # Fallback: keep original text
+        return ambiguous_text
+    except Exception as e:
+        print(f"[LLM_DISAMBIGUATION] Failed: {e}")
+        return ambiguous_text
+
+
 def _build_parchi_payload(cleaned_text: str) -> Tuple[Dict[str, Any], float]:
+    """
+    HYBRID ARCHITECTURE: Rules (80%) + LLM Disambiguation (20%)
+    
+    Step 1: Extract deterministic fields with RULES
+    Step 2: Use LLM ONLY for ambiguous cases
+    Step 3: Assemble JSON with CODE (not LLM)
+    """
     normalized = _normalize_text(cleaned_text)
     if not normalized:
         return {}, 0.0
+    
     if not re.search(r'\b(dolo|crocin|pantop|ibuprofen|paracetamol|amoxycillin|azithromycin|mg|tablet|capsule|syrup|daily|twice|thrice|times|days?|weeks?)\b', normalized, re.I):
         print(f"[PARCHI_EXTRACTION] No medical signal detected in: {normalized}")
         return _fallback_parchi_payload(normalized), 0.0
-    system_prompt = (
-        "Extract prescription as JSON ONLY. No markdown, no explanation.\n\n"
-        "SCHEMA (MUST USE THIS EXACT FORMAT):\n"
-        '{"patient_name":"","complaints":"","diagnosis":"","medicines":[{"name":"","frequency":"","timing":"","duration":"","notes":""}],"vital_signs":{"blood_pressure":"","temperature":"","weight":""},"advice":"","tests":"","follow_up":""}\n\n'
-        "IMPORTANT: medicines MUST ALWAYS be an ARRAY with square brackets []\n\n"
-        "FIELD DEFINITIONS (MUST FOLLOW EXACTLY):\n"
-        "MEDICINES FIELDS:\n"
-        "1. name: medicine name ONLY (e.g., 'Cyra-D', 'Paracetamol', 'Dolo 650')\n"
-        "2. frequency: HOW MANY TIMES (e.g., 'OD'=once, 'BD'=twice, 'TDS'=3 times, 'QID'=4 times, 'once daily', 'twice daily')\n"
-        "3. timing: WHEN DURING DAY (e.g., 'Morning', 'Afternoon', 'Evening', 'Morning and Evening') - NOTHING ELSE!\n"
-        "4. duration: HOW LONG TO TAKE (e.g., '5 days', '7 days', 'for 1 week')\n"
-        "5. notes: HOW TO TAKE IT (ONLY: 'before food', 'after food', 'empty stomach') - NOTHING ELSE!\n\n"
-        "FIELD SEPARATION RULES (CRITICAL):\n"
-        "- frequency ≠ timing (frequency is 'how many times', timing is 'when during day')\n"
-        "- timing ≠ notes (timing is 'Morning/Evening', notes is 'before food/after food')\n"
-        "- duration ≠ timing (duration is '5 days', timing is 'Morning')\n"
-        "- NEVER put timing in frequency field\n"
-        "- NEVER put duration in timing field\n"
-        "- NEVER put 'after 7 days' in timing (that's follow-up, not timing)\n"
-        "- NEVER put 'after food' in timing (that's notes, not timing)\n"
-        "- NEVER put 'once daily' in timing (that's frequency, not timing)\n\n"
-        "VITAL SIGNS FIELDS:\n"
-        "1. blood_pressure: e.g., '120/80 mm Hg', '130/85 mmHg'\n"
-        "2. temperature: e.g., '98.6°F', '37°C'\n"
-        "3. weight: e.g., '70 kg', '75 kg'\n\n"
-        "DETAILED EXAMPLES:\n\n"
-        "EXAMPLE 1A - Correct:\n"
-        'Input: "Dolo 650 once daily in the morning for 7 days"\n'
-        'CORRECT: {"name":"Dolo 650","frequency":"once daily","timing":"Morning","duration":"7 days","notes":""}\n'
-        'WRONG: {"name":"Dolo 650","frequency":"Morning","timing":"once daily"} ❌\n\n'
-        "EXAMPLE 1B - Correct:\n"
-        'Input: "Paracetamol twice daily after food for 5 days"\n'
-        'CORRECT: {"name":"Paracetamol","frequency":"twice daily","timing":"","duration":"5 days","notes":"after food"}\n'
-        'WRONG: {"name":"Paracetamol","frequency":"twice daily","timing":"after food"} ❌\n\n'
-        "EXAMPLE 2 - With Morning and Evening:\n"
-        'Input: "Aldactone OD morning and evening for 5 days"\n'
-        'CORRECT: {"name":"Aldactone","frequency":"OD","timing":"Morning and Evening","duration":"5 days","notes":""}\n'
-        'WRONG: {"name":"Aldactone","frequency":"OD","timing":"twice daily"} ❌\n\n'
-        "EXTRACTION RULES:\n"
-        "1. medicines MUST ALWAYS be wrapped in an ARRAY []\n"
-        "2. Extract frequency from how many times mentioned\n"
-        "3. Extract timing ONLY if Morning/Afternoon/Evening mentioned (NOT frequency/duration/notes values)\n"
-        "4. Extract duration from days/weeks mentioned\n"
-        "5. Extract notes ONLY if food instructions mentioned\n"
-        "6. Leave empty if not mentioned\n\n"
-        "CRITICAL RULES (DO NOT VIOLATE):\n"
-        "- ALWAYS separate frequency, timing, duration, notes into different fields\n"
-        "- timing field MUST be empty or ONLY: Morning, Afternoon, Evening, Morning and Evening\n"
-        "- notes field MUST be empty or ONLY: before food, after food, empty stomach\n"
-        "- DO NOT mix fields\n"
-        "- ONLY extract what is explicitly spoken"
-    )
-    user_prompt = f"{normalized}"
+    
     started_at = time.perf_counter()
-    with _llm_lock:
-        raw = _llm_client.generate(system_prompt, user_prompt)
-    payload = _extract_json_object(raw)
-    print(f"[PARCHI_EXTRACTION] Raw LLM output: {raw}")
-    print(f"[PARCHI_EXTRACTION] Extracted payload: {payload}")
-    if not payload:
-        print(f"[PARCHI_EXTRACTION] Empty payload, using fallback")
-        return _fallback_parchi_payload(normalized), time.perf_counter() - started_at
-    payload["patient_name"] = _coerce_text(payload.get("patient_name"))
-    payload["complaints"] = _coerce_text(payload.get("complaints"))
-    payload["diagnosis"] = _coerce_text(payload.get("diagnosis"))
-    payload["advice"] = _coerce_text(payload.get("advice"))
-    payload["tests"] = _coerce_text(payload.get("tests"))
-    payload["follow_up"] = _coerce_text(payload.get("follow_up"))
     
-    # Process vital signs if present
-    vital_signs_input = payload.get("vital_signs", {})
-    if not isinstance(vital_signs_input, dict):
-        vital_signs_input = {}
-    payload["vital_signs"] = {
-        "blood_pressure": str(vital_signs_input.get("blood_pressure") or "").strip(),
-        "temperature": str(vital_signs_input.get("temperature") or "").strip(),
-        "weight": str(vital_signs_input.get("weight") or "").strip(),
-    }
+    # ========================================================================
+    # STEP 1: RULE-BASED EXTRACTION (80% of fields)
+    # ========================================================================
+    print(f"[PARCHI_EXTRACTION] Step 1: Rule-based extraction")
     
-    medicines: List[Dict[str, str]] = []
-    for item in payload.get("medicines", []) if isinstance(payload.get("medicines"), list) else []:
-        if not isinstance(item, dict):
-            continue
-        
-        # Extract and clean fields
-        name = str(item.get("name") or "").strip()
-        frequency = str(item.get("frequency") or "").strip()
-        timing = str(item.get("timing") or "").strip()
-        duration = str(item.get("duration") or "").strip()
-        notes = str(item.get("notes") or "").strip()
-        
-        # VALIDATION: Fix field mixing errors
-        # If timing contains frequency keywords, move to frequency
-        timing_lower = timing.lower()
-        if any(kw in timing_lower for kw in ["daily", "od", "bd", "tds", "qid", "once", "twice", "thrice"]):
-            if not frequency:
-                frequency = timing
-                timing = ""
-        
-        # If timing contains notes keywords, move to notes
-        if any(kw in timing_lower for kw in ["food", "stomach"]):
-            if not notes:
-                notes = timing
-                timing = ""
-        
-        # If timing contains duration keywords, move to duration
-        if any(kw in timing_lower for kw in ["day", "week", "month", "hour"]):
-            if not duration and ("day" in timing_lower or "week" in timing_lower):
-                duration = timing
-                timing = ""
-        
-        # If notes contains frequency keywords, move to frequency
-        notes_lower = notes.lower()
-        if any(kw in notes_lower for kw in ["od", "bd", "tds", "qid", "daily", "once", "twice"]):
-            if not frequency:
-                frequency = notes
-                notes = ""
-        
-        # Validate timing: MUST be one of the allowed values
-        timing_lower = timing.lower()
-        valid_timings = ["morning", "afternoon", "evening", "morning and evening"]
-        if timing and not any(vt in timing_lower for vt in valid_timings):
-            timing = ""  # Clear if invalid
-        
-        # Validate notes: MUST be one of the allowed values
-        notes_lower = notes.lower()
-        valid_notes = ["before food", "after food", "empty stomach"]
-        if notes and not any(vn in notes_lower for vn in valid_notes):
-            notes = ""  # Clear if invalid
-        
-        medicines.append(
-            {
-                "name": name,
+    # Extract medicine names
+    medicine_names = _extract_medicine_names(normalized)
+    
+    # Extract duration (deterministic)
+    duration = _extract_duration(normalized)
+    
+    # Extract notes (deterministic)
+    notes = _extract_notes(normalized)
+    
+    # Extract timing (deterministic)
+    timing = _extract_timing(normalized)
+    
+    # Extract frequency (may be ambiguous)
+    frequency_raw = _extract_frequency_raw(normalized)
+    
+    print(f"[PARCHI_EXTRACTION] Rules extracted: medicines={medicine_names}, duration={duration}, notes={notes}, timing={timing}, frequency_raw={frequency_raw}")
+    
+    # ========================================================================
+    # STEP 2: LLM DISAMBIGUATION (20% - only for ambiguous cases)
+    # ========================================================================
+    frequency = frequency_raw
+    if frequency_raw.startswith("AMBIGUOUS:"):
+        print(f"[PARCHI_EXTRACTION] Step 2: LLM disambiguation for frequency")
+        ambiguous_part = frequency_raw.split(":", 1)[1]
+        frequency = _disambiguate_frequency_with_llm(ambiguous_part)
+        print(f"[PARCHI_EXTRACTION] LLM disambiguated: {frequency_raw} → {frequency}")
+    
+    # ========================================================================
+    # STEP 3: ASSEMBLE JSON (CODE, not LLM)
+    # ========================================================================
+    print(f"[PARCHI_EXTRACTION] Step 3: Assembling JSON")
+    
+    medicines = []
+    if medicine_names:
+        for med_name in medicine_names:
+            medicines.append({
+                "name": med_name,
                 "frequency": frequency,
                 "timing": timing,
                 "duration": duration,
                 "notes": notes,
-            }
-        )
-    payload["medicines"] = medicines
-    return payload, time.perf_counter() - started_at
+            })
+    
+    # If no medicines found, try to extract from full text
+    if not medicines:
+        # Fallback: treat first word as medicine name
+        words = normalized.split()
+        if words:
+            medicines.append({
+                "name": words[0],
+                "frequency": frequency,
+                "timing": timing,
+                "duration": duration,
+                "notes": notes,
+            })
+    
+    payload = {
+        "patient_name": "",
+        "complaints": "",
+        "diagnosis": "",
+        "medicines": medicines,
+        "vital_signs": {
+            "blood_pressure": "",
+            "temperature": "",
+            "weight": ""
+        },
+        "advice": normalized if not medicines else "",
+        "tests": "",
+        "follow_up": "",
+    }
+    
+    elapsed = time.perf_counter() - started_at
+    print(f"[PARCHI_EXTRACTION] Final payload: {payload}")
+    print(f"[PARCHI_EXTRACTION] Total time: {elapsed:.2f}s")
+    
+    return payload, elapsed
 
 
 def _strip_repetitive_tail(text: str) -> str:
@@ -1658,26 +1763,31 @@ def live_page() -> HTMLResponse:
             <option value="BD" ${item.frequency === "BD" ? "selected" : ""}>BD</option>
             <option value="TDS" ${item.frequency === "TDS" ? "selected" : ""}>TDS</option>
             <option value="QID" ${item.frequency === "QID" ? "selected" : ""}>QID</option>
-            <option value="once daily" ${item.frequency === "once daily" ? "selected" : ""}>Once daily</option>
-            <option value="twice daily" ${item.frequency === "twice daily" ? "selected" : ""}>Twice daily</option>
-            <option value="" ${item.frequency === "" ? "selected" : ""}>(not set)</option>
           </select>
           <select class="med-select" data-field="timing" title="Select timing">
             <option value="">Timing</option>
             <option value="Morning" ${item.timing === "Morning" ? "selected" : ""}>Morning</option>
             <option value="Afternoon" ${item.timing === "Afternoon" ? "selected" : ""}>Afternoon</option>
             <option value="Evening" ${item.timing === "Evening" ? "selected" : ""}>Evening</option>
-            <option value="Morning and Evening" ${item.timing === "Morning and Evening" ? "selected" : ""}>Morning & Evening</option>
-            <option value="After meals" ${item.timing === "After meals" ? "selected" : ""}>After meals</option>
-            <option value="" ${item.timing === "" ? "selected" : ""}>(not set)</option>
+            <option value="Night" ${item.timing === "Night" ? "selected" : ""}>Night</option>
+            <option value="Morning and Afternoon" ${item.timing === "Morning and Afternoon" ? "selected" : ""}>Morning and Afternoon</option>
+            <option value="Morning and Evening" ${item.timing === "Morning and Evening" ? "selected" : ""}>Morning and Evening</option>
+            <option value="Morning and Night" ${item.timing === "Morning and Night" ? "selected" : ""}>Morning and Night</option>
+            <option value="Afternoon and Evening" ${item.timing === "Afternoon and Evening" ? "selected" : ""}>Afternoon and Evening</option>
+            <option value="Afternoon and Night" ${item.timing === "Afternoon and Night" ? "selected" : ""}>Afternoon and Night</option>
+            <option value="Evening and Night" ${item.timing === "Evening and Night" ? "selected" : ""}>Evening and Night</option>
+            <option value="Morning Afternoon and Evening" ${item.timing === "Morning Afternoon and Evening" ? "selected" : ""}>Morning Afternoon and Evening</option>
+            <option value="Morning Afternoon and Night" ${item.timing === "Morning Afternoon and Night" ? "selected" : ""}>Morning Afternoon and Night</option>
+            <option value="Morning Evening and Night" ${item.timing === "Morning Evening and Night" ? "selected" : ""}>Morning Evening and Night</option>
+            <option value="Afternoon Evening and Night" ${item.timing === "Afternoon Evening and Night" ? "selected" : ""}>Afternoon Evening and Night</option>
+            <option value="Morning Afternoon Evening and Night" ${item.timing === "Morning Afternoon Evening and Night" ? "selected" : ""}>Morning Afternoon Evening and Night</option>
           </select>
           <input type="text" class="med-input" placeholder="Duration" value="${escapeHtml(item.duration || "")}" data-field="duration" />
           <select class="med-select" data-field="notes" title="Select notes">
             <option value="">Notes</option>
-            <option value="before food" ${item.notes === "before food" ? "selected" : ""}>Before food</option>
-            <option value="after food" ${item.notes === "after food" ? "selected" : ""}>After food</option>
-            <option value="empty stomach" ${item.notes === "empty stomach" ? "selected" : ""}>Empty stomach</option>
-            <option value="" ${item.notes === "" ? "selected" : ""}>(not set)</option>
+            <option value="Before food" ${item.notes === "Before food" ? "selected" : ""}>Before food</option>
+            <option value="After food" ${item.notes === "After food" ? "selected" : ""}>After food</option>
+            <option value="Empty stomach" ${item.notes === "Empty stomach" ? "selected" : ""}>Empty stomach</option>
           </select>
           <button class="med-delete-btn" onclick="deleteMedicine(${idx})">Delete</button>
         </div>
