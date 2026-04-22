@@ -43,14 +43,16 @@ class SMSNotificationService:
         enabled_channels_raw = (getattr(settings, "sms_enabled_channels", "") or "").strip()
         self.enabled_channels = self._parse_channels(enabled_channels_raw)
 
-        # SMS Credit Management API base URL
+        # SMS Credit Management API base URL and token
         self.credit_api_base_url = "http://10.5.63.167:3000"
+        self.credit_api_token = (getattr(settings, "superadmin_token", "") or "").strip()
 
         self.logger.info(
-            "SMS Service initialized: enabled=%s channels=%s credit_api=%s",
+            "SMS Service initialized: enabled=%s channels=%s credit_api=%s token_configured=%s",
             self.sms_enabled,
             self.enabled_channels,
             self.credit_api_base_url,
+            bool(self.credit_api_token),
         )
 
     @staticmethod
@@ -328,6 +330,10 @@ class SMSNotificationService:
         try:
             url = f"{self.credit_api_base_url}/api/internal/doctors/{doctor_id}/sms-consume"
             payload = {"appointmentId": appointment_id}
+            headers = {
+                "Authorization": f"Bearer {self.credit_api_token}",
+                "Content-Type": "application/json"
+            }
             
             self.logger.info(
                 "Reserving SMS credit: doctor_id=%s appointment_id=%s url=%s",
@@ -336,7 +342,7 @@ class SMSNotificationService:
                 url,
             )
             
-            response = requests.post(url, json=payload, timeout=5)
+            response = requests.post(url, json=payload, headers=headers, timeout=5)
             data = response.json()
             
             self.logger.info(
@@ -394,6 +400,10 @@ class SMSNotificationService:
         try:
             url = f"{self.credit_api_base_url}/api/internal/doctors/{doctor_id}/sms-release"
             payload = {"appointmentId": appointment_id}
+            headers = {
+                "Authorization": f"Bearer {self.credit_api_token}",
+                "Content-Type": "application/json"
+            }
             
             self.logger.info(
                 "Releasing SMS credit: doctor_id=%s appointment_id=%s url=%s",
@@ -402,7 +412,7 @@ class SMSNotificationService:
                 url,
             )
             
-            response = requests.post(url, json=payload, timeout=5)
+            response = requests.post(url, json=payload, headers=headers, timeout=5)
             data = response.json()
             
             self.logger.info(

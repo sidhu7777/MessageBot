@@ -515,8 +515,8 @@ class AutomationScheduler:
                         # SMS service returned False - mark for retry with actual reason
                         error_text = f"SMS send failed: {failure_reason}" if failure_reason else "SMS API returned failure"
                         
-                        # Don't retry if credits exhausted or service disabled
-                        if failure_reason in ("CREDITS_EXHAUSTED", "SERVICE_DISABLED"):
+                        # Don't retry if credits exhausted, service disabled, or SMS service unavailable
+                        if failure_reason in ("CREDITS_EXHAUSTED", "SERVICE_DISABLED", "SMS_SERVICE_UNAVAILABLE"):
                             self._mark_notification_event_status(
                                 notification_id=event.notification_id,
                                 status="FAILED",
@@ -526,7 +526,7 @@ class AutomationScheduler:
                             )
                             return True  # Don't retry
                         
-                        # Retry for other failures
+                        # Retry for other failures (API_TIMEOUT, API_ERROR, SMS_SEND_FAILED, etc.)
                         backoff = min(1800, 60 * (2 ** max(0, int(event.attempt_count))))
                         self._booking_repository.mark_notification_event_retry(
                             notification_id=event.notification_id,
