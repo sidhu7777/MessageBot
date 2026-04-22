@@ -688,6 +688,40 @@ class QrCheckinService:
                     (next_booking_id, patient_id),
                 )
             conn.commit()
+            
+            # Log SMS confirmation notification (scheduler decides if SMS should send based on .env SMS_ENABLED_CHANNELS)
+            try:
+                import json
+                import logging
+                
+                logger = logging.getLogger(__name__)
+                logger.info(
+                    "Logging SMS confirmation notification for QR overflow: appointment_id=%s phone=%s",
+                    appointment_id,
+                    phone[:4] + "****" if len(phone) > 4 else phone,
+                )
+                
+                meta = json.dumps({"source_channel": "qr_scan"})
+                self.booking_repository.log_notification_event(
+                    appointment_id=appointment_id,
+                    event_type="CONFIRMATION",
+                    channel="sms",
+                    destination=phone,
+                    status="PENDING",
+                    admin_id=admin_id,
+                    doctor_id=doctor_id,
+                    meta_json=meta,
+                )
+                logger.info("SMS confirmation notification logged successfully: appointment_id=%s", appointment_id)
+            except Exception as exc:
+                # Log but don't fail appointment booking if notification logging fails
+                logger.error(
+                    "Failed to log SMS confirmation notification: appointment_id=%s error=%s",
+                    appointment_id,
+                    exc,
+                    exc_info=True,
+                )
+            
             return appointment_id, next_booking_id, today.isoformat(), start_time.strftime("%I:%M %p").lstrip("0")
         except Exception:
             conn.rollback()
