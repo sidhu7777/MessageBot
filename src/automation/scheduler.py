@@ -432,8 +432,14 @@ class AutomationScheduler:
         if not self._booking_repository:
             return False
         max_attempts = 5
+        
+        # DEBUG: Log that we're starting to process an event
+        LOGGER.info(f"DEBUG: Starting to process notification event - notification_id={event.notification_id} appointment_id={event.appointment_id}")
+        
         try:
             to_number = self._notification_destination(event)
+            LOGGER.info(f"DEBUG: Notification destination resolved - notification_id={event.notification_id} to_number='{to_number}'")
+            
             if not to_number:
                 self._booking_repository.mark_notification_event_retry(
                     notification_id=event.notification_id,

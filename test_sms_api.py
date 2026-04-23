@@ -77,11 +77,17 @@ def test_credit_api():
         
         print(f"Testing status endpoint: {url}")
         response = requests.get(url, headers=headers, timeout=5)
-        data = response.json()
         
-        print(f"✅ Credit API Status Response:")
+        print(f"Credit API Status Response:")
         print(f"Status: {response.status_code}")
-        print(f"Data: {data}")
+        print(f"Raw Response: '{response.text}'")
+        
+        try:
+            data = response.json()
+            print(f"JSON Data: {data}")
+        except Exception as e:
+            print(f"JSON Parse Error: {e}")
+            data = None
         
         # Test credit reservation endpoint
         url = f"{CREDIT_API_BASE_URL}/api/internal/doctors/{doctor_id}/sms-consume"
