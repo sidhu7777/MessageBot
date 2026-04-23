@@ -102,25 +102,16 @@ _llm_client = LLMClient(
 _llm_lock = threading.Lock()
 
 MEDICAL_KEYWORDS = {
-    "tablet",
-    "capsule",
-    "capsules",
-    "syrup",
-    "injection",
-    "medicine",
-    "medicines",
-    "prescription",
-    "follow-up",
-    "followup",
-    "review",
-    "days",
-    "day",
-    "weeks",
-    "week",
-    "months",
-    "month",
-    "paracetamol",
-    "dolo",
+    "tablet", "capsule", "capsules", "syrup", "injection", "medicine", "medicines",
+    "prescription", "follow-up", "followup", "review", "days", "day", "weeks", "week",
+    "months", "month", "paracetamol", "dolo", "pantop", "nexpro", "rablet", "azithral",
+    "augmentin", "amoxicillin", "ibuprofen", "aspirin", "metformin", "atorvastatin",
+    "omeprazole", "pantoprazole", "azithromycin", "ciprofloxacin", "nexium", "rabeprazole",
+    "esomeprazole", "lansoprazole", "domperidone", "patient", "complaint", "complained",
+    "acidity", "fever", "headache", "cough", "cold", "pain", "stomach", "diagnosis",
+    "symptoms", "treatment", "dosage", "frequency", "timing", "duration", "morning",
+    "afternoon", "evening", "night", "before", "after", "food", "empty", "stomach",
+    "twice", "thrice", "daily", "weekly", "monthly"
 }
 
 
@@ -435,25 +426,35 @@ def _basic_medical_cleanup(raw_text: str) -> str:
 
 
 def _cleaning_output_is_safe(raw_text: str, cleaned_text: str) -> bool:
+    """
+    Safety guard for LLM cleaning output.
+    Relaxed for medical context - allows medical terminology processing.
+    """
     raw = _normalize_text(raw_text)
     cleaned = _normalize_text(cleaned_text)
+    
+    # Basic sanity checks
     if not cleaned:
         return False
-    if len(cleaned) < max(12, int(len(raw) * 0.20)):
+    if len(cleaned) < max(8, int(len(raw) * 0.15)):  # Relaxed from 0.20 to 0.15
         return False
 
     raw_tokens = _extract_guard_tokens(raw)
     if not raw_tokens:
         return True
 
+    # Check for suspicious financial content injection
     cleaned_lower = cleaned.lower()
     if (
         not re.search(r"(?:\$|₹|\bdollar\b|\bdollars\b|\brupee\b|\brupees\b|\bthousand\b)", raw.lower())
         and re.search(r"(?:\$|₹|\bdollar\b|\bdollars\b|\brupee\b|\brupees\b|\bthousand\b)", cleaned_lower)
     ):
         return False
+    
+    # Relaxed token matching for medical context
     matched = sum(1 for token in raw_tokens if token in cleaned_lower)
-    required_matches = max(1, int(len(raw_tokens) * 0.6))
+    required_matches = max(1, int(len(raw_tokens) * 0.4))  # Relaxed from 0.6 to 0.4
+    
     return matched >= required_matches
 
 
@@ -531,8 +532,7 @@ def _fallback_parchi_payload(cleaned_text: str) -> Dict[str, Any]:
 # ============================================================================
 
 def _extract_medicine_names(text: str) -> List[str]:
-    """Extract medicine names using rules (high precision)."""
-    # Common medicine patterns
+    """Extract medicine names using production-level rules."""
     medicines = []
     
     # Pattern 1: Brand names with numbers (Dolo 650, Crocin 500, Pantop 40)
@@ -540,20 +540,74 @@ def _extract_medicine_names(text: str) -> List[str]:
     for name, strength in pattern1:
         medicines.append(f"{name} {strength}")
     
-    # Pattern 2: Common medicine names (case-insensitive)
-    common_meds = [
-        "paracetamol", "dolo", "crocin", "pantop", "azithral", "augmentin",
-        "amoxicillin", "ibuprofen", "aspirin", "metformin", "atorvastatin",
-        "omeprazole", "pantoprazole", "azithromycin", "ciprofloxacin"
+    # Pattern 2: Medicine name patterns (flexible matching)
+    # This catches variations like "pantop", "nexpro", "rablet" regardless of context
+    medicine_patterns = [
+        r'\b(paracetamol|dolo|crocin)\b',
+        r'\b(pantop|pantoprazole)\b', 
+        r'\b(nexpro|nexium|esomeprazole)\b',
+        r'\b(rablet|rabeprazole)\b',
+        r'\b(azithral|azithromycin)\b',
+        r'\b(augmentin|amoxicillin)\b',
+        r'\b(ibuprofen|aspirin|metformin|atorvastatin)\b',
+        r'\b(omeprazole|ciprofloxacin|lansoprazole|domperidone)\b'
     ]
-    for med in common_meds:
-        if re.search(rf'\b{med}\b', text, re.I):
-            # Extract with context (e.g., "Dolo 650")
-            match = re.search(rf'\b({med}(?:\s+\d+)?)\b', text, re.I)
-            if match:
-                medicines.append(match.group(1))
+    
+    for pattern in medicine_patterns:
+        matches = re.findall(pattern, text, re.I)
+        for match in matches:
+            # Look for strength/dosage nearby
+            context_match = re.search(rf'\b({re.escape(match)}(?:\s+\d+)?)\b', text, re.I)
+            if context_match:
+                medicines.append(context_match.group(1).title())
+            else:
+                medicines.append(match.title())
+    
+    # Pattern 3: Generic medicine-like words (ending in common suffixes)
+    generic_pattern = r'\b([A-Z][a-z]{3,}(?:ol|in|ine|ate|ide|ium))\b'
+    generic_matches = re.findall(generic_pattern, text)
+    for match in generic_matches:
+        if len(match) >= 5:  # Minimum length for medicine names
+            medicines.append(match)
     
     return list(set(medicines))  # Remove duplicates
+
+
+def _extract_patient_name(text: str) -> str:
+    """Extract patient name using rules."""
+    # Pattern: "patient name is X", "patient X", "name is X"
+    patterns = [
+        r'patient\s+name\s+is\s+([A-Za-z]+)',
+        r'patient\s+([A-Za-z]+)',
+        r'name\s+is\s+([A-Za-z]+)',
+        r'patient\s+name\s+([A-Za-z]+)'
+    ]
+    
+    for pattern in patterns:
+        match = re.search(pattern, text, re.I)
+        if match:
+            return match.group(1).title()
+    
+    return ""
+
+
+def _extract_complaints(text: str) -> str:
+    """Extract complaints/symptoms using rules."""
+    # Pattern: "complained about X", "complaining of X", "has X"
+    patterns = [
+        r'complained?\s+about\s+([A-Za-z\s]+?)(?:\s+(?:so|and|,|\.|$))',
+        r'complaining\s+of\s+([A-Za-z\s]+?)(?:\s+(?:so|and|,|\.|$))',
+        r'has\s+([A-Za-z\s]+?)(?:\s+(?:so|and|,|\.|$))',
+        r'suffering\s+from\s+([A-Za-z\s]+?)(?:\s+(?:so|and|,|\.|$))'
+    ]
+    
+    for pattern in patterns:
+        match = re.search(pattern, text, re.I)
+        if match:
+            complaint = match.group(1).strip()
+            return complaint.title()
+    
+    return ""
 
 
 def _extract_duration(text: str) -> str:
@@ -704,6 +758,12 @@ def _build_parchi_payload(cleaned_text: str) -> Tuple[Dict[str, Any], float]:
     # Extract medicine names
     medicine_names = _extract_medicine_names(normalized)
     
+    # Extract patient name
+    patient_name = _extract_patient_name(normalized)
+    
+    # Extract complaints
+    complaints = _extract_complaints(normalized)
+    
     # Extract duration (deterministic)
     duration = _extract_duration(normalized)
     
@@ -758,8 +818,8 @@ def _build_parchi_payload(cleaned_text: str) -> Tuple[Dict[str, Any], float]:
             })
     
     payload = {
-        "patient_name": "",
-        "complaints": "",
+        "patient_name": patient_name,
+        "complaints": complaints,
         "diagnosis": "",
         "medicines": medicines,
         "vital_signs": {
