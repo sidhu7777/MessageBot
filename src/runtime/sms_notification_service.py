@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from datetime import datetime
 from typing import Any, Optional
 from urllib import error as urlerror
@@ -44,8 +45,12 @@ class SMSNotificationService:
         self.enabled_channels = self._parse_channels(enabled_channels_raw)
 
         # SMS Credit Management API base URL and token
-        self.credit_api_base_url = "http://10.5.63.167:3000"
-        self.credit_api_token = (getattr(settings, "superadmin_token", "") or "").strip()
+        self.credit_api_base_url = "https://dapto.vinfocom.co.in"
+        self.credit_api_token = (
+            (getattr(settings, "x_internal_api_key", "") or "").strip()
+            or os.getenv("X_INTERNAL_API_KEY", "").strip()
+            or os.getenv("INTERNAL_API_KEY", "").strip()
+        )
 
         self.logger.info(
             "SMS Service initialized: enabled=%s channels=%s credit_api=%s token_configured=%s",
@@ -92,6 +97,7 @@ class SMSNotificationService:
         appointment_date: str,
         appointment_time: str,
         clinic_name: str,
+        doctor_slug: str = "",
     ) -> str:
         """
         Build appointment confirmation SMS message.
@@ -102,19 +108,21 @@ class SMSNotificationService:
             appointment_date: Date (e.g., "2026-04-25")
             appointment_time: Time (e.g., "14:30")
             clinic_name: Clinic name
+            doctor_slug: Doctor slug for dynamic manage URL
 
         Returns:
             Formatted SMS message
         """
         display_date = self._format_display_date(appointment_date)
         display_time = self._format_display_time(appointment_time)
+        manage_url = self.frontend_base_url
         # Manager's template format
         message = (
             f"Dear {patient_name},\n"
             f"Your appointment with Dr. {doctor_name} on {display_date} at {clinic_name}, "
             f"{display_time} has successfully booked.\n"
             f"Arrive 10 min early.\n"
-            f"Manage: {self.frontend_base_url}\n"
+            f"Manage: {manage_url}\n"
             f"- Dapto"
         )
         return message
@@ -126,6 +134,7 @@ class SMSNotificationService:
         appointment_date: str,
         appointment_time: str,
         clinic_name: str,
+        doctor_slug: str = "",
     ) -> str:
         """
         Build appointment cancellation SMS message.
@@ -136,17 +145,19 @@ class SMSNotificationService:
             appointment_date: Date
             appointment_time: Time
             clinic_name: Clinic name
+            doctor_slug: Doctor slug for dynamic manage URL
 
         Returns:
             Formatted SMS message
         """
         display_date = self._format_display_date(appointment_date)
         display_time = self._format_display_time(appointment_time)
+        manage_url = self.frontend_base_url
         message = (
             f"Update: Your appointment with Dr. {doctor_name} on {display_date} at "
             f"{clinic_name}, {display_time} was cancelled by the doctor.\n"
             f"Please book another slot.\n"
-            f"Manage: {self.frontend_base_url}\n"
+            f"Manage: {manage_url}\n"
             f"- Dapto"
         )
         return message
@@ -158,6 +169,7 @@ class SMSNotificationService:
         appointment_date: str,
         appointment_time: str,
         clinic_name: str,
+        doctor_slug: str = "",
     ) -> str:
         """
         Build appointment rescheduled SMS message.
@@ -168,16 +180,18 @@ class SMSNotificationService:
             appointment_date: New date
             appointment_time: New time
             clinic_name: Clinic name
+            doctor_slug: Doctor slug for dynamic manage URL
 
         Returns:
             Formatted SMS message
         """
         display_date = self._format_display_date(appointment_date)
         display_time = self._format_display_time(appointment_time)
+        manage_url = self.frontend_base_url
         message = (
             f"Update: Your appointment with Dr. {doctor_name} has been rescheduled.\n"
             f"New slot: {display_date} at {clinic_name}, {display_time}.\n"
-            f"Manage: {self.frontend_base_url}\n"
+            f"Manage: {manage_url}\n"
             f"- Dapto"
         )
         return message
@@ -190,6 +204,7 @@ class SMSNotificationService:
         appointment_date: str = "",
         appointment_time: str = "",
         clinic_name: str = "",
+        doctor_slug: str = "",
     ) -> str:
         """
         Build SMS message based on event type.
@@ -201,6 +216,7 @@ class SMSNotificationService:
             appointment_date: Appointment date
             appointment_time: Appointment time
             clinic_name: Clinic name
+            doctor_slug: Doctor slug for dynamic manage URL
 
         Returns:
             Formatted SMS message
@@ -209,15 +225,15 @@ class SMSNotificationService:
 
         if event_type_upper == "CONFIRMATION":
             return self.build_confirmation_message(
-                patient_name, doctor_name, appointment_date, appointment_time, clinic_name
+                patient_name, doctor_name, appointment_date, appointment_time, clinic_name, doctor_slug
             )
         elif event_type_upper == "CANCELLED":
             return self.build_cancellation_message(
-                patient_name, doctor_name, appointment_date, appointment_time, clinic_name
+                patient_name, doctor_name, appointment_date, appointment_time, clinic_name, doctor_slug
             )
         elif event_type_upper == "RESCHEDULED":
             return self.build_rescheduled_message(
-                patient_name, doctor_name, appointment_date, appointment_time, clinic_name
+                patient_name, doctor_name, appointment_date, appointment_time, clinic_name, doctor_slug
             )
         else:
             # Fallback for unknown event types
@@ -331,7 +347,7 @@ class SMSNotificationService:
             url = f"{self.credit_api_base_url}/api/internal/doctors/{doctor_id}/sms-consume"
             payload = {"appointmentId": appointment_id}
             headers = {
-                "Authorization": f"Bearer {self.credit_api_token}",
+                "X-Internal-API-Key": self.credit_api_token,
                 "Content-Type": "application/json"
             }
             
@@ -401,7 +417,7 @@ class SMSNotificationService:
             url = f"{self.credit_api_base_url}/api/internal/doctors/{doctor_id}/sms-release"
             payload = {"appointmentId": appointment_id}
             headers = {
-                "Authorization": f"Bearer {self.credit_api_token}",
+                "X-Internal-API-Key": self.credit_api_token,
                 "Content-Type": "application/json"
             }
             
@@ -473,42 +489,21 @@ class SMSNotificationService:
             Tuple of (success: bool, provider_message_id: Optional[str], failure_reason: str)
             - success: True if SMS sent successfully
             - provider_message_id: API response message ID or None
-            - failure_reason: Reason if failed (NO_CREDITS, SMS_FAILED, etc.)
+            - failure_reason: Reason if failed (CREDITS_EXHAUSTED, API_TIMEOUT, SMS_SEND_FAILED, etc.)
         """
         # Step 1: Reserve SMS credit
         credit_reserved, credit_reason = self.reserve_sms_credit(doctor_id, appointment_id)
-        
-        # FALLBACK: If credit API is not accessible, proceed without credit check
+
+        # In production, SMS must never be sent unless credit was reserved successfully.
         if not credit_reserved:
-            if credit_reason in ("API_TIMEOUT", "API_ERROR", "UNEXPECTED_ERROR"):
-                self.logger.warning(
-                    "Credit API unavailable - proceeding without credit check: doctor_id=%s appointment_id=%s reason=%s",
-                    doctor_id,
-                    appointment_id,
-                    credit_reason,
-                )
-                # Send SMS directly without credit management
-                sms_success, provider_message_id = self.send_sms(phone_number, message, meta_json)
-                if sms_success:
-                    self.logger.info(
-                        "SMS sent successfully (no credit check): doctor_id=%s appointment_id=%s phone=%s",
-                        doctor_id,
-                        appointment_id,
-                        phone_number,
-                    )
-                    return True, provider_message_id, ""
-                else:
-                    return False, None, "SMS_SEND_FAILED"
-            else:
-                # Credit API responded but denied (CREDITS_EXHAUSTED, SERVICE_DISABLED, etc.)
-                self.logger.warning(
-                    "SMS not sent - credit reservation failed: doctor_id=%s appointment_id=%s reason=%s",
-                    doctor_id,
-                    appointment_id,
-                    credit_reason,
-                )
-                return False, None, credit_reason
-        
+            self.logger.warning(
+                "SMS not sent - credit reservation failed: doctor_id=%s appointment_id=%s reason=%s",
+                doctor_id,
+                appointment_id,
+                credit_reason,
+            )
+            return False, None, credit_reason
+
         # Step 2: Send SMS (using existing send_sms method - NO CHANGES)
         sms_success, provider_message_id = self.send_sms(phone_number, message, meta_json)
         

@@ -1,18 +1,30 @@
 #!/usr/bin/env python3
 """Test SMS API directly to debug the issue."""
 
+import os
 import urllib.request
 import urllib.parse
 
+from dotenv import load_dotenv
+
+
+load_dotenv()
+
 # SMS API configuration from .env
-SMS_API_URL = "http://157.245.105.5/index.php/sms/urlsms"
-SMS_API_KEY = "34645a-1d71a1-2ff799-ca100e-9cb8bc"
-SMS_SENDER = "Dappto"
-SMS_MESSAGE_TYPE = "TXT"
-SMS_RESPONSE = "Y"
+SMS_API_URL = os.getenv("SMS_API_URL", "http://157.245.105.5/index.php/sms/urlsms").strip()
+SMS_API_KEY = os.getenv("SMS_API_KEY", "").strip()
+SMS_SENDER = os.getenv("SMS_SENDER", "Dappto").strip() or "Dappto"
+SMS_MESSAGE_TYPE = os.getenv("SMS_MESSAGE_TYPE", "TXT").strip() or "TXT"
+SMS_RESPONSE = os.getenv("SMS_RESPONSE", "Y").strip() or "Y"
+CREDIT_API_BASE_URL = os.getenv("SMS_CREDIT_API_BASE_URL", "http://127.0.0.1:4000").strip()
+INTERNAL_API_KEY = os.getenv("X_INTERNAL_API_KEY", os.getenv("INTERNAL_API_KEY", "")).strip()
 
 def test_sms_api():
     """Test SMS API directly."""
+    if not SMS_API_KEY:
+        print("SMS_API_KEY is not configured in environment/.env; skipping SMS API test.")
+        return
+
     phone_number = "6394753866"  # Your test number
     message = "Test SMS from API - ignore this message"
     
@@ -28,7 +40,8 @@ def test_sms_api():
     )
     
     print(f"Testing SMS API...")
-    print(f"URL: {api_url}")
+    redacted_url = api_url.replace(urllib.parse.quote(SMS_API_KEY), "***")
+    print(f"URL: {redacted_url}")
     print(f"Phone: {phone_number}")
     print(f"Message: {message}")
     print()
@@ -54,9 +67,10 @@ def test_sms_api():
 def test_credit_api():
     """Test credit API connectivity."""
     import requests
-    
-    CREDIT_API_BASE_URL = "http://10.5.63.167:3000"
-    SUPERADMIN_TOKEN = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjEsImVtYWlsIjoic3VwZXJhZG1pbkB2aW5mb2NvbS5jb20iLCJyb2xlIjoiU1VQRVJfQURNSU4iLCJpYXQiOjE3NzY4NDYxMjgsImV4cCI6MTc3NzQ1MDkyOH0.Xo8wtuf_8LybKI0f0BYWt97UmhFqLkFGQ0CK78iRfR8"
+
+    if not INTERNAL_API_KEY:
+        print("INTERNAL_API_KEY or X_INTERNAL_API_KEY is not configured in environment/.env; skipping Credit API test.")
+        return
     
     doctor_id = 4  # Your test doctor ID
     appointment_id = 233  # Your test appointment ID
@@ -71,7 +85,7 @@ def test_credit_api():
         # Test credit status endpoint
         url = f"{CREDIT_API_BASE_URL}/api/internal/doctors/{doctor_id}/sms-status"
         headers = {
-            "Authorization": f"Bearer {SUPERADMIN_TOKEN}",
+            "X-Internal-API-Key": INTERNAL_API_KEY,
             "Content-Type": "application/json"
         }
         
@@ -95,7 +109,11 @@ def test_credit_api():
         
         print(f"\nTesting consume endpoint: {url}")
         response = requests.post(url, json=payload, headers=headers, timeout=5)
-        data = response.json()
+        try:
+            data = response.json()
+        except Exception as e:
+            print(f"JSON Parse Error: {e}")
+            data = None
         
         print(f"✅ Credit API Consume Response:")
         print(f"Status: {response.status_code}")

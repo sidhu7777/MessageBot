@@ -26,6 +26,7 @@ class NotificationEvent:
     attempt_count: int = 0
     source_channel: str = ""
     doctor_name: str = ""
+    doctor_slug: str = ""
 
 
 class NotificationRepository:

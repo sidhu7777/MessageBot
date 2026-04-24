@@ -315,3 +315,21 @@ to activate venv
 
 source /root/MessageBot/.venv310/bin/activate
 
+
+
+# To test the sms service in the local 
+
+ KAFKA_ENABLED=false /root/MessageBot/.venv310/bin/python -m uvicorn main:app --host 0.0.0.0 --port 8001 --reload
+
+
+# to book the appointment through terminal 
+
+
+curl -X POST http://127.0.0.1:8001/qr/checkin/submit \
+  -H "Content-Type: application/json" \
+  -d '{
+    "doctor_id": 4,
+    "clinic_id": 11,
+    "patient_name": "harshit",
+    "phone_number": "6394753866"
+  }'

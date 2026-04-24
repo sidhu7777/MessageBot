@@ -106,7 +106,7 @@ class AutomationScheduler:
         self._source_whatsapp_number = self._normalize_whatsapp_number(source_whatsapp_number)
         self._enabled = enabled
         self._doctor_reminder_enabled = doctor_reminder_enabled
-        self._doctor_reminder_interval_seconds = max(30, int(doctor_reminder_interval_seconds))
+        self._doctor_reminder_interval_seconds = max(5, int(doctor_reminder_interval_seconds))
         self._doctor_reminder_lead_minutes = max(1, int(doctor_reminder_lead_minutes))
         self._doctor_reminder_window_seconds = max(5, int(doctor_reminder_window_seconds))
         # Two-send list: default [60, 10] → send at T-60 (1 hour before) and T-10 (10 min before)
@@ -449,7 +449,7 @@ class AutomationScheduler:
                 )
                 return False
 
-            channel = (event.channel or "").strip().lower()
+            channel = self._normalize_notification_channel(event.channel)
             doctor_id = int(event.doctor_id) if getattr(event, "doctor_id", None) is not None else None
             channel_account_id: Optional[int] = None
 
@@ -458,103 +458,12 @@ class AutomationScheduler:
 
             # Handle SMS channel separately — ONLY use SMS service, never fall back to Twilio
             if channel == "sms":
-                LOGGER.info(f"DEBUG: SMS channel detected - using SMSNotificationService for appointment_id={event.appointment_id}")
-                from src.runtime.sms_notification_service import SMSNotificationService
-
-                sms_service = SMSNotificationService(self._settings, LOGGER)
-                
-                # Extract source_channel from meta_json (it's stored as JSON, not as an attribute)
-                source_channel = ""
-                try:
-                    import json
-                    meta = json.loads(event.meta_json or "{}")
-                    source_channel = str(meta.get("source_channel", "")).strip().lower()
-                except Exception:
-                    pass
-                
-                sms_allowed = (
-                    sms_service.is_sms_enabled_for_channel(source_channel)
-                    if source_channel
-                    else sms_service.sms_enabled
+                return self._process_sms_notification_event(
+                    event=event,
+                    to_number=to_number,
+                    doctor_id=doctor_id,
+                    max_attempts=max_attempts,
                 )
-                
-                if not sms_allowed:
-                    self._mark_notification_event_status(
-                        notification_id=event.notification_id,
-                        status="SKIPPED",
-                        error_text=(
-                            f"SMS disabled for source channel '{source_channel or 'unknown'}'."
-                        ),
-                        doctor_id=doctor_id,
-                        admin_id=event.admin_id,
-                    )
-                    return True
-
-                # Build message based on event type
-                message = self._build_sms_message(event)
-                if not message:
-                    backoff = min(1800, 60 * (2 ** max(0, int(event.attempt_count))))
-                    self._booking_repository.mark_notification_event_retry(
-                        notification_id=event.notification_id,
-                        error_text="Could not build SMS message",
-                        backoff_seconds=backoff,
-                        max_attempts=max_attempts,
-                    )
-                    return False
-
-                # Send SMS via SMS service with credit check
-                try:
-                    # Use new method with credit check
-                    success, provider_sid, failure_reason = sms_service.send_sms_with_credit_check(
-                        doctor_id=doctor_id,
-                        appointment_id=event.appointment_id,
-                        phone_number=to_number,
-                        message=message,
-                    )
-
-                    if success:
-                        self._mark_notification_event_status(
-                            notification_id=event.notification_id,
-                            status="SENT",
-                            provider_message_sid=str(provider_sid or ""),
-                            doctor_id=doctor_id,
-                            admin_id=event.admin_id,
-                        )
-                        return True
-                    else:
-                        # SMS service returned False - mark for retry with actual reason
-                        error_text = f"SMS send failed: {failure_reason}" if failure_reason else "SMS API returned failure"
-                        
-                        # Don't retry if credits exhausted, service disabled, or SMS service unavailable
-                        if failure_reason in ("CREDITS_EXHAUSTED", "SERVICE_DISABLED", "SMS_SERVICE_UNAVAILABLE"):
-                            self._mark_notification_event_status(
-                                notification_id=event.notification_id,
-                                status="FAILED",
-                                error_text=error_text,
-                                doctor_id=doctor_id,
-                                admin_id=event.admin_id,
-                            )
-                            return True  # Don't retry
-                        
-                        # Retry for other failures (API_TIMEOUT, API_ERROR, SMS_SEND_FAILED, etc.)
-                        backoff = min(1800, 60 * (2 ** max(0, int(event.attempt_count))))
-                        self._booking_repository.mark_notification_event_retry(
-                            notification_id=event.notification_id,
-                            error_text=error_text,
-                            backoff_seconds=backoff,
-                            max_attempts=max_attempts,
-                        )
-                        return False
-                except Exception as exc:
-                    # SMS service threw exception - mark for retry with actual error
-                    backoff = min(1800, 60 * (2 ** max(0, int(event.attempt_count))))
-                    self._booking_repository.mark_notification_event_retry(
-                        notification_id=event.notification_id,
-                        error_text=f"SMS send failed: {str(exc)}",
-                        backoff_seconds=backoff,
-                        max_attempts=max_attempts,
-                    )
-                    return False
 
             # Handle Telegram/WhatsApp/other channels via send_message_fn
             LOGGER.info(f"DEBUG: Non-SMS channel detected - using send_message_fn for channel='{channel}' appointment_id={event.appointment_id}")
@@ -572,7 +481,24 @@ class AutomationScheduler:
                     channel_account_id = None
 
             text = self._event_message_text(event)
-            provider_sid = self._send_message_fn(to_number, text)
+            try:
+                provider_sid = self._send_message_fn(to_number, text)
+            except Exception as exc:
+                if self._should_force_sms_recovery(event=event, to_number=to_number, error=exc):
+                    LOGGER.warning(
+                        "Recovered notification through SMS service after generic sender failure "
+                        "notification_id=%s appointment_id=%s error=%s",
+                        event.notification_id,
+                        event.appointment_id,
+                        exc,
+                    )
+                    return self._process_sms_notification_event(
+                        event=event,
+                        to_number=to_number,
+                        doctor_id=doctor_id,
+                        max_attempts=max_attempts,
+                    )
+                raise
             self._mark_notification_event_status(
                 notification_id=event.notification_id,
                 status="SENT",
@@ -592,9 +518,107 @@ class AutomationScheduler:
             )
             return False
 
+    def _process_sms_notification_event(
+        self,
+        *,
+        event: NotificationEvent,
+        to_number: str,
+        doctor_id: Optional[int],
+        max_attempts: int,
+    ) -> bool:
+        LOGGER.info(
+            "DEBUG: SMS channel detected - using SMSNotificationService for appointment_id=%s",
+            event.appointment_id,
+        )
+        from src.runtime.sms_notification_service import SMSNotificationService
+
+        sms_service = SMSNotificationService(self._settings, LOGGER)
+        source_channel = self._notification_source_channel(event)
+        sms_allowed = (
+            sms_service.is_sms_enabled_for_channel(source_channel)
+            if source_channel
+            else sms_service.sms_enabled
+        )
+        if not sms_allowed:
+            self._mark_notification_event_status(
+                notification_id=event.notification_id,
+                status="SKIPPED",
+                error_text=f"SMS disabled for source channel '{source_channel or 'unknown'}'.",
+                doctor_id=doctor_id,
+                admin_id=event.admin_id,
+            )
+            return True
+
+        message = self._build_sms_message(event)
+        if not message:
+            backoff = min(1800, 60 * (2 ** max(0, int(event.attempt_count))))
+            self._booking_repository.mark_notification_event_retry(
+                notification_id=event.notification_id,
+                error_text="Could not build SMS message",
+                backoff_seconds=backoff,
+                max_attempts=max_attempts,
+            )
+            return False
+
+        try:
+            success, provider_sid, failure_reason = sms_service.send_sms_with_credit_check(
+                doctor_id=doctor_id,
+                appointment_id=event.appointment_id,
+                phone_number=to_number,
+                message=message,
+            )
+            if success:
+                self._mark_notification_event_status(
+                    notification_id=event.notification_id,
+                    status="SENT",
+                    provider_message_sid=str(provider_sid or ""),
+                    doctor_id=doctor_id,
+                    admin_id=event.admin_id,
+                )
+                return True
+
+            error_text = f"SMS send failed: {failure_reason}" if failure_reason else "SMS API returned failure"
+            if failure_reason in ("CREDITS_EXHAUSTED", "SERVICE_DISABLED", "SMS_SERVICE_UNAVAILABLE"):
+                self._mark_notification_event_status(
+                    notification_id=event.notification_id,
+                    status="FAILED",
+                    error_text=error_text,
+                    doctor_id=doctor_id,
+                    admin_id=event.admin_id,
+                )
+                return True
+
+            backoff = min(1800, 60 * (2 ** max(0, int(event.attempt_count))))
+            self._booking_repository.mark_notification_event_retry(
+                notification_id=event.notification_id,
+                error_text=error_text,
+                backoff_seconds=backoff,
+                max_attempts=max_attempts,
+            )
+            return False
+        except Exception as exc:
+            backoff = min(1800, 60 * (2 ** max(0, int(event.attempt_count))))
+            self._booking_repository.mark_notification_event_retry(
+                notification_id=event.notification_id,
+                error_text=f"SMS send failed: {str(exc)}",
+                backoff_seconds=backoff,
+                max_attempts=max_attempts,
+            )
+            return False
+
+    def _should_force_sms_recovery(self, *, event: NotificationEvent, to_number: str, error: Exception) -> bool:
+        channel = self._normalize_notification_channel(getattr(event, "channel", ""))
+        if channel != "sms":
+            return False
+        destination = str(to_number or "").strip()
+        if not destination or destination.startswith("telegram:") or destination.startswith("whatsapp:"):
+            return False
+        error_text = str(error or "")
+        return "Twilio client or sender number is not configured" in error_text
+
     def _notification_destination(self, event) -> str:
         destination = (event.destination or "").strip()
-        channel = (event.channel or "").strip().lower()
+        channel = self._normalize_notification_channel(event.channel)
         if destination:
             if destination.startswith("telegram:") or destination.startswith("whatsapp:"):
                 return destination
@@ -627,6 +651,25 @@ class AutomationScheduler:
         if phone:
             return phone
         return ""
+
+    @staticmethod
+    def _normalize_notification_channel(value: object) -> str:
+        return str(value or "").strip().strip("\"'").strip().lower()
+
+    @staticmethod
+    def _notification_source_channel(event) -> str:
+        source_channel = ""
+        meta = (getattr(event, "meta_json", "") or "").strip()
+        if meta:
+            try:
+                payload = json.loads(meta)
+                if isinstance(payload, dict):
+                    source_channel = str(payload.get("source_channel") or "").strip().lower()
+            except Exception:
+                source_channel = ""
+        if not source_channel:
+            source_channel = str(getattr(event, "source_channel", "") or "").strip().lower()
+        return source_channel
 
     def _event_message_text(self, event) -> str:
         when = f"{event.slot_date} {self._format_display_time(event.slot_time)}".strip()
@@ -675,6 +718,7 @@ class AutomationScheduler:
             sms_service = SMSNotificationService(self._settings, LOGGER)
             patient_name = event.patient_name or "Valued Patient"
             doctor_name = getattr(event, "doctor_name", "") or "Doctor"
+            doctor_slug = getattr(event, "doctor_slug", "") or ""
             appointment_date = event.slot_date or ""
             appointment_time = event.slot_time or ""
             clinic_name = event.clinic_name or "the clinic"
@@ -686,6 +730,7 @@ class AutomationScheduler:
                 appointment_date=appointment_date,
                 appointment_time=appointment_time,
                 clinic_name=clinic_name,
+                doctor_slug=doctor_slug,
             )
             return message
         except Exception as exc:

@@ -128,6 +128,7 @@ def list_pending_notification_events(
                     {source_channel_select},
                     {channel_account_select},
                     COALESCE(NULLIF(TRIM(d.doctor_name), ''), 'Doctor') AS doctor_name,
+                    COALESCE(NULLIF(TRIM(d.slug), ''), '') AS doctor_slug,
                     COALESCE(p.full_name, '') AS patient_name,
                     COALESCE(c.clinic_name, '') AS clinic_name,
                     DATE_FORMAT(a.appointment_date, '%Y-%m-%d') AS slot_date,
@@ -166,6 +167,7 @@ def list_pending_notification_events(
                     {source_channel_select},
                     {channel_account_select},
                     COALESCE(NULLIF(TRIM(d.doctor_name), ''), 'Doctor') AS doctor_name,
+                    COALESCE(NULLIF(TRIM(d.slug), ''), '') AS doctor_slug,
                     COALESCE(p.full_name, '') AS patient_name,
                     COALESCE(c.clinic_name, '') AS clinic_name,
                     DATE_FORMAT(s.slot_date, '%Y-%m-%d') AS slot_date,
@@ -213,6 +215,7 @@ def list_pending_notification_events(
                     attempt_count=int(row.get("attempt_count") or 0),
                     source_channel=str(row.get("source_channel") or "").strip().lower(),
                     doctor_name=str(row.get("doctor_name") or "").strip(),
+                    doctor_slug=str(row.get("doctor_slug") or "").strip(),
                 )
             )
         return events
@@ -388,6 +391,7 @@ def claim_pending_notification_events(
                     {source_channel_select},
                     {channel_account_select},
                     COALESCE(NULLIF(TRIM(d.doctor_name), ''), 'Doctor') AS doctor_name,
+                    COALESCE(NULLIF(TRIM(d.slug), ''), '') AS doctor_slug,
                     COALESCE(p.full_name, '') AS patient_name,
                     COALESCE(c.clinic_name, '') AS clinic_name,
                     DATE_FORMAT(a.appointment_date, '%Y-%m-%d') AS slot_date,
@@ -421,6 +425,7 @@ def claim_pending_notification_events(
                     {source_channel_select},
                     {channel_account_select},
                     COALESCE(NULLIF(TRIM(d.doctor_name), ''), 'Doctor') AS doctor_name,
+                    COALESCE(NULLIF(TRIM(d.slug), ''), '') AS doctor_slug,
                     COALESCE(p.full_name, '') AS patient_name,
                     COALESCE(c.clinic_name, '') AS clinic_name,
                     DATE_FORMAT(s.slot_date, '%Y-%m-%d') AS slot_date,
@@ -466,6 +471,7 @@ def claim_pending_notification_events(
                     attempt_count=int(row.get("attempt_count") or 0),
                     source_channel=str(row.get("source_channel") or "").strip().lower(),
                     doctor_name=str(row.get("doctor_name") or "").strip(),
+                    doctor_slug=str(row.get("doctor_slug") or "").strip(),
                 )
             )
         conn.commit()

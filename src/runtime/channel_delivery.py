@@ -75,7 +75,9 @@ class ChannelDelivery:
             getattr(self.settings, "infobip_base_url", "") or ""
         ).strip() and (getattr(self.settings, "infobip_whatsapp_number", "") or "").strip():
             return "infobip"
-        return "twilio"
+        if self.twilio_client and (getattr(self.settings, "twilio_whatsapp_from", "") or "").strip():
+            return "twilio"
+        return ""
 
     def _has_meta_credentials(self, account: dict) -> bool:
         token = self._account_value(account, "whatsapp_api_token", "meta_access_token")
@@ -158,10 +160,12 @@ class ChannelDelivery:
                 fsm_state,
             )
             return
+        if not provider:
+            raise RuntimeError("No WhatsApp provider is configured for this channel account.")
         twilio_client = self._twilio_client_for_account(account)
         twilio_from = self._twilio_from_number(account)
         if not twilio_client or not twilio_from:
-            return
+            raise RuntimeError("Twilio client or sender number is not configured for this channel account.")
 
         template_sid = self.template_for_state(fsm_state)
         content_variables = self.content_variables_for_state(fsm_state, fsm)
@@ -229,6 +233,8 @@ class ChannelDelivery:
             sid = self._send_meta_whatsapp_text(to_number=raw_to, body=body, account=account)
             self.logger.info("Sent Meta safe processing message sid=%s inbound_sid=%s to=%s", sid, inbound_sid or "-", to_number)
             return sid
+        if not provider:
+            raise RuntimeError("No WhatsApp provider is configured for this channel account.")
         twilio_client = self._twilio_client_for_account(account)
         twilio_from = self._twilio_from_number(account)
         if not twilio_client or not twilio_from:
@@ -255,9 +261,13 @@ class ChannelDelivery:
                 inbound_sid=inbound_sid,
             )
             return
+        provider = self._provider_for_account(self._resolve_account(to_number))
+        if not provider:
+            raise RuntimeError("No WhatsApp provider is configured for this channel account.")
         self.logger.warning(
-            "WhatsApp document send degraded to text (Twilio requires a public media URL). "
-            "to=%s file=%s - configure a media hosting endpoint to enable file delivery.",
+            "WhatsApp document send degraded to text provider=%s to=%s file=%s "
+            "- configure a public media hosting endpoint to enable file delivery.",
+            provider,
             to_number,
             os.path.basename(file_path),
         )

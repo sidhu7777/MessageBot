@@ -12,7 +12,7 @@ import threading
 import time
 from difflib import SequenceMatcher
 from pathlib import Path
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Set, Tuple
 
 from fastapi import FastAPI, Request
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
@@ -35,7 +35,7 @@ LLMClient = _load_test_llm_client()
 load_dotenv()
 
 
-MODEL_NAME = os.getenv("WHISPER_MODEL", "medium")
+MODEL_NAME = os.getenv("WHISPER_MODEL", "large-v3-turbo")
 LANGUAGE = os.getenv("WHISPER_LANGUAGE", "en")
 LLM_MODEL_NAME = os.getenv("LLM_MODEL_NAME", "qwen3:1.7b").strip() or "qwen3:1.7b"
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://127.0.0.1:11434").strip() or "http://127.0.0.1:11434"
@@ -44,6 +44,8 @@ WHISPER_COMPUTE_TYPE = os.getenv("WHISPER_COMPUTE_TYPE", "").strip().lower()
 
 
 LLM_TIMEOUT_SECONDS = max(10.0, float(os.getenv("WHISPER_LLM_TIMEOUT_SECONDS", "45.0")))
+USE_LLM_CLEANER = os.getenv("WHISPER_USE_LLM_CLEANER", "false").strip().lower() in {"1", "true", "yes", "on"}
+USE_LLM_STRUCTURER = os.getenv("WHISPER_USE_LLM_STRUCTURER", "false").strip().lower() in {"1", "true", "yes", "on"}
 WHISPER_REQUEST_TIMEOUT_SECONDS = max(
     10.0, float(os.getenv("WHISPER_REQUEST_TIMEOUT_SECONDS", "60.0"))
 )
@@ -57,8 +59,8 @@ CHUNK_SECONDS = max(2.0, float(os.getenv("WHISPER_CHUNK_SECONDS", "8.0")))
 CHUNK_MS = int(CHUNK_SECONDS * 1000)
 MAX_SEGMENT_SECONDS = max(CHUNK_SECONDS, float(os.getenv("WHISPER_MAX_SEGMENT_SECONDS", "14.0")))
 MIN_SPEECH_SECONDS = max(0.4, float(os.getenv("WHISPER_MIN_SPEECH_SECONDS", "1.2")))
-SILENCE_SECONDS = max(0.3, float(os.getenv("WHISPER_SILENCE_SECONDS", "1.5")))
-VAD_THRESHOLD = max(0.003, float(os.getenv("WHISPER_VAD_THRESHOLD", "0.015")))
+SILENCE_SECONDS = max(0.3, float(os.getenv("WHISPER_SILENCE_SECONDS", "2.0")))
+VAD_THRESHOLD = max(0.003, float(os.getenv("WHISPER_VAD_THRESHOLD", "0.035")))
 SPEECH_START_SECONDS = max(0.1, float(os.getenv("WHISPER_SPEECH_START_SECONDS", "0.25")))
 PROMPT_TAIL_CHARS = max(80, int(os.getenv("WHISPER_PROMPT_TAIL_CHARS", "180")))
 TARGET_SAMPLE_RATE = int(os.getenv("WHISPER_TARGET_SAMPLE_RATE", "16000"))
@@ -66,15 +68,27 @@ WHISPER_NO_SPEECH_THRESHOLD = float(os.getenv("WHISPER_NO_SPEECH_THRESHOLD", "0.
 WHISPER_VAD_MIN_SILENCE_MS = int(os.getenv("WHISPER_VAD_MIN_SILENCE_MS", "500"))
 WHISPER_VAD_SPEECH_PAD_MS = int(os.getenv("WHISPER_VAD_SPEECH_PAD_MS", "400"))
 WHISPER_VAD_FILTER_THRESHOLD = float(os.getenv("WHISPER_VAD_FILTER_THRESHOLD", "0.3"))
-MEDICAL_PROMPT = os.getenv(
-    "WHISPER_MEDICAL_PROMPT",
-    (
-        "Medical dictation for prescription writing. Common terms may include: appointment, patient, fever, "
-        "cough, cold, stomach pain, vomiting, nausea, headache, blood pressure, diabetes, paracetamol, "
-        "Dolo 650, Crocin 650, Pantop 40, Azithral 500, Augmentin 625, tablet, syrup, capsule, "
-        "mg, ml, twice daily, once daily, follow-up after 7 days. Dolo 650 is a medicine name, not money."
-    ),
-).strip()
+COMMON_MEDICINE_TERMS = [
+    "Dolo 650", "Dolo", "Crocin 650", "Crocin 500", "Crocin", "Calpol", "Paracetamol",
+    "Pantop 40", "Pantop", "Pantoprazole", "Nexpro 40", "Nexpro", "Nexium",
+    "Rablet 20", "Rablet", "Rabeprazole", "Omeprazole", "Domperidone",
+    "Azithral 500", "Azithral", "Azithromycin", "Augmentin 625", "Augmentin",
+    "Amoxicillin", "Amoxycillin", "Ciprofloxacin", "Cetrizine", "Cetirizine",
+    "Telmisartan 40", "Telmisartan", "Telma", "Amlodipine", "Metformin 500",
+    "Metformin", "Atorvastatin 10", "Atorvastatin", "Rosuvastatin", "Ecosprin",
+    "Montair", "Montek", "Levocetirizine", "Allegra", "Pan-D", "Pan D",
+    "Norflox", "Ofloxacin", "Ondem", "Ondansetron", "Brufen", "Brofin",
+]
+DEFAULT_MEDICAL_PROMPT = (
+    "Doctor prescription dictation in Indian clinic English. "
+    "Medicine names and common ASR-sensitive terms: "
+    + ", ".join(COMMON_MEDICINE_TERMS)
+    + ". Frequencies: OD, BD, TDS, QID, once daily, twice daily, thrice daily. "
+    + "Timings: morning, afternoon, evening, night, before food, after food, empty stomach. "
+    + "Vitals: BP, blood pressure, temperature, weight. Follow-up after 3 days, 5 days, 1 week. "
+    + "These are vocabulary hints only; do not add a medicine unless it is spoken."
+)
+MEDICAL_PROMPT = os.getenv("WHISPER_MEDICAL_PROMPT", DEFAULT_MEDICAL_PROMPT).strip()
 TRIM_SILENCE_THRESHOLD = max(0.0015, float(os.getenv("WHISPER_TRIM_SILENCE_THRESHOLD", "0.003")))
 MIN_CHUNK_RMS = max(50, int(os.getenv("WHISPER_MIN_CHUNK_RMS", "350")))
 MIN_SPEECH_RATIO = max(0.05, float(os.getenv("WHISPER_MIN_SPEECH_RATIO", "0.22")))
@@ -90,6 +104,7 @@ _model_lock = threading.Lock()
 _session_store: Dict[str, List[str]] = {}
 _chunk_counts: Dict[str, int] = {}
 _session_prompt_tail: Dict[str, str] = {}
+_session_medicine_vocab: Dict[str, Set[str]] = {}
 _last_chunk_text: Dict[str, str] = {}
 _session_cleaned_text: Dict[str, str] = {}
 _session_cleaned_raw: Dict[str, str] = {}
@@ -99,7 +114,9 @@ _llm_client = LLMClient(
     base_url=OLLAMA_BASE_URL,
     timeout_seconds=LLM_TIMEOUT_SECONDS,
 )
-_llm_lock = threading.Lock()
+_llm_clean_lock = threading.Lock()
+_llm_structure_lock = threading.Lock()
+_llm_frequency_lock = threading.Lock()
 
 MEDICAL_KEYWORDS = {
     "tablet", "capsule", "capsules", "syrup", "injection", "medicine", "medicines",
@@ -113,6 +130,11 @@ MEDICAL_KEYWORDS = {
     "afternoon", "evening", "night", "before", "after", "food", "empty", "stomach",
     "twice", "thrice", "daily", "weekly", "monthly"
 }
+MEDICAL_KEYWORDS.update(
+    term.lower()
+    for name in COMMON_MEDICINE_TERMS
+    for term in re.findall(r"[A-Za-z][A-Za-z0-9-]*", name)
+)
 
 
 @app.on_event("startup")
@@ -334,6 +356,38 @@ def _deduplicate_raw(text: str) -> str:
     return ". ".join(seen)
 
 
+def _strip_repetition_noise(text: str) -> str:
+    normalized = _normalize_text(text)
+    if not normalized:
+        return ""
+
+    cleaned = normalized
+    noise_tail = re.search(
+        r"\b(oh|uh|um|hmm|huh|aaa+|mmm+)\b(?:[\s,.;:!?]+\1\b){4,}.*$",
+        cleaned,
+        flags=re.IGNORECASE,
+    )
+    if noise_tail:
+        cleaned = cleaned[:noise_tail.start()].strip(" ,.;:")
+
+    repeated_phrase = re.search(
+        r"\b([A-Za-z][A-Za-z-]*(?:\s+\d{1,4})?)\b(?:[\s,.;:!?]+\1\b){4,}.*$",
+        cleaned,
+        flags=re.IGNORECASE,
+    )
+    if repeated_phrase:
+        cleaned = cleaned[:repeated_phrase.start()].strip(" ,.;:")
+
+    # If hallucinated medicine spam started after a valid follow-up sentence, remove
+    # the orphan medicine fragment immediately before the repeated tail.
+    cleaned = re.sub(
+        r"(?i)\b(Follow-up:\s*\d+\s+(?:day|days|week|weeks|month|months))[\s.!,;:]+[A-Z][A-Za-z-]*(?:\s+\d{1,4})?\s*$",
+        r"\1",
+        cleaned,
+    )
+    return _normalize_text(cleaned)
+
+
 def _extract_guard_tokens(text: str) -> List[str]:
     tokens = re.findall(r"[a-zA-Z0-9][a-zA-Z0-9\-]*", text.lower())
     kept: List[str] = []
@@ -366,8 +420,71 @@ _SYMPTOM_WORDS = (
 )
 
 
-def _resolve_self_corrections(text: str) -> str:
+def _apply_final_term_corrections(text: str) -> str:
     corrected = str(text or "")
+    for final_value, wrong_value in re.findall(
+        r"\b(?:it'?s|it\s+is)?\s*([A-Za-z][A-Za-z0-9-]{1,})\s+not\s+([A-Za-z][A-Za-z0-9-]{1,})\b",
+        corrected,
+        flags=re.IGNORECASE,
+    ):
+        final_clean = final_value.strip()
+        wrong_clean = wrong_value.strip()
+        if (
+            not final_clean
+            or not wrong_clean
+            or final_clean.lower() == wrong_clean.lower()
+            or final_clean.lower() in {"is", "it", "not", "a", "the"}
+        ):
+            continue
+        corrected = re.sub(
+            rf"\b{re.escape(wrong_clean)}\b",
+            final_clean,
+            corrected,
+            flags=re.IGNORECASE,
+        )
+    return corrected
+
+
+def _remove_noop_corrections(text: str) -> str:
+    cleaned = str(text or "")
+    cleaned = re.sub(
+        r"\b(?:it'?s|it\s+is)\s+not\s+(?:a\s+)?([A-Za-z][A-Za-z0-9-]*)\s*,?\s*(?:it\s+is\s+)?(?:a\s+)?\1\b\.?",
+        "",
+        cleaned,
+        flags=re.IGNORECASE,
+    )
+    cleaned = re.sub(
+        r"\b(?:it'?s|it\s+is)?\s*([A-Za-z][A-Za-z0-9-]*)\s+not\s+\1\b\.?",
+        "",
+        cleaned,
+        flags=re.IGNORECASE,
+    )
+    return _normalize_text(cleaned)
+
+
+def _normalize_medical_asr_terms(text: str) -> str:
+    normalized = str(text or "")
+    replacements = [
+        (r"\bwrap\s*,?\s*let\b", "Rablet"),
+        (r"\bwraplet\b", "Rablet"),
+        (r"\braplet\b", "Rablet"),
+        (r"\bnext\s+probe\b", "Nexpro"),
+        (r"\bnextpro\b", "Nexpro"),
+        (r"\btells?\s+me\s+sartan\b", "Telmisartan"),
+        (r"\btell\s+me\s+sartan\b", "Telmisartan"),
+        (r"\btelma\s+sartan\b", "Telmisartan"),
+        (r"\bblood\s+pleasure\b", "blood pressure"),
+    ]
+    for pattern, replacement in replacements:
+        normalized = re.sub(pattern, replacement, normalized, flags=re.IGNORECASE)
+    return normalized
+
+
+def _resolve_self_corrections(text: str) -> str:
+    corrected = _normalize_medical_asr_terms(str(text or ""))
+    corrected = _remove_noop_corrections(corrected)
+    corrected = _apply_final_term_corrections(corrected)
+    corrected = _remove_noop_corrections(corrected)
     # Remove wrong frequency when corrected
     corrected = re.sub(
         r"\bevery\s+\d+\s+days[^.]*\.\s*(?:not|no)[^.]*\.\s*(?:it\s+is\s+)?([a-z\s]+(?:daily|times))",
@@ -409,14 +526,21 @@ def _resolve_self_corrections(text: str) -> str:
 
 
 def _basic_medical_cleanup(raw_text: str) -> str:
-    cleaned = _normalize_text(_deduplicate_raw(raw_text))
+    cleaned = _normalize_text(_normalize_followup_phrases(_deduplicate_raw(raw_text)))
+    cleaned = _resolve_self_corrections(cleaned)
+    cleaned = _normalize_text(_strip_repetition_noise(cleaned))
     if not cleaned:
         return ""
-    cleaned = _normalize_followup_phrases(cleaned)
     cleaned = re.sub(r"\b(?:thank you|thanks|thank you for watching)\b\.?", "", cleaned, flags=re.IGNORECASE)
     cleaned = re.sub(r"\b(?:for|to)\s+this\s+patient\s+i\s+will\s+give\s+(?:him|her)\b", "", cleaned, flags=re.IGNORECASE)
     cleaned = re.sub(r"\bi\s+will\s+give\s+(?:him|her)\b", "", cleaned, flags=re.IGNORECASE)
     cleaned = re.sub(r"\ballow\s+a\s+given\s+patient\b[:,]?\s*", "", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"\bi\s+told\s+(?:him|her|the\s+patient)\s+to\s+", "", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"\.{2,}", ".", cleaned)
+    cleaned = re.sub(r"(?i)\.\s+and\s+(Follow-up:)", r". \1", cleaned)
+    cleaned = re.sub(r"(?i)\b(?:and\s*)+\.\s*", ". ", cleaned)
+    cleaned = re.sub(r"(?i)(?:^|[.!?]\s*)(?:it'?s|it\s+is)\s*$", "", cleaned).strip()
+    cleaned = re.sub(r"\.{2,}", ".", cleaned)
     cleaned = re.sub(r"\s+([,.;:])", r"\1", cleaned)
     cleaned = re.sub(r"\s{2,}", " ", cleaned).strip(" ,.;")
     parts = [part.strip(" ,.;") for part in re.split(r"(?i)\bFollow-up:\b", cleaned) if part.strip(" ,.;")]
@@ -426,53 +550,35 @@ def _basic_medical_cleanup(raw_text: str) -> str:
 
 
 def _cleaning_output_is_safe(raw_text: str, cleaned_text: str) -> bool:
-    """
-    Safety guard for LLM cleaning output.
-    Very relaxed for medical context - prioritizes functionality over strict safety.
-    """
     raw = _normalize_text(raw_text)
     cleaned = _normalize_text(cleaned_text)
-    
-    # Basic sanity checks
+
     if not cleaned:
         return False
-    if len(cleaned) < max(5, int(len(raw) * 0.1)):  # Very relaxed from 0.15 to 0.1
+    if raw and len(cleaned) > max(500, int(len(raw) * 2.5)):
         return False
-
-    # Skip token matching for medical content - too restrictive
-    # Only check for obvious financial content injection
+    has_repetition_noise = bool(re.search(r"\b(\w+)\b(?:[\s,.;:!?]+\1\b){4,}", raw, flags=re.IGNORECASE))
+    min_ratio = 0.2 if has_repetition_noise else 0.45
+    if raw and len(cleaned) < max(5, int(len(raw) * min_ratio)):
+        return False
     cleaned_lower = cleaned.lower()
     raw_lower = raw.lower()
-    
-    # Block if financial terms are added that weren't in original
+
     financial_terms = [r'\$', r'₹', r'\bdollar', r'\brupee', r'\bthousand', r'\bmillion', r'\bbillion', r'\bcost', r'\bprice', r'\bpay']
-    
     for term in financial_terms:
         if not re.search(term, raw_lower) and re.search(term, cleaned_lower):
             return False
-    
-    # For medical content, be very permissive
-    medical_indicators = ['patient', 'medicine', 'tablet', 'complaint', 'symptom', 'doctor', 'prescription']
-    if any(indicator in raw_lower for indicator in medical_indicators):
-        return True  # Allow all medical content
-    
-    # For non-medical content, do basic token check
-    raw_tokens = _extract_guard_tokens(raw)
-    if not raw_tokens:
-        return True
-    
-    matched = sum(1 for token in raw_tokens if token in cleaned_lower)
-    required_matches = max(1, int(len(raw_tokens) * 0.3))  # Very relaxed from 0.4 to 0.3
-    
-    return matched >= required_matches
+    return True
 
 
 def _clean_transcript_with_llm(raw_text: str, session_id: str = "") -> Tuple[str, float]:
-    deduplicated = _deduplicate_raw(raw_text)
+    deduplicated = _strip_repetition_noise(_normalize_followup_phrases(_deduplicate_raw(raw_text)))
     resolved = _resolve_self_corrections(deduplicated)
     normalized = _normalize_text(resolved)
     if not normalized:
         return "", 0.0
+    if not USE_LLM_CLEANER:
+        return _basic_medical_cleanup(normalized), 0.0
     prompt_hint = _prompt_tail_for_session(session_id) if session_id else MEDICAL_PROMPT
     previous_cleaned = _normalize_text(_session_cleaned_text.get(session_id, "")) if session_id else ""
     system_prompt = (
@@ -509,12 +615,13 @@ def _clean_transcript_with_llm(raw_text: str, session_id: str = "") -> Tuple[str
         f"{normalized}"
     )
     started_at = time.perf_counter()
-    with _llm_lock:
+    with _llm_clean_lock:
         cleaned = _llm_client.generate(system_prompt, user_prompt)
     cleaned_text = _normalize_text(cleaned)
     if not _cleaning_output_is_safe(normalized, cleaned_text):
         print("LLM cleaning rejected by safety guard; returning normalized raw transcript.")
         cleaned_text = normalized
+    cleaned_text = _basic_medical_cleanup(cleaned_text)
     return cleaned_text, time.perf_counter() - started_at
 
 
@@ -536,6 +643,129 @@ def _fallback_parchi_payload(cleaned_text: str) -> Dict[str, Any]:
     }
 
 
+def _blank_parchi_payload() -> Dict[str, Any]:
+    return _fallback_parchi_payload("")
+
+
+def _coerce_parchi_payload(payload: Dict[str, Any], transcript: str) -> Dict[str, Any]:
+    result = _blank_parchi_payload()
+    if not isinstance(payload, dict):
+        return result
+
+    result["patient_name"] = _coerce_text(payload.get("patient_name"))[:80]
+    result["complaints"] = _coerce_text(payload.get("complaints"))[:300]
+    result["diagnosis"] = _coerce_text(payload.get("diagnosis"))[:300]
+    result["advice"] = _coerce_text(payload.get("advice"))[:500]
+    result["tests"] = _coerce_text(payload.get("tests"))[:300]
+    result["follow_up"] = _coerce_text(payload.get("follow_up"))[:80]
+
+    vitals = payload.get("vital_signs")
+    if isinstance(vitals, dict):
+        result["vital_signs"] = {
+            "blood_pressure": _coerce_text(vitals.get("blood_pressure"))[:40],
+            "temperature": _coerce_text(vitals.get("temperature"))[:40],
+            "weight": _coerce_text(vitals.get("weight"))[:40],
+        }
+
+    medicines = payload.get("medicines")
+    clean_medicines: List[Dict[str, str]] = []
+    if isinstance(medicines, list):
+        for item in medicines[:12]:
+            if not isinstance(item, dict):
+                continue
+            name = _coerce_text(item.get("name"))[:80]
+            if not name:
+                continue
+            clean_medicines.append(
+                {
+                    "name": name,
+                    "frequency": _coerce_text(item.get("frequency"))[:40],
+                    "timing": _coerce_text(item.get("timing"))[:80],
+                    "duration": _coerce_text(item.get("duration"))[:80],
+                    "notes": _coerce_text(item.get("notes"))[:120],
+                }
+            )
+    result["medicines"] = clean_medicines
+
+    extracted_vitals = _extract_vital_signs(transcript)
+    extracted_name = _extract_patient_name(transcript)
+    extracted_complaints = _extract_complaints(transcript)
+    extracted_diagnosis = _extract_diagnosis(transcript)
+    extracted_tests = _extract_tests(transcript)
+    if extracted_name:
+        result["patient_name"] = extracted_name[:80]
+    if extracted_complaints:
+        result["complaints"] = extracted_complaints[:300]
+    if extracted_diagnosis:
+        result["diagnosis"] = extracted_diagnosis[:300]
+    else:
+        result["diagnosis"] = ""
+    if extracted_tests:
+        result["tests"] = extracted_tests[:300]
+    if not result["follow_up"]:
+        result["follow_up"] = _extract_follow_up(transcript)
+    if not result["vital_signs"]["blood_pressure"]:
+        result["vital_signs"]["blood_pressure"] = extracted_vitals["blood_pressure"]
+    if not result["vital_signs"]["temperature"]:
+        result["vital_signs"]["temperature"] = extracted_vitals["temperature"]
+    if not result["vital_signs"]["weight"]:
+        result["vital_signs"]["weight"] = extracted_vitals["weight"]
+    return result
+
+
+def _payload_has_clinical_content(payload: Dict[str, Any]) -> bool:
+    return bool(
+        _coerce_text(payload.get("patient_name"))
+        or _coerce_text(payload.get("complaints"))
+        or _coerce_text(payload.get("diagnosis"))
+        or payload.get("medicines")
+        or any(_coerce_text(v) for v in dict(payload.get("vital_signs") or {}).values())
+        or _coerce_text(payload.get("follow_up"))
+    )
+
+
+def _build_parchi_payload_with_llm(cleaned_text: str) -> Tuple[Dict[str, Any], float]:
+    normalized = _normalize_text(cleaned_text)
+    if not normalized:
+        return {}, 0.0
+
+    system_prompt = (
+        "You convert noisy doctor dictation into prescription JSON. "
+        "Return only valid JSON. Do not add medicines, strengths, vitals, tests, diagnosis, or advice unless supported by the transcript. "
+        "Use final corrections when the doctor says 'X not Y' or 'not X, it is Y'. "
+        "Infer common medical ASR spellings when clear from context, but leave uncertain text as spoken."
+    )
+    user_prompt = (
+        "Extract this exact JSON schema:\n"
+        "{\n"
+        '  "patient_name": "",\n'
+        '  "complaints": "",\n'
+        '  "diagnosis": "",\n'
+        '  "medicines": [{"name": "", "frequency": "", "timing": "", "duration": "", "notes": ""}],\n'
+        '  "vital_signs": {"blood_pressure": "", "temperature": "", "weight": ""},\n'
+        '  "advice": "",\n'
+        '  "tests": "",\n'
+        '  "follow_up": ""\n'
+        "}\n\n"
+        "Rules:\n"
+        "- Keep medicine names without inventing dose numbers.\n"
+        "- Put symptoms in complaints.\n"
+        "- Put confirmed disease labels like high blood pressure in diagnosis.\n"
+        "- Put BP/temp/weight only in vital_signs.\n"
+        "- Put 'come after N days' as follow_up.\n"
+        "- If a field is not present, use an empty string or empty list.\n\n"
+        f"Transcript:\n{normalized}"
+    )
+    started_at = time.perf_counter()
+    with _llm_structure_lock:
+        raw = _llm_client.generate(system_prompt, user_prompt)
+    payload = _extract_json_object(raw)
+    coerced = _coerce_parchi_payload(payload, normalized)
+    if not _payload_has_clinical_content(coerced):
+        raise ValueError("LLM parchi extraction returned empty payload")
+    return coerced, time.perf_counter() - started_at
+
+
 # ============================================================================
 # HYBRID ARCHITECTURE: Rules (80%) + LLM Disambiguation (20%)
 # ============================================================================
@@ -543,6 +773,10 @@ def _fallback_parchi_payload(cleaned_text: str) -> Dict[str, Any]:
 def _extract_medicine_names(text: str) -> List[str]:
     """Extract medicine names using production-level rules."""
     medicines = []
+    cleaned_text = _strip_repetition_noise(text)
+    if not cleaned_text:
+        return []
+    text = cleaned_text
     
     # Pattern 1: Brand names with numbers (Dolo 650, Crocin 500, Pantop 40)
     pattern1 = re.findall(r'\b([A-Z][a-z]+(?:-[A-Z])?)\s+(\d+)\b', text)
@@ -555,7 +789,8 @@ def _extract_medicine_names(text: str) -> List[str]:
         r'\b(paracetamol|dolo|crocin)\b',
         r'\b(pantop|pantoprazole)\b', 
         r'\b(nexpro|nexium|esomeprazole)\b',
-        r'\b(rablet|rabeprazole)\b',
+        r'\b(rablet|rablette|rabeprazole)\b',
+        r'\b(telmisartan|telma)\b',
         r'\b(azithral|azithromycin)\b',
         r'\b(augmentin|amoxicillin)\b',
         r'\b(ibuprofen|aspirin|metformin|atorvastatin)\b',
@@ -579,25 +814,105 @@ def _extract_medicine_names(text: str) -> List[str]:
         if len(match) >= 5:  # Minimum length for medicine names
             medicines.append(match)
     
-    return list(set(medicines))  # Remove duplicates
+    aliases = {
+        "grofin": "Brofin",
+        "brufen": "Brofin",
+        "brofen": "Brofin",
+        "wraplet": "Rablet",
+        "raplet": "Rablet",
+        "rablette": "Rablet",
+        "rablettee": "Rablet",
+        "next probe": "Nexpro",
+        "nextpro": "Nexpro",
+        "tell me sartan": "Telmisartan",
+        "tells me sartan": "Telmisartan",
+        "telma": "Telmisartan",
+    }
+    strongest: Dict[str, str] = {}
+    unique: List[str] = []
+    for med in medicines:
+        normalized = _normalize_text(med).title()
+        normalized = aliases.get(normalized.lower(), normalized)
+        key = normalized.lower()
+        base = re.sub(r"\s+\d{1,4}$", "", key).strip()
+        if not key:
+            continue
+        existing = strongest.get(base)
+        if existing is None or (re.search(r"\d", normalized) and not re.search(r"\d", existing)):
+            strongest[base] = normalized
+    seen = set()
+    ordered_unique: List[Tuple[int, str]] = []
+    for med in medicines:
+        normalized = aliases.get(_normalize_text(med).title().lower(), _normalize_text(med).title())
+        base = re.sub(r"\s+\d{1,4}$", "", normalized.lower()).strip()
+        chosen = strongest.get(base, normalized)
+        key = chosen.lower()
+        if key and key not in seen:
+            seen.add(key)
+            position = text.lower().find(key)
+            if position < 0:
+                position = text.lower().find(base)
+            ordered_unique.append((position if position >= 0 else 10_000 + len(ordered_unique), chosen))
+    for _position, chosen in sorted(ordered_unique, key=lambda item: item[0]):
+        unique.append(chosen)
+    return unique
 
 
 def _extract_patient_name(text: str) -> str:
     """Extract patient name using rules."""
-    # Pattern: "patient name is X", "patient X", "name is X"
-    patterns = [
-        r'patient\s+name\s+is\s+([A-Za-z]+)',
-        r'patient\s+([A-Za-z]+)',
-        r'name\s+is\s+([A-Za-z]+)',
-        r'patient\s+name\s+([A-Za-z]+)'
+    blocked_tokens = {
+        "complained",
+        "complaint",
+        "complaining",
+        "has",
+        "having",
+        "gave",
+        "fever",
+        "cough",
+        "pain",
+        "acidity",
+        "temperature",
+        "weight",
+        "follow",
+        "followup",
+        "days",
+        "day",
+    }
+    explicit_patterns = [
+        r"\bpatient'?s\s+name\s+is\s+([A-Za-z]+(?:\s+[A-Za-z]+){0,2}?)(?=\s+(?:and|he|she|who|with|complained|complaint)\b|[,.]|$)",
+        r"\b(?:his|her|the\s+patient)\s+name\s+is\s+([A-Za-z]+(?:\s+[A-Za-z]+){0,2}?)(?=\s+(?:and|he|she|who|with|complained|complaint)\b|[,.]|$)",
+        r"\bpatient\s+name\s+is\s+([A-Za-z]+(?:\s+[A-Za-z]+){0,2}?)(?=\s+(?:and|he|she|who|with|complained|complaint)\b|[,.]|$)",
+        r"\bpatient\s+name\s+(?!is\b)([A-Za-z]+(?:\s+[A-Za-z]+){0,2}?)(?=\s+(?:and|he|she|who|with|complained|complaint)\b|[,.]|$)",
     ]
-    
-    for pattern in patterns:
-        match = re.search(pattern, text, re.I)
+
+    candidates: List[str] = []
+    for pattern in explicit_patterns:
+        for match in re.finditer(pattern, text, re.I):
+            candidate = " ".join(match.group(1).strip().split()).title()
+            words = candidate.lower().split()
+            if candidate and not any(word in blocked_tokens for word in words):
+                candidates.append(candidate)
+
+    if not candidates:
+        match = re.search(
+            r"\bpatient\s+(?!complained\b|complaint\b|complaining\b|has\b|having\b)([A-Za-z]+)\b",
+            text,
+            re.I,
+        )
         if match:
-            return match.group(1).title()
-    
-    return ""
+            candidate = match.group(1).strip().title()
+            if candidate.lower() not in blocked_tokens:
+                return candidate
+        return ""
+
+    chosen = candidates[-1]
+    if len(chosen.split()) == 1:
+        for previous in reversed(candidates[:-1]):
+            previous_parts = previous.split()
+            if len(previous_parts) >= 2:
+                chosen = " ".join([chosen] + previous_parts[1:])
+                break
+    return chosen
 
 
 def _extract_complaints(text: str) -> str:
@@ -605,17 +920,17 @@ def _extract_complaints(text: str) -> str:
     # More flexible patterns to handle various speech structures
     patterns = [
         # "complained about he has X" -> extract X
-        r'complained?\s+about\s+(?:he\s+has\s+|she\s+has\s+|having\s+|that\s+he\s+has\s+|that\s+she\s+has\s+)?([A-Za-z\s]+?)(?:\s+(?:so|and|,|\.|$))',
+        r'complained?\s+about\s+(?:he\s+has\s+|she\s+has\s+|having\s+|that\s+he\s+has\s+|that\s+she\s+has\s+)?([A-Za-z\s]+?)(?=\s+(?:so|and)\b|[,.]|$)',
         # "complaining of X" 
-        r'complaining\s+of\s+([A-Za-z\s]+?)(?:\s+(?:so|and|,|\.|$))',
+        r'complaining\s+of\s+([A-Za-z\s]+?)(?=\s+(?:so|and)\b|[,.]|$)',
         # "he has X" or "she has X"
-        r'(?:he|she|patient)\s+has\s+([A-Za-z\s]+?)(?:\s+(?:so|and|,|\.|$))',
+        r'(?:he|she|patient)\s+has\s+([A-Za-z\s]+?)(?=\s+(?:so|and)\b|[,.]|$)',
         # "suffering from X"
-        r'suffering\s+from\s+([A-Za-z\s]+?)(?:\s+(?:so|and|,|\.|$))',
+        r'suffering\s+from\s+([A-Za-z\s]+?)(?=\s+(?:so|and)\b|[,.]|$)',
         # "problem with X" or "issue with X"
-        r'(?:problem|issue)\s+with\s+([A-Za-z\s]+?)(?:\s+(?:so|and|,|\.|$))',
+        r'(?:problem|issue)\s+with\s+([A-Za-z\s]+?)(?=\s+(?:so|and)\b|[,.]|$)',
         # "symptoms of X" or "symptom of X"
-        r'symptoms?\s+of\s+([A-Za-z\s]+?)(?:\s+(?:so|and|,|\.|$))'
+        r'symptoms?\s+of\s+([A-Za-z\s]+?)(?=\s+(?:so|and)\b|[,.]|$)'
     ]
     
     for pattern in patterns:
@@ -625,15 +940,108 @@ def _extract_complaints(text: str) -> str:
             # Clean up common filler words
             complaint = re.sub(r'\b(the|a|an|some|any)\b', '', complaint, flags=re.I).strip()
             if complaint and len(complaint) > 2:
+                if re.fullmatch(r"[A-Z0-9]{2,6}", complaint.strip()):
+                    return complaint.strip().upper()
                 return complaint.title()
     
     return ""
 
 
+def _extract_diagnosis(text: str) -> str:
+    patterns = [
+        r"\bdiagnosis\s*(?:is|was|:)?\s*([A-Za-z][A-Za-z\s-]{1,80})",
+        r"\bdiagnosed\s+with\s+([A-Za-z][A-Za-z\s-]{1,80})",
+        r"\bdiagnose\s+(?:it\s+)?as\s+([A-Za-z][A-Za-z\s-]{1,80})",
+        r"\bimpression\s*(?:is|was|:)?\s*([A-Za-z][A-Za-z\s-]{1,80})",
+        r"\bassessment\s*(?:is|was|:)?\s*([A-Za-z][A-Za-z\s-]{1,80})",
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, text, re.I)
+        if match:
+            diagnosis = match.group(1).strip(" ,.;:-")
+            diagnosis = re.split(r"(?i)\b(?:and|with|so|given|prescribed|follow-up|follow up)\b|[,.]", diagnosis)[0].strip()
+            if diagnosis:
+                return diagnosis.title()
+    return ""
+
+
+def _extract_vital_signs(text: str) -> Dict[str, str]:
+    vitals = {
+        "blood_pressure": "",
+        "temperature": "",
+        "weight": "",
+    }
+    normalized = _normalize_text(text)
+    normalized = re.sub(r"(?i)\b(?:bp|blood\s+pressure)(?:\s*,\s*(?:bp|blood\s+pressure)){1,}\s*[,.:]?\s*", "BP ", normalized)
+    normalized = re.sub(r"(?i)\btemperature\s*[,.:]\s*", "temperature ", normalized)
+    normalized = re.sub(r"(?i)\bweight\s*[,.:]\s*", "weight ", normalized)
+    bp_match = re.search(
+        r"\b(?:bp|blood\s+pressure)\s*(?:is|was|:)?\s*(\d{2,3})\s*(?:/|by|over)\s*(\d{2,3})\b",
+        normalized,
+        re.I,
+    )
+    if bp_match:
+        vitals["blood_pressure"] = f"{bp_match.group(1)}/{bp_match.group(2)} mmHg"
+
+    temp_match = re.search(
+        r"\b(?:temp|temperature)\s*(?:is|was|:)?\s*(\d{2,3}(?:\.\d+)?)\s*(?:degree|degrees|f|fahrenheit)?\b",
+        normalized,
+        re.I,
+    )
+    if temp_match:
+        vitals["temperature"] = f"{temp_match.group(1)}°F"
+
+    weight_match = re.search(
+        r"\b(?:weight|wt)\s*(?:is|was|:)?\s*(\d{1,3}(?:\.\d+)?)\s*(?:kg|kgs|kilogram|kilograms)?\b",
+        normalized,
+        re.I,
+    )
+    if weight_match:
+        vitals["weight"] = f"{weight_match.group(1)} kg"
+    return vitals
+
+
+def _extract_tests(text: str) -> str:
+    patterns = [
+        r"\b(?:recommend|recommended|advise|advised|suggest|suggested)\s+(?:recommended\s+)?tests?\s+(?:like|such\s+as|are|is|:)?\s*([A-Za-z][A-Za-z\s,]+)",
+        r"\btests?\s+(?:like|such\s+as|are|is|:)\s*([A-Za-z][A-Za-z\s,]+)",
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, text, re.I)
+        if match:
+            value = match.group(1).strip(" ,.;:-")
+            value = re.split(r"(?i)\b(?:bp|temperature|weight|follow-up|follow up|diagnose|diagnosis)\b", value)[0].strip(" ,.;:-")
+            value = re.sub(r"(?i)\b(?:and)\b", ", ", value)
+            value = re.sub(r"\s*,\s*", ", ", value)
+            value = re.sub(r"\s{2,}", " ", value).strip(" ,.;:-")
+            if value:
+                return value.title()
+    return ""
+
+
 def _extract_duration(text: str) -> str:
     """Extract duration using rules (high precision)."""
-    # Pattern: "5 days", "7 days", "1 week", "2 weeks"
-    match = re.search(r'(\d+)\s+(day|days|week|weeks|month|months)', text, re.I)
+    # Medicine duration only, not follow-up phrases like "come after 5 days".
+    match = re.search(
+        r'\b(?:for|continue\s+for|take\s+for|give\s+for)\s+(\d+)\s+(day|days|week|weeks|month|months)\b',
+        text,
+        re.I,
+    )
+    if match:
+        return f"{match.group(1)} {match.group(2).lower()}"
+    return ""
+
+
+def _extract_follow_up(text: str) -> str:
+    """Extract follow-up independently from medicine duration."""
+    match = re.search(r'\bFollow-up:\s*(\d+)\s+(day|days|week|weeks|month|months)\b', text, re.I)
+    if match:
+        return f"{match.group(1)} {match.group(2).lower()}"
+    match = re.search(
+        r'\bcome\s+(?:back\s+)?after\s+(\d+)\s+(day|days|week|weeks|month|months)\b',
+        text,
+        re.I,
+    )
     if match:
         return f"{match.group(1)} {match.group(2).lower()}"
     return ""
@@ -716,13 +1124,26 @@ def _extract_frequency_raw(text: str) -> str:
     
     # Ambiguous patterns (need LLM)
     if "daily twice" in text_lower or "twice" in text_lower:
-        return "AMBIGUOUS:twice"
+        return f"AMBIGUOUS:{_context_window(text, 'twice')}"
     if "daily once" in text_lower or "once" in text_lower:
-        return "AMBIGUOUS:once"
+        return f"AMBIGUOUS:{_context_window(text, 'once')}"
     if "daily" in text_lower:
-        return "AMBIGUOUS:daily"
+        return f"AMBIGUOUS:{_context_window(text, 'daily')}"
     
     return ""
+
+
+def _context_window(text: str, needle: str, radius: int = 7) -> str:
+    words = re.findall(r"\S+", text)
+    lowered = [word.strip(".,;:!?").lower() for word in words]
+    target = needle.lower()
+    try:
+        idx = lowered.index(target)
+    except ValueError:
+        return needle
+    start = max(0, idx - radius)
+    end = min(len(words), idx + radius + 1)
+    return " ".join(words[start:end])
 
 
 def _disambiguate_frequency_with_llm(ambiguous_text: str) -> str:
@@ -738,7 +1159,7 @@ def _disambiguate_frequency_with_llm(ambiguous_text: str) -> str:
     user_prompt = f"Classify this frequency: '{ambiguous_text}'"
     
     try:
-        with _llm_lock:
+        with _llm_frequency_lock:
             result = _llm_client.generate(system_prompt, user_prompt).strip().upper()
         
         # Validate result
@@ -752,7 +1173,7 @@ def _disambiguate_frequency_with_llm(ambiguous_text: str) -> str:
         return ambiguous_text
 
 
-def _build_parchi_payload(cleaned_text: str) -> Tuple[Dict[str, Any], float]:
+def _build_rule_based_parchi_payload(cleaned_text: str) -> Tuple[Dict[str, Any], float]:
     """
     HYBRID ARCHITECTURE: Rules (80%) + LLM Disambiguation (20%)
     
@@ -764,7 +1185,7 @@ def _build_parchi_payload(cleaned_text: str) -> Tuple[Dict[str, Any], float]:
     if not normalized:
         return {}, 0.0
     
-    if not re.search(r'\b(dolo|crocin|pantop|ibuprofen|paracetamol|amoxycillin|azithromycin|mg|tablet|capsule|syrup|daily|twice|thrice|times|days?|weeks?)\b', normalized, re.I):
+    if not re.search(r'\b(dolo|crocin|pantop|rablet|nexpro|telmisartan|ibuprofen|paracetamol|amoxycillin|azithromycin|mg|tablet|capsule|syrup|daily|twice|thrice|times|days?|weeks?|bp|blood\s+pressure)\b', normalized, re.I):
         print(f"[PARCHI_EXTRACTION] No medical signal detected in: {normalized}")
         return _fallback_parchi_payload(normalized), 0.0
     
@@ -783,9 +1204,19 @@ def _build_parchi_payload(cleaned_text: str) -> Tuple[Dict[str, Any], float]:
     
     # Extract complaints
     complaints = _extract_complaints(normalized)
+
+    # Extract diagnosis
+    diagnosis = _extract_diagnosis(normalized)
+
+    # Extract vital signs
+    vital_signs = _extract_vital_signs(normalized)
     
     # Extract duration (deterministic)
     duration = _extract_duration(normalized)
+
+    # Extract follow-up separately from medicine duration
+    follow_up = _extract_follow_up(normalized)
+    tests = _extract_tests(normalized)
     
     # Extract notes (deterministic)
     notes = _extract_notes(normalized)
@@ -824,32 +1255,15 @@ def _build_parchi_payload(cleaned_text: str) -> Tuple[Dict[str, Any], float]:
                 "notes": notes,
             })
     
-    # If no medicines found, try to extract from full text
-    if not medicines:
-        # Fallback: treat first word as medicine name
-        words = normalized.split()
-        if words:
-            medicines.append({
-                "name": words[0],
-                "frequency": frequency,
-                "timing": timing,
-                "duration": duration,
-                "notes": notes,
-            })
-    
     payload = {
         "patient_name": patient_name,
         "complaints": complaints,
-        "diagnosis": "",
+        "diagnosis": diagnosis,
         "medicines": medicines,
-        "vital_signs": {
-            "blood_pressure": "",
-            "temperature": "",
-            "weight": ""
-        },
+        "vital_signs": vital_signs,
         "advice": normalized if not medicines else "",
-        "tests": "",
-        "follow_up": "",
+        "tests": tests,
+        "follow_up": follow_up,
     }
     
     elapsed = time.perf_counter() - started_at
@@ -857,6 +1271,65 @@ def _build_parchi_payload(cleaned_text: str) -> Tuple[Dict[str, Any], float]:
     print(f"[PARCHI_EXTRACTION] Total time: {elapsed:.2f}s")
     
     return payload, elapsed
+
+
+def _build_parchi_payload(cleaned_text: str) -> Tuple[Dict[str, Any], float]:
+    normalized = _normalize_text(cleaned_text)
+    if not normalized:
+        return {}, 0.0
+    if USE_LLM_STRUCTURER:
+        try:
+            payload, elapsed = _build_parchi_payload_with_llm(normalized)
+            print(f"[PARCHI_EXTRACTION] LLM structured payload: {payload}")
+            print(f"[PARCHI_EXTRACTION] Total time: {elapsed:.2f}s")
+            return payload, elapsed
+        except Exception as exc:
+            print(f"[PARCHI_EXTRACTION] LLM structuring failed; using rules error={exc}")
+    return _build_rule_based_parchi_payload(normalized)
+
+
+def _clean_edit_field_value(field_name: str, raw_text: str, session_id: str = "") -> Tuple[str, float]:
+    field = _normalize_text(str(field_name or "")).lower()
+    normalized_raw = _normalize_text(raw_text)
+    if not normalized_raw:
+        return "", 0.0
+
+    cleaned_text, elapsed = _clean_transcript_with_llm(normalized_raw, session_id)
+
+    if field == "patient_name":
+        value = _extract_patient_name(cleaned_text)
+        if not value:
+            value = re.sub(r"(?i)\b(?:patient'?s?|patient)\s+name\s+(?:is|was)?\s*", "", cleaned_text).strip(" ,.;:-")
+        return value[:80], elapsed
+    if field == "diagnosis":
+        value = _extract_diagnosis(cleaned_text)
+        if not value:
+            value = re.sub(
+                r"(?i)\b(?:diagnosis|assessment|impression)\s*(?:is|was|:)?\s*",
+                "",
+                cleaned_text,
+            ).strip(" ,.;:-")
+            value = re.split(r"[.,]", value)[0].strip()
+        return value[:300], elapsed
+    if field == "complaints":
+        value = _extract_complaints(cleaned_text) or cleaned_text
+        return value[:300], elapsed
+    if field == "blood_pressure":
+        return _extract_vital_signs(cleaned_text)["blood_pressure"][:40], elapsed
+    if field == "temperature":
+        return _extract_vital_signs(cleaned_text)["temperature"][:40], elapsed
+    if field == "weight":
+        return _extract_vital_signs(cleaned_text)["weight"][:40], elapsed
+    if field == "follow_up":
+        value = _extract_follow_up(cleaned_text) or cleaned_text
+        return value[:80], elapsed
+    if field == "tests":
+        value = re.sub(r"(?i)\b(?:tests?|investigations?)\s*(?:are|is|:)?\s*", "", cleaned_text).strip(" ,.;:-")
+        return value[:300], elapsed
+    if field == "advice":
+        value = re.sub(r"(?i)\b(?:advice|instructions?)\s*(?:are|is|:)?\s*", "", cleaned_text).strip(" ,.;:-")
+        return value[:500], elapsed
+    return cleaned_text[:500], elapsed
 
 
 def _strip_repetitive_tail(text: str) -> str:
@@ -999,7 +1472,7 @@ def _transcribe_chunk_blocking(temp_path: Path, prompt_tail: str) -> Tuple[str, 
         language=LANGUAGE,
         condition_on_previous_text=False,
         initial_prompt=prompt_tail or None,
-        temperature=0.0,
+        temperature=(0.0, 0.2, 0.4),
         beam_size=8,
         no_speech_threshold=WHISPER_NO_SPEECH_THRESHOLD,
         vad_filter=True,
@@ -1010,7 +1483,11 @@ def _transcribe_chunk_blocking(temp_path: Path, prompt_tail: str) -> Tuple[str, 
         },
     )
     whisper_elapsed_seconds = time.perf_counter() - whisper_started_at
-    text = _strip_repetitive_tail(" ".join(segment.text.strip() for segment in segments if segment.text).strip())
+    text = _strip_repetition_noise(
+        _strip_repetitive_tail(
+            _collapse_repeated_phrases(" ".join(segment.text.strip() for segment in segments if segment.text).strip())
+        )
+    )
     return text, whisper_elapsed_seconds
 
 
@@ -1022,8 +1499,26 @@ def _prompt_tail_for_session(session_id: str) -> str:
 
 
 def _set_prompt_tail_for_session(session_id: str, accumulated_text: str) -> None:
+    vocab = _session_medicine_vocab.get(session_id) or set()
+    if vocab:
+        focused = ", ".join(sorted(vocab)[:30])
+        _session_prompt_tail[session_id] = f"Previously mentioned in this session: {focused}."
+        return
     normalized = _normalize_text(accumulated_text)
     _session_prompt_tail[session_id] = normalized[-PROMPT_TAIL_CHARS:] if normalized else ""
+
+
+def _update_session_medicine_vocab(session_id: str, text: str) -> None:
+    if not session_id or not text:
+        return
+    vocab = _session_medicine_vocab.setdefault(session_id, set())
+    lower = text.lower()
+    for name in COMMON_MEDICINE_TERMS:
+        if re.search(rf"\b{re.escape(name.lower())}\b", lower):
+            vocab.add(name)
+    for name in _extract_medicine_names(text):
+        if name:
+            vocab.add(name)
 
 
 def _safe_session_dir(session_id: str) -> Path:
@@ -1034,7 +1529,7 @@ def _safe_session_dir(session_id: str) -> Path:
 
 
 def _is_low_value_transcript(text: str) -> bool:
-    normalized = _normalize_text(text).lower()
+    normalized = _normalize_text(_strip_repetition_noise(text)).lower()
     if not normalized:
         return True
     # Only drop pure hallucination phrases
@@ -1337,15 +1832,15 @@ def live_page() -> HTMLResponse:
     }
     .med-row-edit {
       display: grid;
-      grid-template-columns: 1.3fr 1fr 1fr 1fr 1.2fr 80px;
-      gap: 6px;
+      grid-template-columns: minmax(130px, 1.3fr) minmax(92px, 0.8fr) minmax(130px, 1.1fr) minmax(82px, 0.7fr) minmax(110px, 1fr) 90px;
+      gap: 8px;
       padding: 8px 0;
       align-items: center;
       border-bottom: 1px dotted #e2d8c6;
     }
     @media (max-width: 1200px) {
       .med-row-edit {
-        grid-template-columns: 1.2fr 0.9fr 0.9fr 0.9fr 1fr 70px;
+        grid-template-columns: minmax(120px, 1.1fr) minmax(88px, 0.7fr) minmax(120px, 1fr) minmax(78px, 0.7fr) minmax(100px, 0.9fr) 84px;
       }
     }
     @media (max-width: 900px) {
@@ -1359,6 +1854,9 @@ def live_page() -> HTMLResponse:
     }
     .med-input,
     .med-select {
+      width: 100%;
+      min-width: 0;
+      box-sizing: border-box;
       border: 1px solid #b9a893;
       border-radius: 4px;
       padding: 6px 8px;
@@ -1367,6 +1865,9 @@ def live_page() -> HTMLResponse:
       color: var(--ink);
     }
     .med-delete-btn {
+      width: 100%;
+      min-width: 0;
+      box-sizing: border-box;
       border: 0;
       border-radius: 4px;
       padding: 6px 10px;
@@ -1388,7 +1889,7 @@ def live_page() -> HTMLResponse:
     .med-head,
     .med-row {
       display: grid;
-      grid-template-columns: 1.3fr 1fr 1fr 1.2fr 1.2fr;
+      grid-template-columns: 1.3fr 1fr 1fr 1.2fr 1.2fr 80px;
       gap: 8px;
       padding: 6px 0;
       align-items: start;
@@ -1597,6 +2098,12 @@ def live_page() -> HTMLResponse:
     let latencySamples = [];
     let cleanRequestSeq = 0;
     let cleanDebounceTimer = null;
+    let parchiRenderSeq = 0;
+    let currentCaptureMode = "main";
+    let activeEditField = "";
+    let editFieldSessionId = "";
+    let editFieldBaseValue = "";
+    let editFieldRequestSeq = 0;
 
     const CHUNK_SECONDS = __CHUNK_SECONDS__;
     const MAX_SEGMENT_SECONDS = __MAX_SEGMENT_SECONDS__;
@@ -1612,6 +2119,175 @@ def live_page() -> HTMLResponse:
 
     function setStatus(value) {
       statusValue.textContent = value;
+    }
+
+    function generateClientSessionId() {
+      return (crypto && crypto.randomUUID) ? crypto.randomUUID() : String(Date.now());
+    }
+
+    function isEditCaptureMode() {
+      return parchiEditMode && !!activeEditField;
+    }
+
+    function getEditFieldLabel(fieldName) {
+      const labels = {
+        patient_name: "Patient",
+        complaints: "Complaints",
+        diagnosis: "Diagnosis",
+        advice: "Advice",
+        tests: "Tests",
+        blood_pressure: "BP",
+        temperature: "Temperature",
+        weight: "Weight",
+      };
+      if (fieldName.startsWith("medicine_name_")) {
+        return "Medicine";
+      }
+      if (fieldName.startsWith("medicine_frequency_")) {
+        return "Frequency";
+      }
+      if (fieldName.startsWith("medicine_timing_")) {
+        return "Timing";
+      }
+      if (fieldName.startsWith("medicine_duration_")) {
+        return "Duration";
+      }
+      if (fieldName.startsWith("medicine_notes_")) {
+        return "Notes";
+      }
+      return labels[fieldName] || fieldName || "field";
+    }
+
+    function getEditFieldElementId(fieldName) {
+      const ids = {
+        patient_name: "editPatientName",
+        complaints: "editComplaints",
+        diagnosis: "editDiagnosis",
+        advice: "editAdvice",
+        tests: "editTests",
+        blood_pressure: "editBloodPressure",
+        temperature: "editTemperature",
+        weight: "editWeight",
+      };
+      if (fieldName.startsWith("medicine_")) {
+        return `editField__${fieldName}`;
+      }
+      return ids[fieldName] || "";
+    }
+
+    function createBlankParchiData() {
+      return {
+        patient_name: "",
+        complaints: "",
+        diagnosis: "",
+        medicines: [],
+        vital_signs: {
+          blood_pressure: "",
+          temperature: "",
+          weight: "",
+        },
+        advice: "",
+        tests: "",
+        follow_up: "",
+      };
+    }
+
+    function resetEditDictationState(clearSelection = true) {
+      editFieldSessionId = "";
+      editFieldBaseValue = "";
+      editFieldRequestSeq = 0;
+      if (clearSelection) {
+        activeEditField = "";
+      }
+      document.querySelectorAll("[data-edit-field]").forEach((el) => {
+        el.style.outline = "";
+        el.style.borderColor = "";
+      });
+      document.querySelectorAll("[data-view-field]").forEach((el) => {
+        el.style.outline = "";
+        el.style.borderColor = "";
+      });
+    }
+
+    function mergeEditFieldValue(fieldName, baseValue, cleanedValue) {
+      const base = String(baseValue || "").trim();
+      const cleaned = String(cleanedValue || "").trim();
+      if (!cleaned) {
+        return base;
+      }
+      if (!base) {
+        return cleaned;
+      }
+      if (
+        ["patient_name", "diagnosis", "tests", "blood_pressure", "temperature", "weight"].includes(fieldName)
+        || fieldName.startsWith("medicine_")
+      ) {
+        return cleaned;
+      }
+      if (base.toLowerCase() === cleaned.toLowerCase() || base.toLowerCase().includes(cleaned.toLowerCase())) {
+        return base;
+      }
+      return `${base} ${cleaned}`.trim();
+    }
+
+    function updateActiveEditFieldValue(value) {
+      if (!activeEditField) {
+        return;
+      }
+      const elementId = getEditFieldElementId(activeEditField);
+      const fieldEl = elementId ? document.getElementById(elementId) : null;
+      const merged = mergeEditFieldValue(activeEditField, editFieldBaseValue, value);
+      if (fieldEl) {
+        fieldEl.value = merged;
+      }
+      if (activeEditField === "blood_pressure" || activeEditField === "temperature" || activeEditField === "weight") {
+        if (!parchiData.vital_signs) {
+          parchiData.vital_signs = {};
+        }
+        parchiData.vital_signs[activeEditField] = merged;
+      } else if (activeEditField.startsWith("medicine_")) {
+        const match = activeEditField.match(/^medicine_(name|frequency|timing|duration|notes)_(\d+)$/);
+        if (match) {
+          const medField = match[1];
+          const medIndex = Number(match[2]);
+          if (!parchiData.medicines) {
+            parchiData.medicines = [];
+          }
+          while (parchiData.medicines.length <= medIndex) {
+            parchiData.medicines.push({ name: "", frequency: "", timing: "", duration: "", notes: "" });
+          }
+          parchiData.medicines[medIndex][medField] = merged;
+        }
+      } else {
+        parchiData[activeEditField] = merged;
+      }
+    }
+
+    async function cleanActiveEditField(rawText) {
+      const text = String(rawText || "").trim();
+      if (!text || !activeEditField) {
+        return;
+      }
+      const fieldAtRequest = activeEditField;
+      const requestId = ++editFieldRequestSeq;
+      const response = await fetch(basePath + "clean-edit-field", {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({
+          raw_text: text,
+          field_name: fieldAtRequest,
+          session_id: editFieldSessionId || "",
+        }),
+      });
+      const payload = await response.json().catch(() => ({ detail: "Invalid edit cleaning response" }));
+      if (!response.ok) {
+        throw new Error(payload.detail || "Edit cleaning failed");
+      }
+      if (requestId !== editFieldRequestSeq || fieldAtRequest !== activeEditField) {
+        return;
+      }
+      setCleanLatency(payload.clean_elapsed_seconds || 0);
+      updateActiveEditFieldValue(payload.cleaned_value || "");
     }
 
     function setLatency(seconds) {
@@ -1711,12 +2387,17 @@ def live_page() -> HTMLResponse:
     }
 
     async function sendChunk(blob) {
-      if (!sessionId || !blob || blob.size === 0) {
+      const editMode = isEditCaptureMode();
+      const targetSessionId = editMode ? (editFieldSessionId || generateClientSessionId()) : sessionId;
+      if (!targetSessionId || !blob || blob.size === 0) {
         return;
+      }
+      if (editMode && !editFieldSessionId) {
+        editFieldSessionId = targetSessionId;
       }
       const startedAt = performance.now();
       const formData = new FormData();
-      formData.append("session_id", sessionId);
+      formData.append("session_id", targetSessionId);
       formData.append("audio_chunk", blob, `chunk-${chunkCount}.wav`);
       setStatus("Uploading chunk...");
       const response = await fetch(basePath + "transcribe-chunk", {
@@ -1730,22 +2411,34 @@ def live_page() -> HTMLResponse:
       const latencySeconds = (performance.now() - startedAt) / 1000.0;
       setLatency(latencySeconds);
       setWhisperLatency(payload.whisper_elapsed_seconds || latencySeconds);
-      chunkValue.textContent = String(payload.chunk_index);
-      transcriptEl.value = payload.accumulated_text || transcriptEl.value;
-      transcriptEl.scrollTop = transcriptEl.scrollHeight;
-      logLine(
-        `Chunk ${payload.chunk_index} processed in ${latencySeconds.toFixed(2)}s. ` +
-        `Partial text: ${payload.chunk_text || "(empty)"}`
-      );
-      if (payload.accumulated_text && payload.chunk_text) {
-        clearTimeout(cleanDebounceTimer);
-        cleanDebounceTimer = setTimeout(() => {
-          cleanTranscriptFromRaw(payload.accumulated_text).catch((error) => {
-            logLine(`Cleaning failed: ${error.message}`);
+      if (editMode) {
+        logLine(
+          `Edit chunk ${payload.chunk_index} for ${getEditFieldLabel(activeEditField)} processed in ${latencySeconds.toFixed(2)}s. ` +
+          `Partial text: ${payload.chunk_text || "(empty)"}`
+        );
+        if (payload.accumulated_text && payload.chunk_text && activeEditField) {
+          cleanActiveEditField(payload.accumulated_text).catch((error) => {
+            logLine(`Edit cleaning failed: ${error.message}`);
           });
-        }, 1500);
+        }
+      } else {
+        chunkValue.textContent = String(payload.chunk_index);
+        transcriptEl.value = payload.accumulated_text || transcriptEl.value;
+        transcriptEl.scrollTop = transcriptEl.scrollHeight;
+        logLine(
+          `Chunk ${payload.chunk_index} processed in ${latencySeconds.toFixed(2)}s. ` +
+          `Partial text: ${payload.chunk_text || "(empty)"}`
+        );
+        if (payload.accumulated_text && payload.chunk_text) {
+          clearTimeout(cleanDebounceTimer);
+          cleanDebounceTimer = setTimeout(() => {
+            cleanTranscriptFromRaw(payload.accumulated_text).catch((error) => {
+              logLine(`Cleaning failed: ${error.message}`);
+            });
+          }, 1500);
+        }
       }
-      setStatus(isStopping ? "Finalizing..." : "Listening");
+      setStatus(isStopping ? "Finalizing..." : (editMode ? `Listening for ${getEditFieldLabel(activeEditField)}` : "Listening"));
     }
 
     async function processUploadQueue() {
@@ -1801,7 +2494,9 @@ def live_page() -> HTMLResponse:
       return String(value || "")
         .replace(/&/g, "&amp;")
         .replace(/</g, "&lt;")
-        .replace(/>/g, "&gt;");
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#39;");
     }
 
     function renderMedicines(medicines) {
@@ -1815,14 +2510,16 @@ def live_page() -> HTMLResponse:
           <div>Timing</div>
           <div>Duration</div>
           <div>Notes</div>
+          <div>Action</div>
         </div>
-      ` + medicines.map((item) => `
+      ` + medicines.map((item, idx) => `
         <div class="med-row">
           <div><strong>${escapeHtml(item.name || "-")}</strong></div>
           <div>${escapeHtml(item.frequency || "-")}</div>
           <div>${escapeHtml(item.timing || "-")}</div>
           <div>${escapeHtml(item.duration || "-")}</div>
           <div>${escapeHtml(item.notes || "-")}</div>
+          <div><button class="med-delete-btn" onclick="deleteMedicine(${idx})">Delete</button></div>
         </div>
       `).join("");
     }
@@ -1836,15 +2533,15 @@ def live_page() -> HTMLResponse:
       }
       const rows = medicines.map((item, idx) => `
         <div class="med-row-edit" data-med-idx="${idx}">
-          <input type="text" class="med-input" placeholder="Medicine name" value="${escapeHtml(item.name || "")}" data-field="name" />
-          <select class="med-select" data-field="frequency" title="Select frequency">
+          <input type="text" class="med-input" placeholder="Medicine name" value="${escapeHtml(item.name || "")}" data-field="name" data-edit-field="medicine_name_${idx}" id="editField__medicine_name_${idx}" />
+          <select class="med-select" data-field="frequency" data-edit-field="medicine_frequency_${idx}" id="editField__medicine_frequency_${idx}" title="Select frequency">
             <option value="">Frequency</option>
             <option value="OD" ${item.frequency === "OD" ? "selected" : ""}>OD</option>
             <option value="BD" ${item.frequency === "BD" ? "selected" : ""}>BD</option>
             <option value="TDS" ${item.frequency === "TDS" ? "selected" : ""}>TDS</option>
             <option value="QID" ${item.frequency === "QID" ? "selected" : ""}>QID</option>
           </select>
-          <select class="med-select" data-field="timing" title="Select timing">
+          <select class="med-select" data-field="timing" data-edit-field="medicine_timing_${idx}" id="editField__medicine_timing_${idx}" title="Select timing">
             <option value="">Timing</option>
             <option value="Morning" ${item.timing === "Morning" ? "selected" : ""}>Morning</option>
             <option value="Afternoon" ${item.timing === "Afternoon" ? "selected" : ""}>Afternoon</option>
@@ -1862,8 +2559,8 @@ def live_page() -> HTMLResponse:
             <option value="Afternoon Evening and Night" ${item.timing === "Afternoon Evening and Night" ? "selected" : ""}>Afternoon Evening and Night</option>
             <option value="Morning Afternoon Evening and Night" ${item.timing === "Morning Afternoon Evening and Night" ? "selected" : ""}>Morning Afternoon Evening and Night</option>
           </select>
-          <input type="text" class="med-input" placeholder="Duration" value="${escapeHtml(item.duration || "")}" data-field="duration" />
-          <select class="med-select" data-field="notes" title="Select notes">
+          <input type="text" class="med-input" placeholder="Duration" value="${escapeHtml(item.duration || "")}" data-field="duration" data-edit-field="medicine_duration_${idx}" id="editField__medicine_duration_${idx}" />
+          <select class="med-select" data-field="notes" data-edit-field="medicine_notes_${idx}" id="editField__medicine_notes_${idx}" title="Select notes">
             <option value="">Notes</option>
             <option value="Before food" ${item.notes === "Before food" ? "selected" : ""}>Before food</option>
             <option value="After food" ${item.notes === "After food" ? "selected" : ""}>After food</option>
@@ -1919,10 +2616,113 @@ def live_page() -> HTMLResponse:
       return medicines;
     }
 
+    async function activateEditField(fieldName) {
+      if (!parchiEditMode) {
+        parchiEditMode = true;
+        updateParchiDisplay();
+      }
+      const elementId = getEditFieldElementId(fieldName);
+      const fieldEl = elementId ? document.getElementById(elementId) : null;
+      if (!fieldEl) {
+        return;
+      }
+      if (!isStopped && activeEditField && activeEditField !== fieldName) {
+        resetSegmentState();
+        uploadQueue = [];
+        uploadInFlight = false;
+        isFlushing = false;
+      }
+      resetEditDictationState(false);
+      activeEditField = fieldName;
+      editFieldSessionId = generateClientSessionId();
+      editFieldBaseValue = String(fieldEl.value || "").trim();
+      editFieldRequestSeq += 1;
+      fieldEl.style.outline = "2px solid #0f766e";
+      fieldEl.style.borderColor = "#0f766e";
+      logLine(`Edit dictation armed for ${getEditFieldLabel(fieldName)}.`);
+      if (isStopped) {
+        await startCapture("edit");
+      } else {
+        currentCaptureMode = "edit";
+        setStatus(`Listening for ${getEditFieldLabel(fieldName)}`);
+      }
+    }
+
+    function attachPreviewFieldHandlers() {
+      document.querySelectorAll("[data-view-field]").forEach((el) => {
+        const fieldName = el.dataset.viewField || "";
+        if (!fieldName) {
+          return;
+        }
+        const handler = () => {
+          activateEditField(fieldName).catch((error) => {
+            logLine(`Edit dictation failed: ${error.message}`);
+            setStatus("Error: " + error.message);
+          });
+        };
+        el.addEventListener("click", handler);
+      });
+    }
+
+    function attachEditFieldDictationHandlers() {
+      document.querySelectorAll("[data-edit-field]").forEach((el) => {
+        const fieldName = el.dataset.editField || "";
+        if (!fieldName) {
+          return;
+        }
+        const handler = () => {
+          activateEditField(fieldName).catch((error) => {
+            logLine(`Edit dictation failed: ${error.message}`);
+            setStatus("Error: " + error.message);
+          });
+        };
+        el.addEventListener("focus", handler);
+        el.addEventListener("click", handler);
+      });
+    }
+
+    function bindDelegatedFieldSelection() {
+      const routeFieldSelection = (target) => {
+        const editTarget = target?.closest?.("[data-edit-field]");
+        if (editTarget) {
+          const fieldName = editTarget.dataset.editField || "";
+          if (!fieldName) {
+            return;
+          }
+          activateEditField(fieldName).catch((error) => {
+            logLine(`Edit dictation failed: ${error.message}`);
+            setStatus("Error: " + error.message);
+          });
+          return;
+        }
+
+        const viewTarget = target?.closest?.("[data-view-field]");
+        if (viewTarget) {
+          const fieldName = viewTarget.dataset.viewField || "";
+          if (!fieldName) {
+            return;
+          }
+          activateEditField(fieldName).catch((error) => {
+            logLine(`Edit dictation failed: ${error.message}`);
+            setStatus("Error: " + error.message);
+          });
+        }
+      };
+
+      document.addEventListener("click", (event) => {
+        routeFieldSelection(event.target);
+      });
+
+      document.addEventListener("focusin", (event) => {
+        routeFieldSelection(event.target);
+      });
+    }
+
     function renderParchi(payload) {
       console.log("[PARCHI] Rendering with payload:", payload);
       parchiData = JSON.parse(JSON.stringify(payload));
       parchiEditMode = false;
+      resetEditDictationState(true);
       updateParchiDisplay();
       parchiPreviewEl.hidden = false;
       console.log("[PARCHI] Preview visible, Edit button accessible");
@@ -1944,42 +2744,43 @@ def live_page() -> HTMLResponse:
       
       if (parchiEditMode) {
         // Edit mode
-        document.getElementById("parchiPatientName").innerHTML = `<input type="text" class="parchi-edit-input" id="editPatientName" value="${escapeHtml(parchiData.patient_name || "")}" />`;
-        document.getElementById("parchiComplaints").innerHTML = `<textarea class="parchi-edit-textarea" id="editComplaints">${escapeHtml(parchiData.complaints || "")}</textarea>`;
-        document.getElementById("parchiDiagnosis").innerHTML = `<textarea class="parchi-edit-textarea" id="editDiagnosis">${escapeHtml(parchiData.diagnosis || "")}</textarea>`;
-        document.getElementById("parchiAdvice").innerHTML = `<textarea class="parchi-edit-textarea" id="editAdvice">${escapeHtml(parchiData.advice || "")}</textarea>`;
-        document.getElementById("parchiTests").innerHTML = `<input type="text" class="parchi-edit-input" id="editTests" value="${escapeHtml(parchiData.tests || "")}" />`;
+        document.getElementById("parchiPatientName").innerHTML = `<input type="text" class="parchi-edit-input" id="editPatientName" data-edit-field="patient_name" value="${escapeHtml(parchiData.patient_name || "")}" />`;
+        document.getElementById("parchiComplaints").innerHTML = `<textarea class="parchi-edit-textarea" id="editComplaints" data-edit-field="complaints">${escapeHtml(parchiData.complaints || "")}</textarea>`;
+        document.getElementById("parchiDiagnosis").innerHTML = `<textarea class="parchi-edit-textarea" id="editDiagnosis" data-edit-field="diagnosis">${escapeHtml(parchiData.diagnosis || "")}</textarea>`;
+        document.getElementById("parchiAdvice").innerHTML = `<textarea class="parchi-edit-textarea" id="editAdvice" data-edit-field="advice">${escapeHtml(parchiData.advice || "")}</textarea>`;
+        document.getElementById("parchiTests").innerHTML = `<input type="text" class="parchi-edit-input" id="editTests" data-edit-field="tests" value="${escapeHtml(parchiData.tests || "")}" />`;
         document.getElementById("parchiMedicines").innerHTML = renderMedicinesEditable(parchiData.medicines || []);
         
         // Add vital signs edit fields
         const vsEditEl = document.getElementById("parchiVitalSigns");
         if (vsEditEl) {
           vsEditEl.innerHTML = `
-            <div><strong>BP:</strong> <input type="text" class="parchi-edit-input" id="editBloodPressure" value="${escapeHtml(vs.blood_pressure || "")}" placeholder="e.g., 120/80 mmHg" /></div>
-            <div><strong>Temp:</strong> <input type="text" class="parchi-edit-input" id="editTemperature" value="${escapeHtml(vs.temperature || "")}" placeholder="e.g., 98.6°F" /></div>
-            <div><strong>Weight:</strong> <input type="text" class="parchi-edit-input" id="editWeight" value="${escapeHtml(vs.weight || "")}" placeholder="e.g., 70 kg" /></div>
+            <div><strong>BP:</strong> <input type="text" class="parchi-edit-input" id="editBloodPressure" data-edit-field="blood_pressure" value="${escapeHtml(vs.blood_pressure || "")}" placeholder="e.g., 120/80 mmHg" /></div>
+            <div><strong>Temp:</strong> <input type="text" class="parchi-edit-input" id="editTemperature" data-edit-field="temperature" value="${escapeHtml(vs.temperature || "")}" placeholder="e.g., 98.6°F" /></div>
+            <div><strong>Weight:</strong> <input type="text" class="parchi-edit-input" id="editWeight" data-edit-field="weight" value="${escapeHtml(vs.weight || "")}" placeholder="e.g., 70 kg" /></div>
           `;
         }
+        attachEditFieldDictationHandlers();
         
         document.getElementById("parchiEditBtn").style.display = "none";
         document.getElementById("parchiSaveBtn").style.display = "inline-block";
         document.getElementById("parchiCancelBtn").style.display = "inline-block";
       } else {
         // Preview mode
-        document.getElementById("parchiPatientName").innerHTML = `<div class="parchi-value">${escapeHtml(parchiData.patient_name || "-")}</div>`;
-        document.getElementById("parchiComplaints").innerHTML = `<div class="parchi-value">${escapeHtml(parchiData.complaints || "-")}</div>`;
-        document.getElementById("parchiDiagnosis").innerHTML = `<div class="parchi-value">${escapeHtml(parchiData.diagnosis || "-")}</div>`;
-        document.getElementById("parchiAdvice").innerHTML = `<div class="parchi-value">${escapeHtml(parchiData.advice || "-")}</div>`;
-        document.getElementById("parchiTests").innerHTML = `<div class="parchi-value">${escapeHtml(parchiData.tests || "-")}</div>`;
+        document.getElementById("parchiPatientName").innerHTML = `<div class="parchi-value" data-view-field="patient_name">${escapeHtml(parchiData.patient_name || "-")}</div>`;
+        document.getElementById("parchiComplaints").innerHTML = `<div class="parchi-value" data-view-field="complaints">${escapeHtml(parchiData.complaints || "-")}</div>`;
+        document.getElementById("parchiDiagnosis").innerHTML = `<div class="parchi-value" data-view-field="diagnosis">${escapeHtml(parchiData.diagnosis || "-")}</div>`;
+        document.getElementById("parchiAdvice").innerHTML = `<div class="parchi-value" data-view-field="advice">${escapeHtml(parchiData.advice || "-")}</div>`;
+        document.getElementById("parchiTests").innerHTML = `<div class="parchi-value" data-view-field="tests">${escapeHtml(parchiData.tests || "-")}</div>`;
         document.getElementById("parchiMedicines").innerHTML = renderMedicines(parchiData.medicines || []);
         
         // Vital signs display mode (already updated above)
         const vsDisplayEl = document.getElementById("parchiVitalSigns");
         if (vsDisplayEl) {
           vsDisplayEl.innerHTML = `
-            <div><strong>BP:</strong> <span id="parchiBloodPressure">-</span></div>
-            <div><strong>Temp:</strong> <span id="parchiTemperature">-</span></div>
-            <div><strong>Weight:</strong> <span id="parchiWeight">-</span></div>
+            <div data-view-field="blood_pressure"><strong>BP:</strong> <span id="parchiBloodPressure">-</span></div>
+            <div data-view-field="temperature"><strong>Temp:</strong> <span id="parchiTemperature">-</span></div>
+            <div data-view-field="weight"><strong>Weight:</strong> <span id="parchiWeight">-</span></div>
           `;
           // Update after rendering
           const bpSpan = document.getElementById("parchiBloodPressure");
@@ -1993,16 +2794,20 @@ def live_page() -> HTMLResponse:
         document.getElementById("parchiEditBtn").style.display = "inline-block";
         document.getElementById("parchiSaveBtn").style.display = "none";
         document.getElementById("parchiCancelBtn").style.display = "none";
+        attachPreviewFieldHandlers();
       }
     }
 
     window.enterParchiEditMode = function () {
       parchiEditMode = true;
+      resetEditDictationState(true);
       updateParchiDisplay();
+      setStatus("Edit ready");
     };
 
     window.saveParchiChanges = function () {
       try {
+        stopCapture();
         console.log("[PARCHI_EDIT] Saving changes...");
         parchiData.patient_name = document.getElementById("editPatientName").value || "";
         parchiData.complaints = document.getElementById("editComplaints").value || "";
@@ -2024,6 +2829,7 @@ def live_page() -> HTMLResponse:
         
         console.log("[PARCHI_EDIT] Data collected:", parchiData);
         parchiEditMode = false;
+        resetEditDictationState(true);
         updateParchiDisplay();
         logLine("✓ Prescription saved successfully.");
       } catch (error) {
@@ -2033,7 +2839,9 @@ def live_page() -> HTMLResponse:
     };
 
     window.cancelParchiEdit = function () {
+      stopCapture();
       parchiEditMode = false;
+      resetEditDictationState(true);
       updateParchiDisplay();
       logLine("Prescription edit cancelled.");
     };
@@ -2078,6 +2886,7 @@ def live_page() -> HTMLResponse:
       if (!text && !sessionId) {
         return;
       }
+      const requestId = ++parchiRenderSeq;
       const response = await fetch(basePath + "render-parchi", {
         method: "POST",
         headers: {"Content-Type": "application/json"},
@@ -2086,6 +2895,9 @@ def live_page() -> HTMLResponse:
       const payload = await response.json().catch(() => ({ detail: "Invalid parchi response" }));
       if (!response.ok) {
         throw new Error(payload.detail || "Parchi render failed");
+      }
+      if (requestId !== parchiRenderSeq) {
+        return;
       }
       renderParchi(payload.parchi || {});
       logLine(`✓ Prescription rendered in ${Number(payload.parchi_elapsed_seconds || 0).toFixed(2)}s.`);
@@ -2126,21 +2938,38 @@ def live_page() -> HTMLResponse:
       isFlushing = false;
     }
 
-    startBtn.addEventListener("click", async () => {
+    async function startCapture(mode = "main") {
       try {
-        sessionId = (crypto && crypto.randomUUID) ? crypto.randomUUID() : String(Date.now());
-        chunkCount = 0;
+        currentCaptureMode = mode;
+        if (mode === "main") {
+          sessionId = generateClientSessionId();
+          chunkCount = 0;
+          sessionValue.textContent = sessionId;
+          transcriptEl.value = "";
+          cleanedTranscriptEl.value = "";
+          if (!parchiData || typeof parchiData !== "object" || Array.isArray(parchiData)) {
+            parchiData = createBlankParchiData();
+          }
+          updateParchiDisplay();
+          parchiPreviewEl.hidden = false;
+          debugLog.textContent = "";
+          whisperCardValue.textContent = "0.00s";
+          cleanCardValue.textContent = "0.00s";
+          resetEditDictationState(true);
+        } else {
+          if (!editFieldSessionId) {
+            editFieldSessionId = generateClientSessionId();
+          }
+          if (!activeEditField) {
+            throw new Error("Select a prescription field before speaking.");
+          }
+        }
         isStopping = false;
         isStopped = false;
         isFlushing = false;
         uploadQueue = [];
         uploadInFlight = false;
         latencySamples = [];
-        sessionValue.textContent = sessionId;
-        transcriptEl.value = "";
-        debugLog.textContent = "";
-        whisperCardValue.textContent = "0.00s";
-        cleanCardValue.textContent = "0.00s";
 
         if (!window.isSecureContext) {
           logLine("Browser is not in a secure context. Microphone access usually requires HTTPS or localhost.");
@@ -2152,7 +2981,7 @@ def live_page() -> HTMLResponse:
           logLine("MediaRecorder not available. Using Web Audio PCM capture instead.");
         }
 
-        setStatus("Requesting mic...");
+        setStatus(mode === "edit" ? `Requesting mic for ${getEditFieldLabel(activeEditField)}...` : "Requesting mic...");
         logLine("Requesting microphone permission from the browser.");
 
         stream = await navigator.mediaDevices.getUserMedia({
@@ -2247,7 +3076,7 @@ def live_page() -> HTMLResponse:
           `PCM capture started at ${audioContext.sampleRate} Hz. ` +
           `Target WAV ${TARGET_SAMPLE_RATE} Hz, VAD threshold ${VAD_THRESHOLD}, silence ${SILENCE_SECONDS}s, max segment ${MAX_SEGMENT_SECONDS}s.`
         );
-        setStatus("Listening");
+        setStatus(mode === "edit" ? `Listening for ${getEditFieldLabel(activeEditField)}` : "Listening");
         startBtn.disabled = true;
         stopBtn.disabled = false;
       } catch (error) {
@@ -2256,9 +3085,12 @@ def live_page() -> HTMLResponse:
         startBtn.disabled = false;
         stopBtn.disabled = true;
       }
-    });
+    }
 
-    stopBtn.addEventListener("click", () => {
+    function stopCapture() {
+      if (isStopped) {
+        return Promise.resolve();
+      }
       isStopping = true;
       isStopped = true;
       clearTimeout(cleanDebounceTimer);
@@ -2266,7 +3098,7 @@ def live_page() -> HTMLResponse:
       if (processorNode) {
         processorNode.onaudioprocess = null;
       }
-      Promise.resolve()
+      return Promise.resolve()
         .then(() => flushSpeechBuffer(true))
         .finally(() => {
           if (processorNode) {
@@ -2289,13 +3121,29 @@ def live_page() -> HTMLResponse:
           preRollChunks = [];
           resetSegmentState();
           logLine("PCM capture stopped.");
-          setStatus("Stopped");
+          setStatus(parchiEditMode ? "Edit ready" : "Stopped");
           startBtn.disabled = false;
           stopBtn.disabled = true;
         });
+    }
+
+    startBtn.addEventListener("click", () => {
+      const mode = isEditCaptureMode() ? "edit" : "main";
+      startCapture(mode).catch((error) => {
+        logLine(`Start failed: ${error.message}`);
+        setStatus("Error: " + error.message);
+      });
+    });
+
+    stopBtn.addEventListener("click", () => {
+      stopCapture().catch((error) => {
+        logLine(`Stop failed: ${error.message}`);
+        setStatus("Error: " + error.message);
+      });
     });
 
     clearBtn.addEventListener("click", () => {
+      stopCapture();
       clearTimeout(cleanDebounceTimer);
       transcriptEl.value = "";
       cleanedTranscriptEl.value = "";
@@ -2313,7 +3161,10 @@ def live_page() -> HTMLResponse:
       uploadQueue = [];
       uploadInFlight = false;
       cleanRequestSeq = 0;
-      parchiPreviewEl.hidden = true;
+      parchiData = createBlankParchiData();
+      updateParchiDisplay();
+      parchiPreviewEl.hidden = false;
+      resetEditDictationState(true);
       resetSegmentState();
     });
 
@@ -2324,7 +3175,11 @@ def live_page() -> HTMLResponse:
     cancelCleanBtn.addEventListener("click", () => {
       cleanedTranscriptEl.value = "";
       cleanedTranscriptEl.readOnly = true;
-      parchiPreviewEl.hidden = true;
+      if (!parchiData || typeof parchiData !== "object" || Array.isArray(parchiData)) {
+        parchiData = createBlankParchiData();
+      }
+      updateParchiDisplay();
+      parchiPreviewEl.hidden = false;
       setCleanLatency(0);
     });
 
@@ -2335,6 +3190,10 @@ def live_page() -> HTMLResponse:
       });
     });
 
+    bindDelegatedFieldSelection();
+    parchiData = createBlankParchiData();
+    updateParchiDisplay();
+    parchiPreviewEl.hidden = false;
     logLine(`Page loaded. Secure context: ${window.isSecureContext ? "yes" : "no"}`);
   </script>
 </body>
@@ -2469,6 +3328,7 @@ async def transcribe_chunk(request: Request):
     if text:
         _session_store[session_id].append(text)
         _last_chunk_text[session_id] = text
+        _update_session_medicine_vocab(session_id, text)
 
     accumulated = _normalize_text(" ".join(_session_store[session_id]))
     _set_prompt_tail_for_session(session_id, accumulated)
@@ -2525,6 +3385,40 @@ async def clean_transcript(request: Request):
     )
 
 
+@app.post("/clean-edit-field")
+async def clean_edit_field(request: Request):
+    try:
+        payload = await request.json()
+    except Exception as exc:
+        return JSONResponse({"detail": f"Invalid edit cleaning request: {exc}"}, status_code=400)
+    raw_text = _normalize_text(str((payload or {}).get("raw_text") or ""))
+    field_name = _normalize_text(str((payload or {}).get("field_name") or ""))
+    session_id = _normalize_text(str((payload or {}).get("session_id") or ""))
+    if not raw_text:
+        return JSONResponse({"detail": "Missing raw_text"}, status_code=400)
+    if not field_name:
+        return JSONResponse({"detail": "Missing field_name"}, status_code=400)
+    try:
+        cleaned_value, clean_elapsed_seconds = await asyncio.wait_for(
+            run_in_threadpool(_clean_edit_field_value, field_name, raw_text, session_id),
+            timeout=CLEAN_REQUEST_TIMEOUT_SECONDS,
+        )
+    except asyncio.TimeoutError:
+        return JSONResponse(
+            {"detail": f"Edit cleaning timed out after {CLEAN_REQUEST_TIMEOUT_SECONDS:.1f}s"},
+            status_code=504,
+        )
+    except Exception as exc:
+        return JSONResponse({"detail": f"Edit field cleaning failed: {exc}"}, status_code=503)
+    return JSONResponse(
+        {
+            "field_name": field_name,
+            "cleaned_value": cleaned_value,
+            "clean_elapsed_seconds": clean_elapsed_seconds,
+        }
+    )
+
+
 @app.post("/render-parchi")
 async def render_parchi(request: Request):
     try:
@@ -2574,6 +3468,7 @@ async def reset_session(request: Request):
     _session_store.pop(session_id, None)
     _chunk_counts.pop(session_id, None)
     _session_prompt_tail.pop(session_id, None)
+    _session_medicine_vocab.pop(session_id, None)
     _last_chunk_text.pop(session_id, None)
     _session_cleaned_text.pop(session_id, None)
     _session_cleaned_raw.pop(session_id, None)

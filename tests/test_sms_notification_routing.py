@@ -32,6 +32,7 @@ class _Event:
     attempt_count: int = 0
     source_channel: str = ""
     doctor_name: str = ""
+    doctor_slug: str = ""
 
 
 class _FakeBookingRepo:
@@ -161,6 +162,7 @@ def test_sms_notification_uses_doctor_name_and_enabled_source_channel(monkeypatc
         doctor_id=7,
         source_channel="qr_scan",
         doctor_name="Sharma",
+        doctor_slug="Dr.Sharma",
     )
 
     processed = scheduler._process_notification_event(event)  # type: ignore[arg-type]
@@ -171,3 +173,66 @@ def test_sms_notification_uses_doctor_name_and_enabled_source_channel(monkeypatc
     assert len(sms_calls) == 1
     assert sms_calls[0][0] == "919888888888"
     assert "Dr. Sharma" in sms_calls[0][1]
+    assert "https://example.test/book" in sms_calls[0][1]
+
+
+def test_qr_sms_confirmation_never_uses_channel_sender(monkeypatch) -> None:
+    repo = _FakeBookingRepo()
+    channel_sender_calls = []
+    sms_credit_calls = []
+
+    scheduler = AutomationScheduler(
+        settings=SimpleNamespace(
+            sms_enabled=True,
+            sms_api_url="http://sms.example/send",
+            sms_api_key="key",
+            sms_sender="Dappto",
+            sms_message_type="TXT",
+            sms_response="Y",
+            sms_enabled_channels="qr_scan",
+            frontend_base_url="https://example.test/book",
+        ),
+        booking_repository=repo,  # type: ignore[arg-type]
+        send_message_fn=lambda to_number, body: channel_sender_calls.append((to_number, body)),
+        enabled=False,
+        doctor_reminder_enabled=False,
+    )
+
+    from src.runtime.sms_notification_service import SMSNotificationService
+
+    def _fake_send_sms_with_credit_check(self, *, doctor_id, appointment_id, phone_number, message, meta_json=""):
+        sms_credit_calls.append((doctor_id, appointment_id, phone_number, message))
+        return True, "SMS266", ""
+
+    monkeypatch.setattr(SMSNotificationService, "send_sms_with_credit_check", _fake_send_sms_with_credit_check)
+
+    event = _Event(
+        notification_id=103,
+        appointment_id=266,
+        event_type="CONFIRMATION",
+        channel="'sms'",
+        destination="9392569600",
+        status="PENDING",
+        patient_name="Vineeth",
+        clinic_name="Clinicone",
+        slot_date="2026-04-23",
+        slot_time="11:45",
+        patient_phone="9392569600",
+        patient_telegram_chat_id="",
+        meta_json='{"source_channel": "qr_scan"}',
+        admin_id=1,
+        doctor_id=4,
+        attempt_count=1,
+        source_channel="qr_scan",
+        doctor_name="Aman",
+        doctor_slug="Dr.Aman",
+    )
+
+    processed = scheduler._process_notification_event(event)  # type: ignore[arg-type]
+
+    assert processed is True
+    assert channel_sender_calls == []
+    assert len(sms_credit_calls) == 1
+    assert sms_credit_calls[0][2] == "9392569600"
+    assert "https://example.test/book" in sms_credit_calls[0][3]
+    assert repo.statuses == [(103, "SENT", "", "SMS266")]

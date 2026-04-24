@@ -130,6 +130,8 @@ class Settings:
     sms_message_type: str = "TXT"
     sms_response: str = "Y"
     sms_enabled_channels: str = ""
+    sms_base_url: str = ""
+    x_internal_api_key: str = ""
     frontend_base_url: str = ""
 
 
@@ -261,5 +263,10 @@ def load_settings() -> Settings:
         sms_message_type=os.getenv("SMS_MESSAGE_TYPE", "TXT").strip() or "TXT",
         sms_response=os.getenv("SMS_RESPONSE", "Y").strip() or "Y",
         sms_enabled_channels=os.getenv("SMS_ENABLED_CHANNELS", "").strip(),
+        sms_base_url=os.getenv("SMS_BASE_URL", "").strip(),
+        x_internal_api_key=(
+            os.getenv("X_INTERNAL_API_KEY", "").strip()
+            or os.getenv("INTERNAL_API_KEY", "").strip()
+        ),
         frontend_base_url=os.getenv("FRONTEND_BASE_URL", "").strip(),
     )
