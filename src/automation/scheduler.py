@@ -549,6 +549,15 @@ class AutomationScheduler:
             )
             return True
 
+        if self._is_stale_confirmation_sms(event):
+            self._booking_repository.mark_notification_event_retry(
+                notification_id=event.notification_id,
+                error_text="Skipped stale confirmation SMS because appointment time has already passed.",
+                backoff_seconds=1,
+                max_attempts=1,
+            )
+            return True
+
         message = self._build_sms_message(event)
         if not message:
             backoff = min(1800, 60 * (2 ** max(0, int(event.attempt_count))))
@@ -578,7 +587,16 @@ class AutomationScheduler:
                 return True
 
             error_text = f"SMS send failed: {failure_reason}" if failure_reason else "SMS API returned failure"
-            if failure_reason in ("CREDITS_EXHAUSTED", "SERVICE_DISABLED", "SMS_SERVICE_UNAVAILABLE"):
+            if failure_reason == "CREDITS_EXHAUSTED":
+                self._booking_repository.mark_notification_event_retry(
+                    notification_id=event.notification_id,
+                    error_text=error_text,
+                    backoff_seconds=1,
+                    max_attempts=1,
+                )
+                return True
+
+            if failure_reason in ("SERVICE_DISABLED", "SMS_SERVICE_UNAVAILABLE"):
                 self._mark_notification_event_status(
                     notification_id=event.notification_id,
                     status="FAILED",
@@ -736,6 +754,21 @@ class AutomationScheduler:
         except Exception as exc:
             LOGGER.error("Failed to build SMS message: %s", exc)
             return ""
+
+    def _is_stale_confirmation_sms(self, event: NotificationEvent) -> bool:
+        if str(getattr(event, "event_type", "") or "").strip().upper() != "CONFIRMATION":
+            return False
+        slot_date = str(getattr(event, "slot_date", "") or "").strip()
+        slot_time = str(getattr(event, "slot_time", "") or "").strip()
+        if not slot_date or not slot_time:
+            return False
+        for fmt in ("%Y-%m-%d %H:%M", "%Y-%m-%d %H:%M:%S"):
+            try:
+                scheduled_at = datetime.strptime(f"{slot_date} {slot_time}", fmt).replace(tzinfo=IST)
+                return scheduled_at <= datetime.now(IST)
+            except ValueError:
+                continue
+        return False
 
     def _build_doctor_report_xlsx(
         self,
