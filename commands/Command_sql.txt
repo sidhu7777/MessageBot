@@ -57,3 +57,441 @@ FLUSH PRIVILEGES;
 STATUS;
 
 
+#weekly backup complete sql code 
+
+#!/bin/bash
+
+set -u
+
+export TZ=Asia/Kolkata
+
+DATE=$(date +%F_%H-%M-%S)
+START_TS=$(date -d '7 days ago' '+%F %T')
+END_TS=$(date '+%F %T')
+START_DATE=$(date -d '7 days ago' '+%F')
+END_DATE=$(date '+%F')
+
+BACKUP_DIR="/backup/mysql"
+DB_NAME="doctor_db"
+EMAILS="bvineeth76@gmail.com harshittripathi991@gmail.com"
+MYSQL_DEFAULTS_FILE="/root/.my.cnf.bak"
+FILE="$BACKUP_DIR/${DB_NAME}_weekly_${DATE}.sql"
+ARCHIVE="$FILE.gz"
+
+mkdir -p "$BACKUP_DIR"
+
+SUCCESS_TABLES=0
+ATTEMPTED_TABLES=0
+FAILED_TABLE=""
+
+dump_table() {
+  local table="$1"
+  local where_clause="$2"
+
+  mysqldump \
+    --defaults-extra-file="$MYSQL_DEFAULTS_FILE" \
+    --single-transaction \
+    --skip-lock-tables \
+    --no-tablespaces \
+    --no-create-info \
+    --skip-triggers \
+    "$DB_NAME" \
+    "$table" \
+    --where="$where_clause" >> "$FILE"
+}
+
+run_dump() {
+  local table="$1"
+  local where_clause="$2"
+
+  if [ -n "$FAILED_TABLE" ]; then
+    return
+  fi
+
+  ATTEMPTED_TABLES=$((ATTEMPTED_TABLES + 1))
+
+  if dump_table "$table" "$where_clause"; then
+    SUCCESS_TABLES=$((SUCCESS_TABLES + 1))
+  else
+    FAILED_TABLE="$table"
+  fi
+}
+
+{
+  echo "-- Weekly linked-data backup for ${DB_NAME}"
+  echo "-- IST window: ${START_TS} to ${END_TS}"
+  echo
+} > "$FILE"
+
+run_dump "announcement_campaign_recipients" "(created_at >= '${START_TS}' AND created_at < '${END_TS}') OR (read_at >= '${START_TS}' AND read_at < '${END_TS}')"
+run_dump "announcement_campaigns" "(created_at >= '${START_TS}' AND created_at < '${END_TS}') OR (target_date >= '${START_DATE}' AND target_date < '${END_DATE}')"
+run_dump "appointment" "(created_at >= '${START_TS}' AND created_at < '${END_TS}') OR (appointment_date >= '${START_DATE}' AND appointment_date < '${END_DATE}')"
+run_dump "appointment_notification_log" "(created_at >= '${START_TS}' AND created_at < '${END_TS}') OR (sent_at >= '${START_TS}' AND sent_at < '${END_TS}') OR (next_retry_at >= '${START_TS}' AND next_retry_at < '${END_TS}') OR (delivery_updated_at >= '${START_TS}' AND delivery_updated_at < '${END_TS}') OR (dead_at >= '${START_TS}' AND dead_at < '${END_TS}')"
+run_dump "chat_messages" "created_at >= '${START_TS}' AND created_at < '${END_TS}'"
+run_dump "conversation_sessions" "updated_at >= '${START_TS}' AND updated_at < '${END_TS}'"
+run_dump "doctor_cache_invalidation_queue" "(created_at >= '${START_TS}' AND created_at < '${END_TS}') OR (updated_at >= '${START_TS}' AND updated_at < '${END_TS}') OR (slot_date >= '${START_DATE}' AND slot_date < '${END_DATE}') OR (old_slot_date >= '${START_DATE}' AND old_slot_date < '${END_DATE}')"
+run_dump "doctor_remainder_queue" "(created_at >= '${START_TS}' AND created_at < '${END_TS}') OR (updated_at >= '${START_TS}' AND updated_at < '${END_TS}') OR (sent_at >= '${START_TS}' AND sent_at < '${END_TS}') OR (slot_date >= '${START_DATE}' AND slot_date < '${END_DATE}') OR (next_retry_at >= '${START_TS}' AND next_retry_at < '${END_TS}')"
+run_dump "inbound_message_sids" "received_at >= '${START_TS}' AND received_at < '${END_TS}'"
+run_dump "inbound_turn_queue" "(created_at >= '${START_TS}' AND created_at < '${END_TS}') OR (updated_at >= '${START_TS}' AND updated_at < '${END_TS}') OR (next_retry_at >= '${START_TS}' AND next_retry_at < '${END_TS}') OR (dead_at >= '${START_TS}' AND dead_at < '${END_TS}')"
+run_dump "message_delivery_status" "(created_at >= '${START_TS}' AND created_at < '${END_TS}') OR (updated_at >= '${START_TS}' AND updated_at < '${END_TS}')"
+run_dump "qr_walkin_queue" "(created_at >= '${START_TS}' AND created_at < '${END_TS}') OR (updated_at >= '${START_TS}' AND updated_at < '${END_TS}') OR (queue_date >= '${START_DATE}' AND queue_date < '${END_DATE}') OR (estimated_time >= '${START_TS}' AND estimated_time < '${END_TS}')"
+run_dump "patients" "patient_id IN (
+  SELECT patient_id
+  FROM appointment
+  WHERE patient_id IS NOT NULL
+    AND (
+      (created_at >= '${START_TS}' AND created_at < '${END_TS}')
+      OR (appointment_date >= '${START_DATE}' AND appointment_date < '${END_DATE}')
+    )
+  UNION
+  SELECT patient_id
+  FROM chat_messages
+  WHERE patient_id IS NOT NULL
+    AND created_at >= '${START_TS}'
+    AND created_at < '${END_TS}'
+)"
+run_dump "patient_whatsapp_numbers" "patient_id IN (
+  SELECT patient_id
+  FROM appointment
+  WHERE patient_id IS NOT NULL
+    AND (
+      (created_at >= '${START_TS}' AND created_at < '${END_TS}')
+      OR (appointment_date >= '${START_DATE}' AND appointment_date < '${END_DATE}')
+    )
+  UNION
+  SELECT patient_id
+  FROM chat_messages
+  WHERE patient_id IS NOT NULL
+    AND created_at >= '${START_TS}'
+    AND created_at < '${END_TS}'
+)"
+run_dump "doctors" "doctor_id IN (
+  SELECT doctor_id
+  FROM appointment
+  WHERE doctor_id IS NOT NULL
+    AND (
+      (created_at >= '${START_TS}' AND created_at < '${END_TS}')
+      OR (appointment_date >= '${START_DATE}' AND appointment_date < '${END_DATE}')
+    )
+  UNION
+  SELECT doctor_id
+  FROM chat_messages
+  WHERE doctor_id IS NOT NULL
+    AND created_at >= '${START_TS}'
+    AND created_at < '${END_TS}'
+  UNION
+  SELECT doctor_id
+  FROM doctor_channel_bindings
+  WHERE (created_at >= '${START_TS}' AND created_at < '${END_TS}')
+     OR (updated_at >= '${START_TS}' AND updated_at < '${END_TS}')
+)"
+run_dump "clinics" "clinic_id IN (
+  SELECT clinic_id
+  FROM appointment
+  WHERE clinic_id IS NOT NULL
+    AND (
+      (created_at >= '${START_TS}' AND created_at < '${END_TS}')
+      OR (appointment_date >= '${START_DATE}' AND appointment_date < '${END_DATE}')
+    )
+  UNION
+  SELECT clinic_id
+  FROM doctor_channel_bindings
+  WHERE clinic_id IS NOT NULL
+    AND (
+      (created_at >= '${START_TS}' AND created_at < '${END_TS}')
+      OR (updated_at >= '${START_TS}' AND updated_at < '${END_TS}')
+    )
+)"
+run_dump "admins" "admin_id IN (
+  SELECT admin_id
+  FROM appointment
+  WHERE admin_id IS NOT NULL
+    AND (
+      (created_at >= '${START_TS}' AND created_at < '${END_TS}')
+      OR (appointment_date >= '${START_DATE}' AND appointment_date < '${END_DATE}')
+    )
+  UNION
+  SELECT admin_id
+  FROM channel_accounts
+  WHERE admin_id IS NOT NULL
+    AND (
+      (created_at >= '${START_TS}' AND created_at < '${END_TS}')
+      OR (updated_at >= '${START_TS}' AND updated_at < '${END_TS}')
+    )
+  UNION
+  SELECT admin_id
+  FROM doctors
+  WHERE admin_id IS NOT NULL
+    AND doctor_id IN (
+      SELECT doctor_id
+      FROM appointment
+      WHERE doctor_id IS NOT NULL
+        AND (
+          (created_at >= '${START_TS}' AND created_at < '${END_TS}')
+          OR (appointment_date >= '${START_DATE}' AND appointment_date < '${END_DATE}')
+        )
+      UNION
+      SELECT doctor_id
+      FROM chat_messages
+      WHERE doctor_id IS NOT NULL
+        AND created_at >= '${START_TS}'
+        AND created_at < '${END_TS}'
+    )
+)"
+run_dump "doctor_channel_bindings" "(created_at >= '${START_TS}' AND created_at < '${END_TS}')
+OR (updated_at >= '${START_TS}' AND updated_at < '${END_TS}')
+OR doctor_id IN (
+  SELECT doctor_id
+  FROM appointment
+  WHERE doctor_id IS NOT NULL
+    AND (
+      (created_at >= '${START_TS}' AND created_at < '${END_TS}')
+      OR (appointment_date >= '${START_DATE}' AND appointment_date < '${END_DATE}')
+    )
+  UNION
+  SELECT doctor_id
+  FROM chat_messages
+  WHERE doctor_id IS NOT NULL
+    AND created_at >= '${START_TS}'
+    AND created_at < '${END_TS}'
+)"
+run_dump "channel_accounts" "channel_account_id IN (
+  SELECT channel_account_id
+  FROM doctor_channel_bindings
+  WHERE
+    (created_at >= '${START_TS}' AND created_at < '${END_TS}')
+    OR (updated_at >= '${START_TS}' AND updated_at < '${END_TS}')
+    OR doctor_id IN (
+      SELECT doctor_id
+      FROM appointment
+      WHERE doctor_id IS NOT NULL
+        AND (
+          (created_at >= '${START_TS}' AND created_at < '${END_TS}')
+          OR (appointment_date >= '${START_DATE}' AND appointment_date < '${END_DATE}')
+        )
+      UNION
+      SELECT doctor_id
+      FROM chat_messages
+      WHERE doctor_id IS NOT NULL
+        AND created_at >= '${START_TS}'
+        AND created_at < '${END_TS}'
+    )
+)
+OR (created_at >= '${START_TS}' AND created_at < '${END_TS}')
+OR (updated_at >= '${START_TS}' AND updated_at < '${END_TS}')"
+run_dump "clinic_staff" "(created_at >= '${START_TS}' AND created_at < '${END_TS}')
+OR (valid_from >= '${START_DATE}' AND valid_from < '${END_DATE}')
+OR (valid_to >= '${START_DATE}' AND valid_to < '${END_DATE}')
+OR clinic_id IN (
+  SELECT clinic_id
+  FROM appointment
+  WHERE clinic_id IS NOT NULL
+    AND (
+      (created_at >= '${START_TS}' AND created_at < '${END_TS}')
+      OR (appointment_date >= '${START_DATE}' AND appointment_date < '${END_DATE}')
+    )
+)"
+run_dump "doctor_clinic_schedule" "(effective_from >= '${START_DATE}' AND effective_from < '${END_DATE}')
+OR (effective_to >= '${START_DATE}' AND effective_to < '${END_DATE}')
+OR doctor_id IN (
+  SELECT doctor_id
+  FROM appointment
+  WHERE doctor_id IS NOT NULL
+    AND (
+      (created_at >= '${START_TS}' AND created_at < '${END_TS}')
+      OR (appointment_date >= '${START_DATE}' AND appointment_date < '${END_DATE}')
+    )
+  UNION
+  SELECT doctor_id
+  FROM chat_messages
+  WHERE doctor_id IS NOT NULL
+    AND created_at >= '${START_TS}'
+    AND created_at < '${END_TS}'
+)
+OR clinic_id IN (
+  SELECT clinic_id
+  FROM appointment
+  WHERE clinic_id IS NOT NULL
+    AND (
+      (created_at >= '${START_TS}' AND created_at < '${END_TS}')
+      OR (appointment_date >= '${START_DATE}' AND appointment_date < '${END_DATE}')
+    )
+)"
+run_dump "doctor_leaves" "leave_date >= '${START_DATE}' AND leave_date < '${END_DATE}'
+OR doctor_id IN (
+  SELECT doctor_id
+  FROM appointment
+  WHERE doctor_id IS NOT NULL
+    AND (
+      (created_at >= '${START_TS}' AND created_at < '${END_TS}')
+      OR (appointment_date >= '${START_DATE}' AND appointment_date < '${END_DATE}')
+    )
+  UNION
+  SELECT doctor_id
+  FROM chat_messages
+  WHERE doctor_id IS NOT NULL
+    AND created_at >= '${START_TS}'
+    AND created_at < '${END_TS}'
+)"
+run_dump "doctor_whatsapp_numbers" "created_at >= '${START_TS}' AND created_at < '${END_TS}'
+OR doctor_id IN (
+  SELECT doctor_id
+  FROM appointment
+  WHERE doctor_id IS NOT NULL
+    AND (
+      (created_at >= '${START_TS}' AND created_at < '${END_TS}')
+      OR (appointment_date >= '${START_DATE}' AND appointment_date < '${END_DATE}')
+    )
+  UNION
+  SELECT doctor_id
+  FROM chat_messages
+  WHERE doctor_id IS NOT NULL
+    AND created_at >= '${START_TS}'
+    AND created_at < '${END_TS}'
+)"
+run_dump "user_tokens" "(created_at >= '${START_TS}' AND created_at < '${END_TS}')
+OR (expires_at >= '${START_TS}' AND expires_at < '${END_TS}')
+OR user_id IN (
+  SELECT user_id
+  FROM doctors
+  WHERE user_id IS NOT NULL
+    AND doctor_id IN (
+      SELECT doctor_id
+      FROM appointment
+      WHERE doctor_id IS NOT NULL
+        AND (
+          (created_at >= '${START_TS}' AND created_at < '${END_TS}')
+          OR (appointment_date >= '${START_DATE}' AND appointment_date < '${END_DATE}')
+        )
+      UNION
+      SELECT doctor_id
+      FROM chat_messages
+      WHERE doctor_id IS NOT NULL
+        AND created_at >= '${START_TS}'
+        AND created_at < '${END_TS}'
+    )
+  UNION
+  SELECT user_id
+  FROM admins
+  WHERE user_id IS NOT NULL
+    AND admin_id IN (
+      SELECT admin_id
+      FROM appointment
+      WHERE admin_id IS NOT NULL
+        AND (
+          (created_at >= '${START_TS}' AND created_at < '${END_TS}')
+          OR (appointment_date >= '${START_DATE}' AND appointment_date < '${END_DATE}')
+        )
+    )
+)"
+run_dump "users" "user_id IN (
+  SELECT user_id
+  FROM doctors
+  WHERE user_id IS NOT NULL
+    AND doctor_id IN (
+      SELECT doctor_id
+      FROM appointment
+      WHERE doctor_id IS NOT NULL
+        AND (
+          (created_at >= '${START_TS}' AND created_at < '${END_TS}')
+          OR (appointment_date >= '${START_DATE}' AND appointment_date < '${END_DATE}')
+        )
+      UNION
+      SELECT doctor_id
+      FROM chat_messages
+      WHERE doctor_id IS NOT NULL
+        AND created_at >= '${START_TS}'
+        AND created_at < '${END_TS}'
+    )
+  UNION
+  SELECT user_id
+  FROM admins
+  WHERE user_id IS NOT NULL
+    AND admin_id IN (
+      SELECT admin_id
+      FROM appointment
+      WHERE admin_id IS NOT NULL
+        AND (
+          (created_at >= '${START_TS}' AND created_at < '${END_TS}')
+          OR (appointment_date >= '${START_DATE}' AND appointment_date < '${END_DATE}')
+        )
+    )
+)"
+
+SUMMARY="Tables attempted: ${ATTEMPTED_TABLES}, succeeded: ${SUCCESS_TABLES}, failed: ${FAILED_TABLE:-none}"
+
+if [ -z "$FAILED_TABLE" ] && [ -s "$FILE" ]; then
+  gzip "$FILE"
+
+  if [ -s "$ARCHIVE" ]; then
+    rclone copy "$ARCHIVE" gdrive:mysql-backups/
+
+    if [ $? -eq 0 ]; then
+      MESSAGE="SUCCESS: Weekly linked-data backup created and uploaded: $ARCHIVE | $SUMMARY"
+    else
+      MESSAGE="WARNING: Weekly linked-data backup created locally but Google Drive upload failed: $ARCHIVE | $SUMMARY"
+    fi
+  else
+    MESSAGE="FAILED: Weekly backup compression failed | $SUMMARY"
+  fi
+else
+  rm -f "$FILE"
+  MESSAGE="FAILED: Weekly backup dump failed at table: $FAILED_TABLE | $SUMMARY"
+fi
+
+echo "$MESSAGE"
+echo "$MESSAGE" | mail -s "Weekly MySQL Backup Status" $EMAILS
+
+find /backup/mysql -type f -mtime +14 -delete
+
+
+
+# full backup complete sql code 
+
+
+#!/bin/bash
+
+set -u
+
+export TZ=Asia/Kolkata
+
+DATE=$(date +%F_%H-%M-%S)
+BACKUP_DIR="/backup/mysql"
+DB_NAME="doctor_db"
+EMAILS="bvineeth76@gmail.com harshittripathi991@gmail.com"
+MYSQL_DEFAULTS_FILE="/root/.my.cnf.bak"
+FILE="$BACKUP_DIR/${DB_NAME}_full_${DATE}.sql"
+ARCHIVE="$FILE.gz"
+
+mkdir -p "$BACKUP_DIR"
+
+mysqldump \
+  --defaults-extra-file="$MYSQL_DEFAULTS_FILE" \
+  --single-transaction \
+  --skip-lock-tables \
+  --no-tablespaces \
+  "$DB_NAME" > "$FILE"
+
+if [ $? -eq 0 ] && [ -s "$FILE" ]; then
+  gzip "$FILE"
+
+  if [ -s "$ARCHIVE" ]; then
+    rclone copy "$ARCHIVE" gdrive:mysql-backups/
+
+    if [ $? -eq 0 ]; then
+      MESSAGE="SUCCESS: Full MySQL backup created and uploaded: $ARCHIVE"
+    else
+      MESSAGE="WARNING: Full MySQL backup created locally but Google Drive upload failed: $ARCHIVE"
+    fi
+  else
+    MESSAGE="FAILED: Full backup compression failed"
+  fi
+else
+  rm -f "$FILE"
+  MESSAGE="FAILED: Full MySQL dump failed"
+fi
+
+echo "$MESSAGE"
+echo "$MESSAGE" | mail -s "Full MySQL Backup Status" $EMAILS
+
+find /backup/mysql -type f -name '*_full_*.sql.gz' -mtime +35 -delete

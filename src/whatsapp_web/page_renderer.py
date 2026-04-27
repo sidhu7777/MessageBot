@@ -150,6 +150,7 @@ def render_whatsapp_web_page_html(
                 "confirmYes": "Yes, Cancel",
                 "confirmNo": "No",
                 "appointmentLabel": "Appointment",
+                "patientNamePrefix": "Patient Name",
                 "clinicPrefix": "Clinic",
                 "datePrefix": "Date",
                 "timePrefix": "Time",
@@ -205,6 +206,7 @@ def render_whatsapp_web_page_html(
                 "confirmYes": "हाँ, कैंसल करें",
                 "confirmNo": "नहीं",
                 "appointmentLabel": "अपॉइंटमेंट",
+                "patientNamePrefix": "मरीज का नाम",
                 "clinicPrefix": "क्लिनिक",
                 "datePrefix": "तारीख",
                 "timePrefix": "समय",
@@ -260,6 +262,7 @@ def render_whatsapp_web_page_html(
                 "confirmYes": "Haan, Cancel kariye",
                 "confirmNo": "Nahi",
                 "appointmentLabel": "Appointment",
+                "patientNamePrefix": "Patient Name",
                 "clinicPrefix": "Clinic",
                 "datePrefix": "Date",
                 "timePrefix": "Time",
@@ -862,6 +865,7 @@ def render_whatsapp_web_page_html(
       return `
         <div class="appt-card">
           <div class="appt-meta">
+            <div><strong>${{texts.patientNamePrefix}}:</strong> ${{row.patient_name || "-"}}</div>
             <div><strong>${{texts.appointmentIdPrefix}}:</strong> ${{appointmentNumber}}</div>
             <div><strong>${{texts.clinicPrefix}}:</strong> ${{row.clinic_name || "-"}}</div>
             <div><strong>${{texts.datePrefix}}:</strong> ${{row.slot_date || "-"}}</div>

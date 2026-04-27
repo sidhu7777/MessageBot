@@ -121,6 +121,7 @@ def get_message(response_language: str, key: str, **kwargs: object) -> str:
         "go_back_hint": "Press \"0\" to go back.",
         "existing_booking_found": (
             "You already have a booked appointment:\n"
+            "Patient Name: {patient_name}\n"
             "Appointment ID: {appointment_id}\n"
             "Clinic: {clinic_name}\n"
             "Date: {appointment_date}\n"
@@ -375,6 +376,7 @@ def get_message(response_language: str, key: str, **kwargs: object) -> str:
         "go_back_hint": "\"0\" दबाकर वापस जाएं।",
         "existing_booking_found": (
             "आपकी एक बुक की हुई अपॉइंटमेंट पहले से मौजूद है:\n"
+            "मरीज का नाम: {patient_name}\n"
             "अपॉइंटमेंट आईडी: {appointment_id}\n"
             "क्लिनिक: {clinic_name}\n"
             "तारीख: {appointment_date}\n"
@@ -608,6 +610,7 @@ def get_message(response_language: str, key: str, **kwargs: object) -> str:
         ),
         "existing_booking_found": (
             "Aapki ek booked appointment pehle se maujood hai:\n"
+            "Patient Name: {patient_name}\n"
             "Appointment ID: {appointment_id}\n"
             "Clinic: {clinic_name}\n"
             "Date: {appointment_date}\n"

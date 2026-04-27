@@ -22,6 +22,7 @@ def test_existing_booking_found_uses_patient_id_label(monkeypatch):
             {
                 "appointment_id": 5,
                 "booking_number": 5,
+                "patient_name": "Rahul Sharma",
                 "slot_date": "2026-03-13",
                 "slot_time": "14:30:00",
                 "clinic_name": "Health Plus Clinic",
@@ -34,5 +35,6 @@ def test_existing_booking_found_uses_patient_id_label(monkeypatch):
     reply = fsm._existing_booking_entry_response()
 
     assert reply is not None
-    assert "Patient ID: 5" in reply
+    assert "Patient Name: Rahul Sharma" in reply
+    assert "Appointment ID: 5" in reply
     assert "Booking Number:" not in reply

@@ -632,6 +632,7 @@ class AppointmentFSM:
             display_number = rows[0]["appointment_id"]
         return self._msg(
             "existing_booking_found",
+            patient_name=rows[0].get("patient_name") or "-",
             appointment_id=display_number,
             appointment_date=rows[0].get("slot_date") or "-",
             appointment_time=self._format_time_for_display(rows[0].get("slot_time") or "-"),
@@ -672,6 +673,7 @@ class AppointmentFSM:
             display_number = matched_rows[0]["appointment_id"]
         return self._msg(
             "existing_booking_found",
+            patient_name=matched_rows[0].get("patient_name") or "-",
             appointment_id=display_number,
             appointment_date=matched_rows[0].get("slot_date") or "-",
             appointment_time=self._format_time_for_display(matched_rows[0].get("slot_time") or "-"),
@@ -730,8 +732,9 @@ class AppointmentFSM:
             if display_number is None:
                 display_number = row.get("appointment_id")
             lines.append(
-                f"{idx}. {row.get('clinic_name') or '-'}, Date: {row.get('slot_date') or '-'}, "
-                f"Time: {self._format_time_for_display(str(row.get('slot_time') or '-'))}, Booking Number: {display_number}"
+                f"{idx}. Name: {row.get('patient_name') or '-'}, Clinic: {row.get('clinic_name') or '-'}, "
+                f"Date: {row.get('slot_date') or '-'}, Time: {self._format_time_for_display(str(row.get('slot_time') or '-'))}, "
+                f"Booking Number: {display_number}"
             )
         lines.append("")
         lines.append(self._msg("go_back_hint"))

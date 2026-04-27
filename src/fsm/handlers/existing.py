@@ -96,8 +96,9 @@ def handle_existing_booking_action_state(fsm: "AppointmentFSM", lower: str) -> s
             if display_number is None:
                 display_number = row.get("appointment_id")
             lines.append(
-                f"{idx}. {row.get('clinic_name') or '-'}, Date: {row.get('slot_date') or '-'}, "
-                f"Time: {fsm._format_time_for_display(str(row.get('slot_time') or '-'))}, Booking Number: {display_number}"
+                f"{idx}. Name: {row.get('patient_name') or '-'}, Clinic: {row.get('clinic_name') or '-'}, "
+                f"Date: {row.get('slot_date') or '-'}, Time: {fsm._format_time_for_display(str(row.get('slot_time') or '-'))}, "
+                f"Booking Number: {display_number}"
             )
         lines.append(fsm._msg("existing_booking_choice_again"))
         return fsm._respond("\n".join(lines))
