@@ -4,6 +4,10 @@ from datetime import datetime
 from typing import Optional
 
 
+def _normalized_person_name(value: object) -> str:
+    return " ".join(str(value or "").strip().lower().split())
+
+
 def cancel_appointment(
     repo,
     appointment_id: int,
@@ -498,6 +502,35 @@ def save_confirmed_appointment(
             if by_chat:
                 patient_id = int(by_chat["patient_id"])
 
+        normalized_phone = repo._normalize_phone(str(context.phone_number or ""))
+
+        # For self bookings, keep one self profile per phone from now on.
+        # Existing historical duplicates are left untouched; future bookings reuse
+        # the newest matching SELF row instead of creating another one.
+        if (
+            patient_id is None
+            and booking_for_self is True
+            and normalized_phone
+            and "profile_type" in patient_columns
+        ):
+            phone_expr = repo._normalized_phone_sql_expr("phone")
+            cur.execute(
+                f"""
+                SELECT patient_id
+                FROM patients
+                WHERE admin_id = %s
+                  AND UPPER(COALESCE(profile_type, '')) = 'SELF'
+                  AND ({phone_expr} = %s OR RIGHT({phone_expr}, 10) = %s)
+                ORDER BY patient_id DESC
+                LIMIT 1
+                FOR UPDATE
+                """,
+                (actual_admin_id, normalized_phone, normalized_phone[-10:]),
+            )
+            self_row = cur.fetchone()
+            if self_row:
+                patient_id = int(self_row["patient_id"])
+
         # Fallback lookup by name/admin, and phone when present.
         if patient_id is None:
             lookup_sql = (
@@ -506,7 +539,6 @@ def save_confirmed_appointment(
                 "WHERE full_name = %s AND admin_id = %s"
             )
             lookup_params: list[object] = [context.patient_name, actual_admin_id]
-            normalized_phone = repo._normalize_phone(str(context.phone_number or ""))
             if normalized_phone:
                 lookup_sql += " AND REPLACE(REPLACE(REPLACE(COALESCE(phone,''), ' ', ''), '-', ''), '+', '') LIKE %s"
                 lookup_params.append(f"%{normalized_phone[-10:]}")
@@ -703,6 +735,48 @@ def save_confirmed_appointment(
                     """,
                     (resolved_doctor_id, patient_id),
                 )
+
+            normalized_name = _normalized_person_name(context.patient_name)
+            if normalized_phone and normalized_name:
+                phone_expr = repo._normalized_phone_sql_expr("p.phone")
+                cur.execute(
+                    f"""
+                    SELECT
+                        a.appointment_id,
+                        DATE_FORMAT(a.appointment_date, '%Y-%m-%d') AS slot_date,
+                        TIME_FORMAT(a.start_time, '%H:%i') AS slot_time
+                    FROM {appointment_table} a
+                    JOIN patients p ON p.patient_id = a.patient_id
+                    WHERE a.admin_id = %s
+                      AND a.doctor_id = %s
+                      AND a.appointment_date = %s
+                      AND a.status IN ('BOOKED', 'PENDING', 'CONFIRMED')
+                      AND LOWER(TRIM(COALESCE(p.full_name, ''))) = %s
+                      AND ({phone_expr} = %s OR RIGHT({phone_expr}, 10) = %s)
+                    ORDER BY a.start_time DESC, a.appointment_id DESC
+                    LIMIT 1
+                    FOR UPDATE
+                    """,
+                    (
+                        actual_admin_id,
+                        resolved_doctor_id,
+                        context.appointment_date,
+                        normalized_name,
+                        normalized_phone,
+                        normalized_phone[-10:],
+                    ),
+                )
+                same_day_identity = cur.fetchone()
+                if same_day_identity:
+                    conn.rollback()
+                    return BookingResult(
+                        False,
+                        (
+                            "Patient already has an active appointment for this date. "
+                            "Please cancel or reschedule the existing appointment first."
+                        ),
+                        appointment_id=int(same_day_identity["appointment_id"]),
+                    )
 
             requested_start = datetime.strptime(str(context.appointment_time), "%H:%M").time()
             cur.execute(

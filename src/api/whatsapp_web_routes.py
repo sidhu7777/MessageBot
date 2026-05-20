@@ -10,6 +10,7 @@ from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import HTMLResponse, JSONResponse
 
 from src.messages.templates import get_message
+from src.timezone_utils import now_in_runtime_timezone
 from src.whatsapp_web.page_renderer import render_whatsapp_web_page_html
 
 
@@ -437,6 +438,68 @@ def register_whatsapp_web_routes(
             return ""
         return known_name
 
+    def _find_same_day_identity_appointment(
+        *,
+        patient_name: str,
+        phone_number: str,
+        doctor_id: int,
+        slot_date: str,
+        admin_id: int | None,
+    ) -> dict | None:
+        if not booking_repository:
+            return None
+        normalized_name = _normalized_person_name(patient_name)
+        normalized_phone = booking_repository._normalize_phone(phone_number)
+        actual_admin_id = admin_id or booking_repository.default_admin_id()
+        if not normalized_name or not normalized_phone or not actual_admin_id or not slot_date:
+            return None
+        conn = booking_repository._connect()
+        cur = conn.cursor(dictionary=True)
+        try:
+            appointment_table = booking_repository._appointment_table()
+            booking_select = (
+                "COALESCE(a.booking_id, p.booking_id)"
+                if booking_repository._column_exists(appointment_table, "booking_id")
+                else "p.booking_id"
+            )
+            phone_expr = booking_repository._normalized_phone_sql_expr("p.phone")
+            cur.execute(
+                f"""
+                SELECT
+                    a.appointment_id,
+                    a.clinic_id,
+                    a.doctor_id,
+                    {booking_select} AS booking_number,
+                    c.clinic_name,
+                    DATE_FORMAT(a.appointment_date, '%Y-%m-%d') AS slot_date,
+                    TIME_FORMAT(a.start_time, '%H:%i') AS slot_time,
+                    COALESCE(p.full_name, '') AS patient_name
+                FROM {appointment_table} a
+                JOIN patients p ON p.patient_id = a.patient_id
+                LEFT JOIN clinics c ON c.clinic_id = a.clinic_id
+                WHERE a.admin_id = %s
+                  AND a.doctor_id = %s
+                  AND a.appointment_date = %s
+                  AND a.status IN ('BOOKED', 'PENDING', 'CONFIRMED')
+                  AND LOWER(TRIM(COALESCE(p.full_name, ''))) = %s
+                  AND ({phone_expr} = %s OR RIGHT({phone_expr}, 10) = %s)
+                ORDER BY a.start_time DESC, a.appointment_id DESC
+                LIMIT 1
+                """,
+                (
+                    actual_admin_id,
+                    int(doctor_id),
+                    str(slot_date),
+                    normalized_name,
+                    normalized_phone,
+                    normalized_phone[-10:],
+                ),
+            )
+            return cur.fetchone()
+        finally:
+            cur.close()
+            conn.close()
+
     async def _require_repos(request: Request, payload: dict[str, object] | None = None) -> tuple[str, bool] | None:
         resolved_lang = _resolve_effective_language(request, payload)
         if booking_repository and scheduling_repository:
@@ -591,6 +654,19 @@ def register_whatsapp_web_routes(
             10,
         )
         appointments = list(all_active_appointments or [])
+        if patient_name:
+            same_day_identity = await run_in_threadpool(
+                _find_same_day_identity_appointment,
+                patient_name=patient_name,
+                phone_number=phone_number,
+                doctor_id=doctor_id,
+                slot_date=now_in_runtime_timezone().date().isoformat(),
+                admin_id=admin_id,
+            )
+            if same_day_identity:
+                same_day_id = int(same_day_identity.get("appointment_id") or 0)
+                if same_day_id and not any(int(row.get("appointment_id") or 0) == same_day_id for row in appointments):
+                    appointments.insert(0, same_day_identity)
         if not booking_for_self and patient_name:
             same_as_self = await run_in_threadpool(
                 _other_name_matches_self_name,
@@ -655,6 +731,30 @@ def register_whatsapp_web_routes(
         if not all([doctor_id, clinic_id, patient_name, phone_number, slot_date, slot_time]):
             return JSONResponse({"detail": "Missing required booking fields."}, status_code=400)
         admin_id = await run_in_threadpool(_resolve_admin_id, doctor_id)
+        same_day_identity = await run_in_threadpool(
+            _find_same_day_identity_appointment,
+            patient_name=patient_name,
+            phone_number=phone_number,
+            doctor_id=doctor_id,
+            slot_date=slot_date,
+            admin_id=admin_id,
+        )
+        if same_day_identity:
+            booking_number = same_day_identity.get("booking_number") or same_day_identity.get("appointment_id")
+            return JSONResponse(
+                {
+                    "status": "active_booking",
+                    "message": (
+                        f"You already have an active appointment for this date.\n"
+                        f"Appointment ID: {booking_number}\n"
+                        f"Date: {same_day_identity.get('slot_date') or '-'}\n"
+                        f"Time: {_format_time(str(same_day_identity.get('slot_time') or '')) or '-'}"
+                    ),
+                    "appointment_id": same_day_identity.get("appointment_id"),
+                    "booking_number": booking_number,
+                },
+                status_code=400,
+            )
         if booking_for_self:
             self_name = await run_in_threadpool(
                 _self_name_mismatch,
@@ -705,27 +805,6 @@ def register_whatsapp_web_routes(
                     },
                     status_code=400,
                 )
-        if booking_for_self:
-            existing = await run_in_threadpool(
-                booking_repository.find_active_appointment_by_phone_number,
-                phone_number,
-                admin_id,
-                doctor_id,
-            )
-            if existing:
-                booking_number = existing.get("booking_number") or existing.get("appointment_id")
-                return JSONResponse(
-                    {
-                        "status": "active_booking",
-                        "message": (
-                            f"You already have an active appointment.\n"
-                            f"Appointment ID: {booking_number}\n"
-                            f"Date: {existing.get('slot_date') or '-'}\n"
-                            f"Time: {_format_time(str(existing.get('slot_time') or '')) or '-'}"
-                        ),
-                    },
-                    status_code=400,
-                )
         context = SimpleNamespace(
             patient_name=patient_name,
             phone_number=phone_number,
@@ -756,6 +835,15 @@ def register_whatsapp_web_routes(
                     "appointment_id": result.appointment_id,
                     "booking_number": booking_number,
                 }
+            )
+        if getattr(result, "appointment_id", None):
+            return JSONResponse(
+                {
+                    "status": "active_booking",
+                    "message": str(result.message or "You already have an active appointment for this date."),
+                    "appointment_id": result.appointment_id,
+                },
+                status_code=400,
             )
         existing = await run_in_threadpool(
             booking_repository.find_active_appointment_by_phone_number,

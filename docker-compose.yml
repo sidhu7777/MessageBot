@@ -3,18 +3,15 @@ services:
     build: .
     container_name: message-bot-app
     restart: unless-stopped
-    ports:
-      - "8000:8000"
+    network_mode: "host"
     env_file:
       - .env
     environment:
-      REDIS_HOST: "redis"
-      KAFKA_BOOTSTRAP_SERVERS: "kafka:9092"
-      OLLAMA_BASE_URL: "http://host.docker.internal:11434"
+      REDIS_HOST: "127.0.0.1"
+      KAFKA_BOOTSTRAP_SERVERS: "127.0.0.1:9094"
+      OLLAMA_BASE_URL: "http://127.0.0.1:11434"
       OLLAMA_AUTO_START: "false"
       OLLAMA_AUTO_PULL: "false"
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
     depends_on:
       kafka:
         condition: service_healthy

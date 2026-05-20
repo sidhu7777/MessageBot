@@ -337,13 +337,14 @@ def test_qr_overflow_skips_doctor_time_conflict_across_clinics() -> None:
     sr = _FakeSchedulingRepo()
     svc = QrCheckinService(br, sr)
 
-    appointment_id, booking_id, overflow_date, overflow_time = svc._book_confirmed_overflow(
-        admin_id=10,
-        doctor_id=1,
-        clinic_id=1,
-        patient_name="Prem kumar",
-        phone="8442626792",
-    )
+    with patch("src.qr.checkin_service.now_in_runtime_timezone", return_value=datetime(2026, 3, 10, 13, 0)):
+        appointment_id, booking_id, overflow_date, overflow_time = svc._book_confirmed_overflow(
+            admin_id=10,
+            doctor_id=1,
+            clinic_id=1,
+            patient_name="Prem kumar",
+            phone="8442626792",
+        )
 
     assert appointment_id == 901
     assert booking_id == 12
@@ -352,6 +353,28 @@ def test_qr_overflow_skips_doctor_time_conflict_across_clinics() -> None:
     assert len(br.conn.cursor_obj.conflict_checks) == 2
     assert br.conn.cursor_obj.inserted_start_time.strftime("%H:%M") == "13:05"
     assert br.conn.cursor_obj.inserted_booking_id == 12
+
+
+def test_qr_overflow_path_uses_regular_slot_number_for_regular_time() -> None:
+    br = _OverflowRepo()
+    br.conn.cursor_obj._first_conflict_open = False
+    sr = _FakeSchedulingRepo()
+    svc = QrCheckinService(br, sr)
+
+    with patch("src.qr.checkin_service.now_in_runtime_timezone", return_value=datetime(2026, 3, 10, 12, 40, 23)):
+        appointment_id, booking_id, _, overflow_time = svc._book_confirmed_overflow(
+            admin_id=10,
+            doctor_id=1,
+            clinic_id=1,
+            patient_name="Kranti devi",
+            phone="7654388795",
+        )
+
+    assert appointment_id == 901
+    assert booking_id == 9
+    assert overflow_time == "12:40 PM"
+    assert br.conn.cursor_obj.inserted_start_time.strftime("%H:%M") == "12:40"
+    assert br.conn.cursor_obj.inserted_booking_id == 9
 
 
 class _SlotActiveCursor:

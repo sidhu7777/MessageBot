@@ -412,6 +412,24 @@ class QrCheckinService:
         return values
 
     @staticmethod
+    def _regular_slot_number_for_start(
+        *,
+        requested_start: time,
+        schedules: list[tuple[time, time, int]],
+    ) -> Optional[int]:
+        requested_dt = datetime.combine(date.today(), requested_start)
+        for start_t, end_t, duration in schedules:
+            start_dt = datetime.combine(date.today(), start_t)
+            end_dt = datetime.combine(date.today(), end_t)
+            if requested_dt < start_dt or requested_dt >= end_dt or duration <= 0:
+                continue
+            diff_minutes = int((requested_dt - start_dt).total_seconds() // 60)
+            if diff_minutes % duration != 0:
+                return None
+            return (diff_minutes // duration) + 1
+        return None
+
+    @staticmethod
     def _round_up_to_slot_boundary(value: datetime, duration_minutes: int) -> datetime:
         if duration_minutes <= 0:
             return value.replace(second=0, microsecond=0)
@@ -481,24 +499,32 @@ class QrCheckinService:
             regular_slot_starts = self._regular_slot_starts_for_day(slot_date=today, schedules=normalized)
 
             phone_expr = self.booking_repository._normalized_phone_sql_expr("phone")
+            profile_type_sql = (
+                "AND UPPER(COALESCE(profile_type, 'SELF')) = 'SELF'"
+                if "profile_type" in patient_columns
+                else ""
+            )
             cur.execute(
                 f"""
                 SELECT patient_id
                 FROM patients
                 WHERE admin_id = %s
-                  AND full_name = %s
+                  {profile_type_sql}
                   AND ({phone_expr} = %s OR RIGHT({phone_expr}, 10) = %s)
                 ORDER BY patient_id DESC
                 LIMIT 1
                 FOR UPDATE
                 """,
-                (admin_id, patient_name, phone, phone[-10:]),
+                (admin_id, phone, phone[-10:]),
             )
             patient_row = cur.fetchone()
             patient_id = int(patient_row["patient_id"]) if patient_row else None
             if patient_id is None:
                 insert_cols = ["full_name", "admin_id", "doctor_id", "phone"]
                 insert_vals = [patient_name, admin_id, doctor_id, phone]
+                if "profile_type" in patient_columns:
+                    insert_cols.append("profile_type")
+                    insert_vals.append("SELF")
                 if "patient_type" in patient_columns:
                     insert_cols.append("patient_type")
                     insert_vals.append("existing")
@@ -555,7 +581,8 @@ class QrCheckinService:
                     overflow_count += 1
 
             overflow_index = overflow_count + 1
-            next_booking_id = total_regular_slots + overflow_index
+            overflow_booking_id = total_regular_slots + overflow_index
+            assigned_booking_id = overflow_booking_id
             now_local_dt = now_dt.replace(tzinfo=None) if getattr(now_dt, "tzinfo", None) else now_dt
             overflow_base_dt = now_local_dt
             start_dt = self._round_up_to_slot_boundary(overflow_base_dt, slot_duration)
@@ -564,6 +591,11 @@ class QrCheckinService:
             while True:
                 start_time = start_dt.time().replace(second=0, microsecond=0)
                 end_time = end_dt.time().replace(second=0, microsecond=0)
+                regular_booking_id = self._regular_slot_number_for_start(
+                    requested_start=start_time,
+                    schedules=normalized,
+                )
+                booking_id_for_start = regular_booking_id or overflow_booking_id
                 cur.execute(
                     f"""
                     SELECT appointment_id, status
@@ -586,7 +618,7 @@ class QrCheckinService:
                                 (patient_id, doctor_id, clinic_id, admin_id, status, appointment_date, start_time, end_time, booking_id, channel)
                                 VALUES (%s, %s, %s, %s, 'BOOKED', %s, %s, %s, %s, %s)
                                 """,
-                                (patient_id, doctor_id, clinic_id, admin_id, today, start_time, end_time, next_booking_id, "qr_scan"),
+                                (patient_id, doctor_id, clinic_id, admin_id, today, start_time, end_time, booking_id_for_start, "qr_scan"),
                             )
                         else:
                             cur.execute(
@@ -595,7 +627,7 @@ class QrCheckinService:
                                 (patient_id, doctor_id, clinic_id, admin_id, status, appointment_date, start_time, end_time, booking_id)
                                 VALUES (%s, %s, %s, %s, 'BOOKED', %s, %s, %s, %s)
                                 """,
-                                (patient_id, doctor_id, clinic_id, admin_id, today, start_time, end_time, next_booking_id),
+                                (patient_id, doctor_id, clinic_id, admin_id, today, start_time, end_time, booking_id_for_start),
                             )
                     else:
                         if has_channel_col:
@@ -617,11 +649,12 @@ class QrCheckinService:
                                 (patient_id, doctor_id, clinic_id, admin_id, today, start_time, end_time),
                             )
                     appointment_id = int(cur.lastrowid)
+                    assigned_booking_id = booking_id_for_start
                     break
 
                 appt_id = int(appt_row["appointment_id"])
                 appt_status = str(appt_row.get("status") or "").upper()
-                if appt_status in {"CANCELLED", "COMPLETED"}:
+                if appt_status == "CANCELLED":
                     if "booking_id" in appointment_columns:
                         if has_channel_col:
                             cur.execute(
@@ -634,7 +667,7 @@ class QrCheckinService:
                                     channel = %s
                                 WHERE appointment_id = %s
                                 """,
-                                (patient_id, end_time, next_booking_id, "qr_scan", appt_id),
+                                (patient_id, end_time, booking_id_for_start, "qr_scan", appt_id),
                             )
                         else:
                             cur.execute(
@@ -646,7 +679,7 @@ class QrCheckinService:
                                     booking_id = %s
                                 WHERE appointment_id = %s
                                 """,
-                                (patient_id, end_time, next_booking_id, appt_id),
+                                (patient_id, end_time, booking_id_for_start, appt_id),
                             )
                     else:
                         if has_channel_col:
@@ -673,6 +706,7 @@ class QrCheckinService:
                                 (patient_id, end_time, appt_id),
                             )
                     appointment_id = appt_id
+                    assigned_booking_id = booking_id_for_start
                     break
 
                 start_dt += timedelta(minutes=slot_duration)
@@ -685,7 +719,7 @@ class QrCheckinService:
                     SET booking_id = %s
                     WHERE patient_id = %s
                     """,
-                    (next_booking_id, patient_id),
+                    (assigned_booking_id, patient_id),
                 )
             conn.commit()
             
@@ -722,7 +756,7 @@ class QrCheckinService:
                     exc_info=True,
                 )
             
-            return appointment_id, next_booking_id, today.isoformat(), start_time.strftime("%I:%M %p").lstrip("0")
+            return appointment_id, assigned_booking_id, today.isoformat(), start_time.strftime("%I:%M %p").lstrip("0")
         except Exception:
             conn.rollback()
             raise

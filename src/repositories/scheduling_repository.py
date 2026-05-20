@@ -439,7 +439,7 @@ class SchedulingRepository:
                 WHERE a.doctor_id = %s
                   AND a.clinic_id = %s
                   AND a.appointment_date = %s
-                  AND a.status IN ('BOOKED', 'PENDING', 'CONFIRMED')
+                  AND a.status IN ('BOOKED', 'PENDING', 'CONFIRMED', 'COMPLETED')
                   {admin_sql}
                 """,
                 tuple(params),
