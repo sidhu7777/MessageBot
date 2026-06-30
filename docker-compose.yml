@@ -25,8 +25,7 @@ services:
     image: redis:7-alpine
     container_name: message-bot-redis
     restart: unless-stopped
-    ports:
-      - "6379:6379"
+    network_mode: "host"
     volumes:
       - redis_data:/data
     healthcheck:

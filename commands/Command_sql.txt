@@ -57,7 +57,8 @@ FLUSH PRIVILEGES;
 STATUS;
 
 
-#weekly backup complete sql code 
+# old weekly partial backup code
+# Do not use this if you want only full weekly backups.
 
 #!/bin/bash
 
@@ -446,7 +447,9 @@ find /backup/mysql -type f -mtime +14 -delete
 
 
 
-# full backup complete sql code 
+# full backup complete sql code
+# Use this one only. Run it weekly from cron.
+# Retention: keep only latest 3 full backups in /backup/mysql.
 
 
 #!/bin/bash
@@ -494,4 +497,8 @@ fi
 echo "$MESSAGE"
 echo "$MESSAGE" | mail -s "Full MySQL Backup Status" $EMAILS
 
-find /backup/mysql -type f -name '*_full_*.sql.gz' -mtime +35 -delete
+find "$BACKUP_DIR" -maxdepth 1 -type f -name "${DB_NAME}_full_*.sql.gz" \
+  -printf '%T@ %p\n' \
+  | sort -rn \
+  | awk 'NR>3 {print $2}' \
+  | xargs -r rm -f

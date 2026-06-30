@@ -24,17 +24,34 @@ Open dashboard
 
 http://YOUR_SERVER_IP:19999
 
-Install Uptime Kuma (Docker)
+Install Uptime Kuma only (Docker)
+
+This runs Uptime Kuma as a separate standalone container.
+Do not add this to docker-compose.yml.
 
 docker run -d \
+  --name uptime-kuma \
   --restart=always \
   -p 3001:3001 \
   -v uptime-kuma:/app/data \
-  louislam/uptime-kuma
+  louislam/uptime-kuma:1
+
+check uptime kuma container
+
+docker ps --filter name=uptime-kuma
+
+check logs if not opening
+
+docker logs uptime-kuma
 
 open uptime kuma 
 
-http://YOUR_SERVER_IP:3001
+http://43.242.224.163:3001
+
+if port is blocked, allow it
+
+sudo ufw allow 3001/tcp
+sudo ufw reload
 
 
 
