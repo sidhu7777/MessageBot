@@ -22,6 +22,22 @@ class QrCheckinResult:
     doctor_name: str = ""
 
 
+@dataclass
+class HospitalQrDoctorOption:
+    doctor_id: int
+    doctor_name: str
+    specialization: str = ""
+
+
+@dataclass
+class HospitalQrScheduleResolution:
+    doctor_id: int
+    doctor_name: str
+    clinic_id: int
+    clinic_name: str
+    specialization: str = ""
+
+
 class QrCheckinService:
     def __init__(self, booking_repository: Any, scheduling_repository: Any) -> None:
         self.booking_repository = booking_repository
@@ -117,6 +133,184 @@ class QrCheckinService:
             except ValueError:
                 continue
         return text
+
+    def _hospital_group_column(self) -> Optional[str]:
+        if not self.booking_repository:
+            return None
+        candidates = (
+            "hospital_group_code",
+            "hospital_group",
+            "hospitalgroupcode",
+            "hospital_code",
+            "hospitalcode",
+            "group_code",
+            "groupcode",
+            "hospital_id",
+            "hospital_group_id",
+            "hospitalgroupid",
+            "group_id",
+        )
+        try:
+            if hasattr(self.booking_repository, "_first_existing_column"):
+                return self.booking_repository._first_existing_column("clinics", candidates)
+        except Exception:
+            return None
+        for column in candidates:
+            try:
+                if self.booking_repository._column_exists("clinics", column):
+                    return column
+            except Exception:
+                continue
+        return None
+
+    def _schedule_status_sql(self) -> str:
+        if not self.booking_repository:
+            return ""
+        try:
+            if self.booking_repository._column_exists("doctor_clinic_schedule", "status"):
+                return "AND UPPER(COALESCE(dcs.status, 'ACTIVE')) = 'ACTIVE'"
+        except Exception:
+            return ""
+        return ""
+
+    def list_hospital_qr_doctors(self, hospital_code: str) -> list[HospitalQrDoctorOption]:
+        """Doctors available today across all clinics in the hospital group."""
+        code = str(hospital_code or "").strip()
+        group_col = self._hospital_group_column()
+        if not self.booking_repository or not code or not group_col:
+            return []
+        today = now_in_runtime_timezone().date().isoformat()
+        conn = self.booking_repository._connect()
+        cur = conn.cursor(dictionary=True)
+        try:
+            cur.execute(
+                f"""
+                SELECT DISTINCT
+                    d.doctor_id,
+                    COALESCE(NULLIF(TRIM(d.doctor_name), ''), 'Doctor') AS doctor_name,
+                    COALESCE(NULLIF(TRIM(d.specialization), ''), '') AS specialization
+                FROM clinics c
+                JOIN doctor_clinic_schedule dcs ON dcs.clinic_id = c.clinic_id
+                JOIN doctors d ON d.doctor_id = dcs.doctor_id
+                WHERE TRIM(COALESCE(c.{group_col}, '')) = %s
+                  AND UPPER(COALESCE(c.status, 'ACTIVE')) = 'ACTIVE'
+                  AND UPPER(COALESCE(d.status, 'ACTIVE')) = 'ACTIVE'
+                  AND dcs.effective_from <= %s
+                  AND dcs.effective_to >= %s
+                  AND dcs.day_of_week = MOD(WEEKDAY(%s) + 1, 7)
+                  {self._schedule_status_sql()}
+                ORDER BY specialization, doctor_name
+                """,
+                (code, today, today, today),
+            )
+            return [
+                HospitalQrDoctorOption(
+                    doctor_id=int(row["doctor_id"]),
+                    doctor_name=str(row.get("doctor_name") or "Doctor"),
+                    specialization=str(row.get("specialization") or ""),
+                )
+                for row in cur.fetchall()
+                if row.get("doctor_id") is not None
+            ]
+        finally:
+            cur.close()
+            conn.close()
+
+    def hospital_qr_options(self, hospital_code: str) -> dict:
+        doctors = self.list_hospital_qr_doctors(hospital_code)
+        specializations = sorted(
+            {
+                option.specialization
+                for option in doctors
+                if str(option.specialization or "").strip()
+            },
+            key=lambda value: value.lower(),
+        )
+        return {
+            "hospital_code": str(hospital_code or "").strip(),
+            "specializations": specializations,
+            "doctors": [option.__dict__ for option in doctors],
+        }
+
+    def resolve_hospital_qr_schedule(
+        self,
+        *,
+        hospital_code: str,
+        doctor_id: int,
+    ) -> Optional[HospitalQrScheduleResolution]:
+        """Resolve the clinic from today's valid schedule inside the hospital group."""
+        code = str(hospital_code or "").strip()
+        group_col = self._hospital_group_column()
+        if not self.booking_repository or not code or not doctor_id or not group_col:
+            return None
+        today = now_in_runtime_timezone().date().isoformat()
+        conn = self.booking_repository._connect()
+        cur = conn.cursor(dictionary=True)
+        try:
+            cur.execute(
+                f"""
+                SELECT
+                    c.clinic_id,
+                    COALESCE(NULLIF(TRIM(c.clinic_name), ''), 'Clinic') AS clinic_name,
+                    d.doctor_id,
+                    COALESCE(NULLIF(TRIM(d.doctor_name), ''), 'Doctor') AS doctor_name,
+                    COALESCE(NULLIF(TRIM(d.specialization), ''), '') AS specialization,
+                    dcs.start_time,
+                    dcs.end_time,
+                    dcs.slot_duration
+                FROM clinics c
+                JOIN doctor_clinic_schedule dcs ON dcs.clinic_id = c.clinic_id
+                JOIN doctors d ON d.doctor_id = dcs.doctor_id
+                WHERE TRIM(COALESCE(c.{group_col}, '')) = %s
+                  AND d.doctor_id = %s
+                  AND UPPER(COALESCE(c.status, 'ACTIVE')) = 'ACTIVE'
+                  AND UPPER(COALESCE(d.status, 'ACTIVE')) = 'ACTIVE'
+                  AND dcs.effective_from <= %s
+                  AND dcs.effective_to >= %s
+                  AND dcs.day_of_week = MOD(WEEKDAY(%s) + 1, 7)
+                  {self._schedule_status_sql()}
+                ORDER BY dcs.start_time
+                """,
+                (code, int(doctor_id), today, today, today),
+            )
+            rows = cur.fetchall()
+        finally:
+            cur.close()
+            conn.close()
+        if not rows:
+            return None
+
+        now_dt = now_in_runtime_timezone().replace(tzinfo=None)
+        extension = timedelta(minutes=self.qr_overflow_extension_minutes)
+
+        def row_start_end(row: dict) -> tuple[Optional[time], Optional[time]]:
+            return (
+                self.booking_repository._parse_time_value(row.get("start_time")),
+                self.booking_repository._parse_time_value(row.get("end_time")),
+            )
+
+        def rank(row: dict) -> tuple[int, str]:
+            start_t, end_t = row_start_end(row)
+            if not start_t or not end_t:
+                return (4, "")
+            start_dt = datetime.combine(now_dt.date(), start_t)
+            end_dt = datetime.combine(now_dt.date(), end_t)
+            if start_dt <= now_dt < end_dt:
+                return (0, start_t.strftime("%H:%M"))
+            if end_dt <= now_dt <= end_dt + extension:
+                return (1, end_t.strftime("%H:%M"))
+            if now_dt < start_dt:
+                return (2, start_t.strftime("%H:%M"))
+            return (3, start_t.strftime("%H:%M"))
+
+        selected = sorted(rows, key=rank)[0]
+        return HospitalQrScheduleResolution(
+            doctor_id=int(selected["doctor_id"]),
+            doctor_name=str(selected.get("doctor_name") or "Doctor"),
+            clinic_id=int(selected["clinic_id"]),
+            clinic_name=str(selected.get("clinic_name") or "Clinic"),
+            specialization=str(selected.get("specialization") or ""),
+        )
 
     def ensure_schema(self) -> None:
         if not self.booking_repository:

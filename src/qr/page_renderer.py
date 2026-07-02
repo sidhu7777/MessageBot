@@ -1,5 +1,6 @@
 ﻿import base64
 import html as html_escape
+import json
 from functools import lru_cache
 from pathlib import Path
 
@@ -503,6 +504,367 @@ def render_qr_page_html(
         btn.disabled = false;
       }}
     }}, true);
+  </script>
+</body>
+</html>"""
+
+
+def render_hospital_qr_page_html(
+    *,
+    hospital_code: str,
+    options: dict,
+    result_message: str | None = None,
+    result_status: str | None = None,
+    patient_name: str = "",
+    phone_number: str = "",
+    language: str = "en",
+    lock_language: bool = False,
+) -> str:
+    dapto_logo_src = _dapto_logo_src()
+    hospital_code_safe = html_escape.escape(hospital_code or "")
+    patient_name_safe = html_escape.escape(patient_name or "")
+    phone_number_safe = html_escape.escape(phone_number or "")
+    result_message_safe = html_escape.escape(result_message or "")
+    doctors_json = json.dumps(options.get("doctors") or [], ensure_ascii=False)
+    specializations_json = json.dumps(options.get("specializations") or [], ensure_ascii=False)
+    lang = language if language in {"en", "hi", "hinglish"} else "en"
+    result_class = ""
+    if result_status == "booked":
+        result_class = " ok"
+    elif result_status in {"overflow", "active_booking"}:
+        result_class = " warn"
+    elif result_status:
+        result_class = " err"
+    submit_text = {
+        "en": "Submit",
+        "hi": "सबमिट करें",
+        "hinglish": "Submit kariye",
+    }[lang]
+    title_text = {
+        "en": "Hospital appointment check-in",
+        "hi": "हॉस्पिटल अपॉइंटमेंट चेक-इन",
+        "hinglish": "Hospital appointment check-in",
+    }[lang]
+    return f"""<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Hospital Check-In</title>
+  <style>
+    :root {{
+      --bg: linear-gradient(140deg, #f6f7f2 0%, #e5efe0 60%, #d7e7dc 100%);
+      --card: #ffffff;
+      --ink: #1d2a23;
+      --muted: #5b6e62;
+      --accent: #0f766e;
+      --accent-soft: #d3f2ee;
+      --ok: #0a7a4f;
+      --warn: #a85810;
+      --danger: #9f2d2d;
+    }}
+    * {{ box-sizing: border-box; }}
+    body {{
+      margin: 0;
+      font-family: "Segoe UI", Tahoma, sans-serif;
+      color: var(--ink);
+      background: var(--bg);
+      min-height: 100vh;
+      display: grid;
+      place-items: center;
+      padding: 18px;
+    }}
+    .card {{
+      width: min(760px, 100%);
+      background: var(--card);
+      border-radius: 20px;
+      box-shadow: 0 20px 50px rgba(8, 38, 34, 0.14);
+      overflow: hidden;
+      border: 1px solid #e4efe8;
+    }}
+    .hero {{
+      padding: 28px 24px 12px 24px;
+      background:
+        radial-gradient(circle at 85% 15%, #c5f3ea 0, rgba(197,243,234,0) 46%),
+        radial-gradient(circle at 20% 0%, #ebf9f4 0, rgba(235,249,244,0) 52%);
+    }}
+    .kicker {{
+      display: inline-block;
+      background: var(--accent-soft);
+      color: #0d645d;
+      border-radius: 999px;
+      padding: 6px 12px;
+      font-size: 12px;
+      font-weight: 600;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+    }}
+    h1 {{ margin: 12px 0 8px 0; font-size: 28px; line-height: 1.2; }}
+    .subtitle {{ margin: 0; color: var(--muted); font-size: 15px; }}
+    .form-wrap {{ padding: 20px 24px 24px 24px; display: grid; gap: 14px; }}
+    label {{ display: grid; gap: 6px; font-weight: 600; font-size: 14px; }}
+    input, select {{
+      width: 100%;
+      border: 1px solid #ceded5;
+      border-radius: 12px;
+      padding: 12px 12px;
+      font-size: 15px;
+      outline: none;
+      background: #fff;
+      transition: border-color .2s, box-shadow .2s;
+    }}
+    input:focus, select:focus {{
+      border-color: var(--accent);
+      box-shadow: 0 0 0 3px rgba(15,118,110,0.13);
+    }}
+    .grid {{ display: grid; gap: 12px; }}
+    @media (min-width: 640px) {{ .grid {{ grid-template-columns: 1fr 1fr; }} }}
+    button {{
+      margin-top: 4px;
+      border: 0;
+      border-radius: 12px;
+      padding: 12px 16px;
+      color: white;
+      background: linear-gradient(135deg, #0f766e, #0b5a53);
+      font-size: 15px;
+      font-weight: 700;
+      cursor: pointer;
+    }}
+    button:disabled {{ opacity: .7; cursor: not-allowed; }}
+    .result {{ display: none; }}
+    .ok {{ color: var(--ok); }}
+    .warn {{ color: var(--warn); }}
+    .err {{ color: var(--danger); }}
+    .modal {{
+      position: fixed;
+      inset: 0;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      background: rgba(7, 24, 22, 0.48);
+      padding: 20px;
+      z-index: 999;
+    }}
+    .modal.open {{ display: flex; }}
+    .modal-card {{
+      width: min(560px, 100%);
+      background: #fff;
+      border-radius: 18px;
+      box-shadow: 0 24px 60px rgba(10, 30, 26, 0.28);
+      border: 1px solid #dfece5;
+      overflow: hidden;
+    }}
+    .modal-head {{
+      padding: 18px 20px 12px 20px;
+      border-bottom: 1px solid #ebf1ed;
+      font-size: 20px;
+      font-weight: 700;
+    }}
+    .modal-head.ok {{ color: var(--ok); }}
+    .modal-head.warn {{ color: var(--warn); }}
+    .modal-head.err {{ color: var(--danger); }}
+    .modal-body {{ padding: 18px 20px; line-height: 1.55; font-size: 15px; }}
+    .modal-actions {{ padding: 0 20px 20px 20px; display: flex; justify-content: flex-end; }}
+    .modal-actions button {{ margin-top: 0; min-width: 120px; }}
+    .brand-footer {{
+      padding: 0 24px 24px 24px;
+      display: grid;
+      justify-items: center;
+      gap: 8px;
+      text-align: center;
+      color: var(--muted);
+    }}
+    .brand-footer span {{
+      font-size: 12px;
+      font-weight: 600;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+    }}
+    .brand-footer img {{
+      display: block;
+      width: min(160px, 42vw);
+      height: auto;
+      object-fit: contain;
+    }}
+  </style>
+</head>
+<body>
+  <section class="card">
+    <div class="hero">
+      <span class="kicker">Hospital Check-In</span>
+      <h1>{title_text}</h1>
+      <p class="subtitle">Hospital code: {hospital_code_safe}</p>
+    </div>
+    <form class="form-wrap" id="hospitalCheckinForm">
+      <div class="grid">
+        <label>
+          <span>Specialization</span>
+          <select id="specializationSelect"></select>
+        </label>
+        <label>
+          <span>Doctor</span>
+          <select id="doctorSelect" required></select>
+        </label>
+      </div>
+      <div class="grid">
+        <label>
+          <span>Full Name</span>
+          <input id="patientName" maxlength="120" value="{patient_name_safe}" required />
+        </label>
+        <label>
+          <span>Phone Number</span>
+          <input id="phoneNumber" maxlength="20" value="{phone_number_safe}" required />
+        </label>
+      </div>
+      <button id="submitBtn" type="submit">{submit_text}</button>
+      <div id="result" class="result{result_class}">{result_message_safe}</div>
+      <input type="hidden" id="hospitalCode" value="{hospital_code_safe}" />
+    </form>
+    <div class="brand-footer">
+      <span>Powered by</span>
+      <img src="{dapto_logo_src}" alt="" onerror="this.style.display='none'" />
+    </div>
+  </section>
+  <div id="resultModal" class="modal" aria-hidden="true">
+    <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
+      <div id="modalTitle" class="modal-head">Booking Status</div>
+      <div id="modalBody" class="modal-body"></div>
+      <div class="modal-actions">
+        <button id="modalCloseBtn" type="button">Close</button>
+      </div>
+    </div>
+  </div>
+  <script>
+    const doctors = {doctors_json};
+    const specializations = {specializations_json};
+    const lang = "{lang}";
+    const labels = {{
+      allSpecializations: "All specializations",
+      chooseDoctor: "Select doctor",
+      missingDoctor: "Please choose a doctor.",
+      submitting: "Submitting...",
+      submit: {json.dumps(submit_text, ensure_ascii=False)},
+      done: "Done.",
+      failed: "Unable to submit right now. Please try again.",
+      modalOk: "Appointment Confirmed",
+      modalWarn: "Booking Update",
+      modalErr: "Booking Status",
+    }};
+
+    function fillSpecializations() {{
+      const select = document.getElementById("specializationSelect");
+      select.innerHTML = "";
+      select.appendChild(new Option(labels.allSpecializations, ""));
+      specializations.forEach((name) => select.appendChild(new Option(name, name)));
+    }}
+
+    function fillDoctors() {{
+      const specialization = document.getElementById("specializationSelect").value;
+      const select = document.getElementById("doctorSelect");
+      const previous = select.value;
+      select.innerHTML = "";
+      select.appendChild(new Option(labels.chooseDoctor, ""));
+      doctors
+        .filter((doctor) => !specialization || doctor.specialization === specialization)
+        .forEach((doctor) => {{
+          const label = doctor.specialization ? `${{doctor.doctor_name}} - ${{doctor.specialization}}` : doctor.doctor_name;
+          select.appendChild(new Option(label, String(doctor.doctor_id)));
+        }});
+      if ([...select.options].some((option) => option.value === previous)) select.value = previous;
+    }}
+
+    function syncSpecializationFromDoctor() {{
+      const doctorId = Number(document.getElementById("doctorSelect").value || 0);
+      const doctor = doctors.find((item) => Number(item.doctor_id) === doctorId);
+      if (doctor && doctor.specialization) {{
+        document.getElementById("specializationSelect").value = doctor.specialization;
+        fillDoctors();
+        document.getElementById("doctorSelect").value = String(doctor.doctor_id);
+      }}
+    }}
+
+    function formatResultHtml(message, kind) {{
+      const confirmationLines = ["Appointment confirmed.", "अपॉइंटमेंट कन्फर्म हो गई।", "Appointment confirm ho gayi."];
+      const lines = String(message || labels.done)
+        .split("\\n")
+        .map((line) => line.trim())
+        .filter(Boolean)
+        .filter((line, index) => !(kind === "ok" && index === 0 && confirmationLines.includes(line)));
+      const boldPrefixes = ["Appointment ID:", "अपॉइंटमेंट आईडी:", "Estimated Time:", "अनुमानित समय:"];
+      return lines
+        .map((line) => {{
+          const safe = line.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+          return boldPrefixes.some((prefix) => safe.startsWith(prefix)) ? "<strong>" + safe + "</strong>" : safe;
+        }})
+        .join("<br>");
+    }}
+
+    function openResultModal(kind, htmlMessage) {{
+      const title = document.getElementById("modalTitle");
+      const body = document.getElementById("modalBody");
+      const modal = document.getElementById("resultModal");
+      title.className = "modal-head " + kind;
+      title.textContent = kind === "ok" ? labels.modalOk : kind === "warn" ? labels.modalWarn : labels.modalErr;
+      body.innerHTML = htmlMessage;
+      modal.classList.add("open");
+      modal.setAttribute("aria-hidden", "false");
+    }}
+
+    function closeResultModal() {{
+      const modal = document.getElementById("resultModal");
+      modal.classList.remove("open");
+      modal.setAttribute("aria-hidden", "true");
+    }}
+
+    fillSpecializations();
+    fillDoctors();
+    document.getElementById("specializationSelect").addEventListener("change", fillDoctors);
+    document.getElementById("doctorSelect").addEventListener("change", syncSpecializationFromDoctor);
+    document.getElementById("modalCloseBtn").addEventListener("click", closeResultModal);
+    document.getElementById("resultModal").addEventListener("click", (e) => {{
+      if (e.target.id === "resultModal") closeResultModal();
+    }});
+
+    const initialResult = document.getElementById("result").textContent.trim();
+    if (initialResult) {{
+      const kind = "{'ok' if result_status == 'booked' else 'warn' if result_status in {'overflow', 'active_booking'} else 'err'}";
+      openResultModal(kind, formatResultHtml(initialResult, kind));
+    }}
+
+    document.getElementById("hospitalCheckinForm").addEventListener("submit", async (e) => {{
+      e.preventDefault();
+      const btn = document.getElementById("submitBtn");
+      const doctorId = Number(document.getElementById("doctorSelect").value || 0);
+      if (!doctorId) {{
+        openResultModal("err", formatResultHtml(labels.missingDoctor, "err"));
+        return;
+      }}
+      btn.disabled = true;
+      btn.textContent = labels.submitting;
+      try {{
+        const resp = await fetch(`/qr/hospital/checkin/submit?lang=${{encodeURIComponent(lang)}}`, {{
+          method: "POST",
+          headers: {{ "Content-Type": "application/json" }},
+          body: JSON.stringify({{
+            hospital_code: document.getElementById("hospitalCode").value,
+            doctor_id: doctorId,
+            specialization: document.getElementById("specializationSelect").value,
+            patient_name: document.getElementById("patientName").value,
+            phone_number: document.getElementById("phoneNumber").value,
+            detected_language: lang,
+          }}),
+        }});
+        const data = await resp.json();
+        const status = data.status || "";
+        const kind = status === "booked" ? "ok" : (status === "overflow" || status === "active_booking") ? "warn" : "err";
+        openResultModal(kind, formatResultHtml(data.message || data.detail || labels.done, kind));
+      }} catch (_err) {{
+        openResultModal("err", formatResultHtml(labels.failed, "err"));
+      }} finally {{
+        btn.disabled = false;
+        btn.textContent = labels.submit;
+      }}
+    }});
   </script>
 </body>
 </html>"""

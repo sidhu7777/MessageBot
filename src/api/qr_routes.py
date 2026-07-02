@@ -13,7 +13,7 @@ from src.qr.generator_service import (
     build_qr_svg,
     svg_to_data_url,
 )
-from src.qr.page_renderer import render_qr_page_html
+from src.qr.page_renderer import render_hospital_qr_page_html, render_qr_page_html
 
 
 _SUPPORTED_LANGS = {"en", "hi", "hinglish"}
@@ -226,6 +226,178 @@ def register_qr_routes(
                 "estimated_time": result.estimated_time,
                 "clinic_name": result.clinic_name,
                 "doctor_name": result.doctor_name,
+                "response_language": resolved_lang,
+            },
+            status_code=status_code,
+        )
+
+    @router.get("/qr/hospital/checkin", response_class=HTMLResponse)
+    async def qr_hospital_checkin_page(request: Request, hospital_code: str = "", hospital_group_code: str = ""):
+        resolved_lang, lock_language = _resolve_effective_language(request, {})
+        code = (hospital_code or hospital_group_code or "").strip()
+        if not qr_checkin_service:
+            return HTMLResponse(get_qr_message(resolved_lang, "qr_not_configured"), status_code=503)
+        if not code:
+            return HTMLResponse("<h3>Hospital code is required.</h3>", status_code=400)
+        try:
+            options = await asyncio.wait_for(
+                run_in_threadpool(qr_checkin_service.hospital_qr_options, code),
+                timeout=qr_page_lookup_timeout_seconds,
+            )
+        except Exception as exc:
+            logger.warning("Hospital QR options lookup failed hospital_code=%s error=%s", code, exc)
+            options = {"hospital_code": code, "specializations": [], "doctors": []}
+        return HTMLResponse(
+            render_hospital_qr_page_html(
+                hospital_code=code,
+                options=options,
+                language=resolved_lang,
+                lock_language=lock_language,
+            )
+        )
+
+    @router.get("/qr/hospital/options")
+    async def qr_hospital_options(hospital_code: str = "", hospital_group_code: str = ""):
+        if not qr_checkin_service:
+            return JSONResponse({"detail": "QR check-in is not configured."}, status_code=503)
+        code = (hospital_code or hospital_group_code or "").strip()
+        if not code:
+            return JSONResponse({"detail": "Hospital code is required."}, status_code=400)
+        try:
+            return JSONResponse(qr_checkin_service.hospital_qr_options(code))
+        except Exception as exc:
+            logger.warning("Hospital QR options failed hospital_code=%s error=%s", code, exc)
+            return JSONResponse({"detail": "Hospital doctors are not available right now."}, status_code=400)
+
+    @router.post("/qr/hospital/checkin/submit")
+    async def qr_hospital_checkin_submit(request: Request):
+        if not qr_checkin_service:
+            fallback_lang, _ = _resolve_effective_language(request, {})
+            msg = get_qr_message(fallback_lang, "qr_not_configured_plain")
+            return JSONResponse({"detail": msg, "message": msg}, status_code=503)
+
+        payload: dict[str, object] = {}
+        try:
+            payload = await request.json()
+        except Exception:
+            try:
+                form = await request.form()
+                payload = dict(form)
+            except Exception:
+                resolved_lang, _ = _resolve_effective_language(request, {})
+                msg = get_qr_message(resolved_lang, "qr_invalid_payload")
+                return JSONResponse({"detail": msg, "message": msg}, status_code=400)
+
+        resolved_lang, lock_language = _resolve_effective_language(request, payload)
+        hospital_code = str(
+            payload.get("hospital_code")
+            or payload.get("hospital_group_code")
+            or request.query_params.get("hospital_code")
+            or request.query_params.get("hospital_group_code")
+            or ""
+        ).strip()
+        patient_name = str(payload.get("patient_name") or "").strip()
+        phone_number = str(payload.get("phone_number") or "").strip()
+        qr_chat_id = f"qr_hospital_{''.join(ch for ch in phone_number if ch.isdigit()) or 'unknown'}"
+        try:
+            doctor_id = int(payload.get("doctor_id") or request.query_params.get("doctor_id"))
+        except Exception:
+            log_event_fn(
+                qr_chat_id,
+                "QR_HOSPITAL_SUBMIT_REJECTED",
+                reason="invalid_doctor_id",
+                hospital_code=hospital_code,
+                doctor_id=payload.get("doctor_id"),
+            )
+            return JSONResponse({"detail": "Please choose a valid doctor.", "message": "Please choose a valid doctor."}, status_code=400)
+        if not hospital_code:
+            return JSONResponse({"detail": "Hospital code is required.", "message": "Hospital code is required."}, status_code=400)
+
+        log_event_fn(
+            qr_chat_id,
+            "QR_HOSPITAL_SUBMIT_RECEIVED",
+            hospital_code=hospital_code,
+            doctor_id=doctor_id,
+            patient_name=patient_name[:80],
+            phone=phone_number,
+            response_language=resolved_lang,
+        )
+        schedule = await run_in_threadpool(
+            qr_checkin_service.resolve_hospital_qr_schedule,
+            hospital_code=hospital_code,
+            doctor_id=doctor_id,
+        )
+        if not schedule:
+            message = "No valid doctor schedule is available for this hospital right now."
+            log_event_fn(
+                qr_chat_id,
+                "QR_HOSPITAL_SUBMIT_REJECTED",
+                reason="schedule_not_found",
+                hospital_code=hospital_code,
+                doctor_id=doctor_id,
+            )
+            return JSONResponse({"status": "error", "detail": message, "message": message}, status_code=400)
+
+        result = await run_in_threadpool(
+            qr_checkin_service.process_checkin,
+            doctor_id=schedule.doctor_id,
+            clinic_id=schedule.clinic_id,
+            patient_name=patient_name,
+            phone=phone_number,
+            language=resolved_lang,
+        )
+        status_code = 200 if result.status in {"booked", "overflow", "active_booking"} else 400
+        event_name = "QR_HOSPITAL_SUBMIT_SUCCEEDED" if status_code == 200 else "QR_HOSPITAL_SUBMIT_FAILED"
+        log_event_fn(
+            qr_chat_id,
+            event_name,
+            status=result.status,
+            hospital_code=hospital_code,
+            doctor_id=schedule.doctor_id,
+            clinic_id=schedule.clinic_id,
+            message=result.message[:120],
+            booking_id=result.booking_id,
+            appointment_date=result.appointment_date,
+            appointment_time=result.appointment_time,
+            clinic_name=result.clinic_name,
+            doctor_name=result.doctor_name,
+            response_language=resolved_lang,
+        )
+        accept_header = (request.headers.get("accept") or "").lower()
+        if "text/html" in accept_header and "application/json" not in accept_header:
+            try:
+                options = qr_checkin_service.hospital_qr_options(hospital_code)
+            except Exception:
+                options = {"hospital_code": hospital_code, "specializations": [], "doctors": []}
+            return HTMLResponse(
+                render_hospital_qr_page_html(
+                    hospital_code=hospital_code,
+                    options=options,
+                    result_message=result.message,
+                    result_status=result.status,
+                    patient_name=patient_name,
+                    phone_number=phone_number,
+                    language=resolved_lang,
+                    lock_language=lock_language,
+                ),
+                status_code=status_code,
+            )
+        return JSONResponse(
+            {
+                "status": result.status,
+                "message": result.message,
+                "detail": result.message,
+                "booking_id": result.booking_id,
+                "appointment_date": result.appointment_date,
+                "appointment_time": result.appointment_time,
+                "queue_position": result.queue_position,
+                "estimated_time": result.estimated_time,
+                "clinic_id": schedule.clinic_id,
+                "clinic_name": result.clinic_name or schedule.clinic_name,
+                "doctor_id": schedule.doctor_id,
+                "doctor_name": result.doctor_name or schedule.doctor_name,
+                "specialization": schedule.specialization,
+                "hospital_code": hospital_code,
                 "response_language": resolved_lang,
             },
             status_code=status_code,
