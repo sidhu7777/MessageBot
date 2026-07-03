@@ -15,6 +15,12 @@ def build_qr_booking_url(*, base_url: str, doctor_id: int, clinic_id: int) -> st
     return f"{root}/qr/checkin?{query}"
 
 
+def build_qr_hospital_url(*, base_url: str, hospital_code: str) -> str:
+    root = (base_url or "").strip().rstrip("/")
+    query = urlencode({"hospital_code": str(hospital_code or "").strip()})
+    return f"{root}/qr/hospital/checkin?{query}"
+
+
 def build_qr_svg(*, url: str) -> str:
     qr = qrcode.QRCode(
         version=None,
@@ -27,7 +33,17 @@ def build_qr_svg(*, url: str) -> str:
     image = qr.make_image(image_factory=SvgPathImage)
     buffer = io.BytesIO()
     image.save(buffer)
-    return buffer.getvalue().decode("utf-8")
+    svg = buffer.getvalue().decode("utf-8")
+    # SvgPathImage renders only the black modules on a TRANSPARENT background,
+    # so the QR is invisible on dark viewers and unreadable by scanners/Google Lens.
+    # Inject a solid white background (incl. the quiet zone) so it reads everywhere.
+    svg = re.sub(
+        r"(<svg\b[^>]*>)",
+        r'\1<rect width="100%" height="100%" fill="#ffffff"/>',
+        svg,
+        count=1,
+    )
+    return svg
 
 
 def svg_to_data_url(svg_markup: str) -> str:
@@ -39,3 +55,10 @@ def build_download_filename(*, doctor_name: str, clinic_name: str, doctor_id: in
     raw = f"{doctor_name or 'doctor'}-{clinic_name or 'clinic'}-{doctor_id}-{clinic_id}".strip().lower()
     slug = re.sub(r"[^a-z0-9]+", "-", raw).strip("-") or f"doctor-{doctor_id}-clinic-{clinic_id}"
     return f"qr-{slug}.svg"
+
+
+def build_hospital_download_filename(*, hospital_name: str, hospital_code: str) -> str:
+    code = str(hospital_code or "").strip()
+    raw = f"{hospital_name or 'hospital'}-{code or 'hospital'}".strip().lower()
+    slug = re.sub(r"[^a-z0-9]+", "-", raw).strip("-") or f"hospital-{code}"
+    return f"qr-hospital-{slug}.svg"

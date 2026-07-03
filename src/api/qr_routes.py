@@ -9,7 +9,9 @@ from fastapi.responses import HTMLResponse, JSONResponse, Response
 from src.messages.templates import get_qr_message
 from src.qr.generator_service import (
     build_download_filename,
+    build_hospital_download_filename,
     build_qr_booking_url,
+    build_qr_hospital_url,
     build_qr_svg,
     svg_to_data_url,
 )
@@ -242,7 +244,7 @@ def register_qr_routes(
         try:
             options = await asyncio.wait_for(
                 run_in_threadpool(qr_checkin_service.hospital_qr_options, code),
-                timeout=qr_page_lookup_timeout_seconds,
+                timeout=max(qr_page_lookup_timeout_seconds, 15.0),
             )
         except Exception as exc:
             logger.warning("Hospital QR options lookup failed hospital_code=%s error=%s", code, exc)
@@ -507,6 +509,75 @@ def register_qr_routes(
             doctor_id=int(doctor_id),
             clinic_id=int(clinic_id),
         )
+        return Response(
+            content=svg_markup,
+            media_type="image/svg+xml",
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        )
+
+    async def _resolve_hospital_display_name(code: str) -> str:
+        if not qr_checkin_service:
+            return "Hospital"
+        try:
+            name = await asyncio.wait_for(
+                run_in_threadpool(qr_checkin_service.hospital_qr_display_name, code),
+                timeout=qr_page_lookup_timeout_seconds,
+            )
+            return str(name or "").strip() or "Hospital"
+        except Exception as exc:
+            logger.warning("Hospital QR generator name lookup fallback hospital_code=%s error=%s", code, exc)
+            return "Hospital"
+
+    @router.post("/qr/hospital/generate")
+    async def qr_hospital_generate(request: Request):
+        payload: dict[str, object] = {}
+        try:
+            payload = await request.json()
+        except Exception:
+            try:
+                form = await request.form()
+                payload = dict(form)
+            except Exception:
+                payload = {}
+
+        resolved_lang, _ = _resolve_effective_language(request, payload)
+        code = str(
+            payload.get("hospital_code")
+            or payload.get("hospital_group_code")
+            or request.query_params.get("hospital_code")
+            or request.query_params.get("hospital_group_code")
+            or ""
+        ).strip()
+        if not code:
+            msg = "Hospital code is required."
+            return JSONResponse({"detail": msg, "message": msg}, status_code=400)
+
+        hospital_name = await _resolve_hospital_display_name(code)
+        booking_url = build_qr_hospital_url(base_url=str(request.base_url), hospital_code=code)
+        svg_markup = await run_in_threadpool(build_qr_svg, url=booking_url)
+        filename = build_hospital_download_filename(hospital_name=hospital_name, hospital_code=code)
+        return JSONResponse(
+            {
+                "hospital_code": code,
+                "hospital_name": hospital_name,
+                "mime_type": "image/svg+xml",
+                "filename": filename,
+                "preview_data_url": svg_to_data_url(svg_markup),
+                "download_path": f"/qr/hospital/generate/download?hospital_code={code}",
+            }
+        )
+
+    @router.get("/qr/hospital/generate/download")
+    async def qr_hospital_generate_download(request: Request, hospital_code: str = "", hospital_group_code: str = ""):
+        code = (hospital_code or hospital_group_code or "").strip()
+        if not code:
+            msg = "Hospital code is required."
+            return JSONResponse({"detail": msg, "message": msg}, status_code=400)
+
+        hospital_name = await _resolve_hospital_display_name(code)
+        booking_url = build_qr_hospital_url(base_url=str(request.base_url), hospital_code=code)
+        svg_markup = await run_in_threadpool(build_qr_svg, url=booking_url)
+        filename = build_hospital_download_filename(hospital_name=hospital_name, hospital_code=code)
         return Response(
             content=svg_markup,
             media_type="image/svg+xml",

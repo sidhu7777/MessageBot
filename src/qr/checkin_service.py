@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
@@ -46,6 +47,52 @@ class QrCheckinService:
             0,
             int(os.getenv("QR_OVERFLOW_EXTENSION_MINUTES", "90")),
         )
+        # Redis cache-aside for hospital QR options (separate namespace: msgbot:hospital:*).
+        # Optional: if no client is set, everything falls back to direct DB reads.
+        self.redis_client: Optional[object] = None
+        self._cache_key_prefix = "msgbot"
+        self._hospital_cache_ttl_seconds = max(
+            30,
+            int(os.getenv("REDIS_HOSPITAL_CACHE_TTL_SECONDS", "300")),
+        )
+
+    def set_redis_client(self, redis_client: Optional[object], *, key_prefix: Optional[str] = None) -> None:
+        self.redis_client = redis_client
+        if key_prefix is not None:
+            self._cache_key_prefix = (key_prefix or "msgbot").strip() or "msgbot"
+
+    def set_cache_config(self, *, ttl_seconds: Optional[int] = None, key_prefix: Optional[str] = None) -> None:
+        if ttl_seconds is not None:
+            self._hospital_cache_ttl_seconds = max(30, int(ttl_seconds))
+        if key_prefix is not None:
+            self._cache_key_prefix = (key_prefix or "msgbot").strip() or "msgbot"
+
+    def _hospital_options_cache_key(self, code: str) -> str:
+        return f"{self._cache_key_prefix}:hospital:opts:{(code or '').strip()}"
+
+    def _load_cached_hospital_options(self, code: str) -> Optional[dict]:
+        if not self.redis_client or not str(code or "").strip():
+            return None
+        try:
+            raw = self.redis_client.get(self._hospital_options_cache_key(code))
+            if not raw:
+                return None
+            payload = json.loads(str(raw))
+            return payload if isinstance(payload, dict) else None
+        except Exception:
+            return None
+
+    def _save_cached_hospital_options(self, code: str, payload: dict) -> None:
+        if not self.redis_client or not str(code or "").strip():
+            return
+        try:
+            self.redis_client.set(
+                self._hospital_options_cache_key(code),
+                json.dumps(payload, ensure_ascii=False),
+                ex=self._hospital_cache_ttl_seconds,
+            )
+        except Exception:
+            return
 
     @staticmethod
     def _normalize_language(language: str) -> str:
@@ -137,30 +184,11 @@ class QrCheckinService:
     def _hospital_group_column(self) -> Optional[str]:
         if not self.booking_repository:
             return None
-        candidates = (
-            "hospital_group_code",
-            "hospital_group",
-            "hospitalgroupcode",
-            "hospital_code",
-            "hospitalcode",
-            "group_code",
-            "groupcode",
-            "hospital_id",
-            "hospital_group_id",
-            "hospitalgroupid",
-            "group_id",
-        )
         try:
-            if hasattr(self.booking_repository, "_first_existing_column"):
-                return self.booking_repository._first_existing_column("clinics", candidates)
+            if self.booking_repository._column_exists("clinics", "hospital_group_code"):
+                return "hospital_group_code"
         except Exception:
             return None
-        for column in candidates:
-            try:
-                if self.booking_repository._column_exists("clinics", column):
-                    return column
-            except Exception:
-                continue
         return None
 
     def _schedule_status_sql(self) -> str:
@@ -172,6 +200,34 @@ class QrCheckinService:
         except Exception:
             return ""
         return ""
+
+    def hospital_qr_display_name(self, hospital_code: str) -> str:
+        code = str(hospital_code or "").strip()
+        group_col = self._hospital_group_column()
+        if not self.booking_repository or not code or not group_col:
+            return ""
+        conn = self.booking_repository._connect()
+        cur = conn.cursor(dictionary=True)
+        try:
+            cur.execute(
+                f"""
+                SELECT COALESCE(NULLIF(TRIM(clinic_name), ''), '') AS clinic_name,
+                       COUNT(*) AS clinic_count
+                FROM clinics
+                WHERE TRIM(COALESCE({group_col}, '')) = %s
+                  AND UPPER(COALESCE(status, 'ACTIVE')) = 'ACTIVE'
+                GROUP BY clinic_name
+                HAVING clinic_name <> ''
+                ORDER BY clinic_count DESC, clinic_name
+                LIMIT 1
+                """,
+                (code,),
+            )
+            row = cur.fetchone()
+            return str((row or {}).get("clinic_name") or "").strip()
+        finally:
+            cur.close()
+            conn.close()
 
     def list_hospital_qr_doctors(self, hospital_code: str) -> list[HospitalQrDoctorOption]:
         """Doctors available today across all clinics in the hospital group."""
@@ -195,13 +251,15 @@ class QrCheckinService:
                 WHERE TRIM(COALESCE(c.{group_col}, '')) = %s
                   AND UPPER(COALESCE(c.status, 'ACTIVE')) = 'ACTIVE'
                   AND UPPER(COALESCE(d.status, 'ACTIVE')) = 'ACTIVE'
+                  AND (d.active_from IS NULL OR d.active_from <= %s)
+                  AND (d.active_to IS NULL OR d.active_to >= %s)
                   AND dcs.effective_from <= %s
                   AND dcs.effective_to >= %s
                   AND dcs.day_of_week = MOD(WEEKDAY(%s) + 1, 7)
                   {self._schedule_status_sql()}
                 ORDER BY specialization, doctor_name
                 """,
-                (code, today, today, today),
+                (code, today, today, today, today, today),
             )
             return [
                 HospitalQrDoctorOption(
@@ -217,7 +275,16 @@ class QrCheckinService:
             conn.close()
 
     def hospital_qr_options(self, hospital_code: str) -> dict:
+        code = str(hospital_code or "").strip()
+
+        # Cache-aside: try Redis first; on hit return immediately (fast path).
+        cached = self._load_cached_hospital_options(code)
+        if cached is not None:
+            return cached
+
+        # Miss (or Redis unavailable) -> read from DB, then populate the cache.
         doctors = self.list_hospital_qr_doctors(hospital_code)
+        display_name = self.hospital_qr_display_name(hospital_code)
         specializations = sorted(
             {
                 option.specialization
@@ -226,11 +293,14 @@ class QrCheckinService:
             },
             key=lambda value: value.lower(),
         )
-        return {
-            "hospital_code": str(hospital_code or "").strip(),
+        result = {
+            "hospital_code": code,
+            "hospital_name": display_name,
             "specializations": specializations,
             "doctors": [option.__dict__ for option in doctors],
         }
+        self._save_cached_hospital_options(code, result)
+        return result
 
     def resolve_hospital_qr_schedule(
         self,
@@ -265,13 +335,15 @@ class QrCheckinService:
                   AND d.doctor_id = %s
                   AND UPPER(COALESCE(c.status, 'ACTIVE')) = 'ACTIVE'
                   AND UPPER(COALESCE(d.status, 'ACTIVE')) = 'ACTIVE'
+                  AND (d.active_from IS NULL OR d.active_from <= %s)
+                  AND (d.active_to IS NULL OR d.active_to >= %s)
                   AND dcs.effective_from <= %s
                   AND dcs.effective_to >= %s
                   AND dcs.day_of_week = MOD(WEEKDAY(%s) + 1, 7)
                   {self._schedule_status_sql()}
                 ORDER BY dcs.start_time
                 """,
-                (code, int(doctor_id), today, today, today),
+                (code, int(doctor_id), today, today, today, today, today),
             )
             rows = cur.fetchall()
         finally:

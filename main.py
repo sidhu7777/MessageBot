@@ -161,6 +161,15 @@ if scheduling_repository:
         ttl_seconds=int(os.getenv("REDIS_DOCTOR_CACHE_TTL_SECONDS", "3600")),
         key_prefix=os.getenv("REDIS_KEY_PREFIX", "msgbot"),
     )
+if qr_checkin_service:
+    qr_checkin_service.set_redis_client(
+        _redis_client,
+        key_prefix=os.getenv("REDIS_KEY_PREFIX", "msgbot"),
+    )
+    qr_checkin_service.set_cache_config(
+        ttl_seconds=int(os.getenv("REDIS_HOSPITAL_CACHE_TTL_SECONDS", "300")),
+        key_prefix=os.getenv("REDIS_KEY_PREFIX", "msgbot"),
+    )
 _user_processing_guard = UserProcessingGuard(
     redis_client=_redis_client,
     lock_ttl_seconds=int(os.getenv("REDIS_PROCESSING_TTL_SECONDS", "45")),

@@ -527,6 +527,8 @@ def render_hospital_qr_page_html(
     result_message_safe = html_escape.escape(result_message or "")
     doctors_json = json.dumps(options.get("doctors") or [], ensure_ascii=False)
     specializations_json = json.dumps(options.get("specializations") or [], ensure_ascii=False)
+    hospital_name = str(options.get("hospital_name") or "").strip()
+    hospital_name_safe = html_escape.escape(hospital_name or "Hospital")
     lang = language if language in {"en", "hi", "hinglish"} else "en"
     result_class = ""
     if result_status == "booked":
@@ -540,17 +542,26 @@ def render_hospital_qr_page_html(
         "hi": "सबमिट करें",
         "hinglish": "Submit kariye",
     }[lang]
-    title_text = {
-        "en": "Hospital appointment check-in",
-        "hi": "हॉस्पिटल अपॉइंटमेंट चेक-इन",
-        "hinglish": "Hospital appointment check-in",
+    ui = {
+        "en": {
+            "kicker": "Book Your Appointment",
+            "title": f"Welcome to {hospital_name_safe}",
+        },
+        "hi": {
+            "kicker": "अपॉइंटमेंट बुक करें",
+            "title": f"{hospital_name_safe} में आपका स्वागत है",
+        },
+        "hinglish": {
+            "kicker": "Book Your Appointment",
+            "title": f"{hospital_name_safe} mein aapka swagat hai",
+        },
     }[lang]
     return f"""<!doctype html>
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Hospital Check-In</title>
+  <title>{hospital_name_safe}</title>
   <style>
     :root {{
       --bg: linear-gradient(140deg, #f6f7f2 0%, #e5efe0 60%, #d7e7dc 100%);
@@ -691,9 +702,8 @@ def render_hospital_qr_page_html(
 <body>
   <section class="card">
     <div class="hero">
-      <span class="kicker">Hospital Check-In</span>
-      <h1>{title_text}</h1>
-      <p class="subtitle">Hospital code: {hospital_code_safe}</p>
+      <span class="kicker">{ui["kicker"]}</span>
+      <h1>{ui["title"]}</h1>
     </div>
     <form class="form-wrap" id="hospitalCheckinForm">
       <div class="grid">
@@ -741,11 +751,14 @@ def render_hospital_qr_page_html(
     const labels = {{
       allSpecializations: "All specializations",
       chooseDoctor: "Select doctor",
+      noSpecializations: "No active specializations available",
+      noDoctors: "No active doctors available",
       missingDoctor: "Please choose a doctor.",
       submitting: "Submitting...",
       submit: {json.dumps(submit_text, ensure_ascii=False)},
       done: "Done.",
       failed: "Unable to submit right now. Please try again.",
+      timedOut: "The booking is taking longer than expected. Please refresh or check with the front desk before submitting again.",
       modalOk: "Appointment Confirmed",
       modalWarn: "Booking Update",
       modalErr: "Booking Status",
@@ -754,6 +767,14 @@ def render_hospital_qr_page_html(
     function fillSpecializations() {{
       const select = document.getElementById("specializationSelect");
       select.innerHTML = "";
+      if (!doctors.length) {{
+        const option = new Option(labels.noSpecializations, "");
+        option.disabled = true;
+        select.appendChild(option);
+        select.disabled = true;
+        return;
+      }}
+      select.disabled = false;
       select.appendChild(new Option(labels.allSpecializations, ""));
       specializations.forEach((name) => select.appendChild(new Option(name, name)));
     }}
@@ -761,15 +782,25 @@ def render_hospital_qr_page_html(
     function fillDoctors() {{
       const specialization = document.getElementById("specializationSelect").value;
       const select = document.getElementById("doctorSelect");
+      const submitBtn = document.getElementById("submitBtn");
       const previous = select.value;
       select.innerHTML = "";
+      const visibleDoctors = doctors.filter((doctor) => !specialization || doctor.specialization === specialization);
+      if (!visibleDoctors.length) {{
+        const option = new Option(labels.noDoctors, "");
+        option.disabled = true;
+        select.appendChild(option);
+        select.disabled = true;
+        submitBtn.disabled = true;
+        return;
+      }}
+      select.disabled = false;
+      submitBtn.disabled = false;
       select.appendChild(new Option(labels.chooseDoctor, ""));
-      doctors
-        .filter((doctor) => !specialization || doctor.specialization === specialization)
-        .forEach((doctor) => {{
-          const label = doctor.specialization ? `${{doctor.doctor_name}} - ${{doctor.specialization}}` : doctor.doctor_name;
-          select.appendChild(new Option(label, String(doctor.doctor_id)));
-        }});
+      visibleDoctors.forEach((doctor) => {{
+        const label = doctor.specialization ? `${{doctor.doctor_name}} - ${{doctor.specialization}}` : doctor.doctor_name;
+        select.appendChild(new Option(label, String(doctor.doctor_id)));
+      }});
       if ([...select.options].some((option) => option.value === previous)) select.value = previous;
     }}
 
@@ -841,9 +872,12 @@ def render_hospital_qr_page_html(
       }}
       btn.disabled = true;
       btn.textContent = labels.submitting;
+      const controller = new AbortController();
+      const timeoutId = window.setTimeout(() => controller.abort(), 45000);
       try {{
         const resp = await fetch(`/qr/hospital/checkin/submit?lang=${{encodeURIComponent(lang)}}`, {{
           method: "POST",
+          signal: controller.signal,
           headers: {{ "Content-Type": "application/json" }},
           body: JSON.stringify({{
             hospital_code: document.getElementById("hospitalCode").value,
@@ -858,9 +892,11 @@ def render_hospital_qr_page_html(
         const status = data.status || "";
         const kind = status === "booked" ? "ok" : (status === "overflow" || status === "active_booking") ? "warn" : "err";
         openResultModal(kind, formatResultHtml(data.message || data.detail || labels.done, kind));
-      }} catch (_err) {{
-        openResultModal("err", formatResultHtml(labels.failed, "err"));
+      }} catch (err) {{
+        const message = err && err.name === "AbortError" ? labels.timedOut : labels.failed;
+        openResultModal("err", formatResultHtml(message, "err"));
       }} finally {{
+        window.clearTimeout(timeoutId);
         btn.disabled = false;
         btn.textContent = labels.submit;
       }}
