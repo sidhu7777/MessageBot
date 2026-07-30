@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
 from types import SimpleNamespace
@@ -93,6 +94,159 @@ class QrCheckinService:
             )
         except Exception:
             return
+
+    def next_registration_sequence(self, hospital_code: str) -> int:
+        """Atomic per-day registration counter via Redis INCR (isolated key namespace).
+
+        Key resets daily (TTL). Falls back to a timestamp-based number if Redis is
+        unavailable, so a token is always produced. No DB is used.
+        """
+        code = str(hospital_code or "").strip().lower() or "reg"
+        day = now_in_runtime_timezone().strftime("%Y%m%d")
+        if self.redis_client:
+            try:
+                key = f"{self._cache_key_prefix}:registration:seq:{code}:{day}"
+                seq = int(self.redis_client.incr(key))
+                if seq == 1:
+                    try:
+                        self.redis_client.expire(key, 172800)  # ~2 days, so it resets each day
+                    except Exception:
+                        pass
+                return seq
+            except Exception:
+                pass
+        # Fallback (Redis down): non-sequential but unique enough within the day.
+        return int(now_in_runtime_timezone().strftime("%H%M%S%f"))
+
+    def register_hospital_patient(
+        self,
+        *,
+        hospital_code: str,
+        doctor_id: int,
+        patient_name: str,
+        phone: str,
+        age: str = "",
+        gender: str = "",
+    ) -> dict:
+        """Hospital registration (NOT an appointment). Upserts the patients row by
+        (admin_id + name + phone) and stores a daily-unique token in `tmpregtoken`.
+
+        - Token format: <CODE>/<YYYY>/<MM>/<DD>/<00001> (5-digit daily sequence via Redis).
+        - One-per-day: if the matched patient already has TODAY's token, it is returned
+          with status 'already_registered' (no new row, no new number).
+        - Existing patient (name+phone) -> UPDATE the same row; new patient -> INSERT.
+        """
+        if not self.booking_repository:
+            return {"status": "error", "message": "Registration database is not configured."}
+
+        cleaned_name = " ".join((patient_name or "").strip().split())
+        normalized_phone = self._normalize_phone(phone)
+        if not cleaned_name or len(normalized_phone) < 10 or len(normalized_phone) > 15:
+            return {"status": "error", "message": "Please enter a valid name and phone number."}
+
+        admin_id = self._resolve_admin_id(doctor_id) if doctor_id else None
+        if not admin_id:
+            return {"status": "error", "message": "This doctor is not linked to a hospital admin."}
+
+        try:
+            age_val = int(str(age).strip())
+        except Exception:
+            age_val = None
+
+        now = now_in_runtime_timezone()
+        code = re.sub(r"[^A-Za-z0-9]", "", str(hospital_code or "")).upper() or "REG"
+        today_prefix = f"{code}/{now.strftime('%Y/%m/%d')}/"
+
+        conn = self.booking_repository._connect()
+        cur = conn.cursor(dictionary=True)
+        try:
+            patient_columns = self.booking_repository._table_columns("patients")
+            has_tmp = "tmpregtoken" in patient_columns
+            phone_expr = self.booking_repository._normalized_phone_sql_expr("phone")
+            profile_type_sql = (
+                "AND UPPER(COALESCE(profile_type, 'SELF')) = 'SELF'"
+                if "profile_type" in patient_columns
+                else ""
+            )
+            cur.execute(
+                f"""
+                SELECT patient_id, tmpregtoken
+                FROM patients
+                WHERE admin_id = %s
+                  AND TRIM(LOWER(COALESCE(full_name, ''))) = %s
+                  {profile_type_sql}
+                  AND ({phone_expr} = %s OR RIGHT({phone_expr}, 10) = %s)
+                ORDER BY patient_id DESC
+                LIMIT 1
+                FOR UPDATE
+                """,
+                (admin_id, cleaned_name.lower(), normalized_phone, normalized_phone[-10:]),
+            )
+            row = cur.fetchone()
+
+            # One registration per patient per day.
+            if row and has_tmp:
+                existing = str(row.get("tmpregtoken") or "")
+                if existing.startswith(today_prefix):
+                    conn.rollback()
+                    return {
+                        "status": "already_registered",
+                        "token": existing,
+                        "message": f"You are already registered today. Your token is {existing}.",
+                    }
+
+            sequence = self.next_registration_sequence(hospital_code)
+            token = f"{today_prefix}{sequence:05d}"
+
+            if row:
+                patient_id = int(row["patient_id"])
+                set_parts = ["full_name = %s", "phone = %s", "doctor_id = %s"]
+                set_vals: list[object] = [cleaned_name, normalized_phone, doctor_id]
+                if "age" in patient_columns and age_val is not None:
+                    set_parts.append("age = %s")
+                    set_vals.append(age_val)
+                if "gender" in patient_columns and gender:
+                    set_parts.append("gender = %s")
+                    set_vals.append(gender)
+                if has_tmp:
+                    set_parts.append("tmpregtoken = %s")
+                    set_vals.append(token)
+                cur.execute(
+                    f"UPDATE patients SET {', '.join(set_parts)} WHERE patient_id = %s",
+                    tuple(set_vals + [patient_id]),
+                )
+            else:
+                cols = ["full_name", "admin_id", "doctor_id", "phone"]
+                vals: list[object] = [cleaned_name, admin_id, doctor_id, normalized_phone]
+                if "profile_type" in patient_columns:
+                    cols.append("profile_type")
+                    vals.append("SELF")
+                if "age" in patient_columns and age_val is not None:
+                    cols.append("age")
+                    vals.append(age_val)
+                if "gender" in patient_columns and gender:
+                    cols.append("gender")
+                    vals.append(gender)
+                if has_tmp:
+                    cols.append("tmpregtoken")
+                    vals.append(token)
+                cur.execute(
+                    f"INSERT INTO patients ({', '.join(cols)}) VALUES ({', '.join(['%s'] * len(cols))})",
+                    tuple(vals),
+                )
+
+            conn.commit()
+            return {
+                "status": "registered",
+                "token": token,
+                "message": f"Registration successful. Your token is {token}.",
+            }
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            cur.close()
+            conn.close()
 
     @staticmethod
     def _normalize_language(language: str) -> str:

@@ -11,14 +11,26 @@ from src.qr.generator_service import (
     build_download_filename,
     build_hospital_download_filename,
     build_qr_booking_url,
+    build_qr_hospital_registration_url,
     build_qr_hospital_url,
     build_qr_svg,
     svg_to_data_url,
 )
-from src.qr.page_renderer import render_hospital_qr_page_html, render_qr_page_html
+from src.qr.page_renderer import (
+    render_hospital_qr_page_html,
+    render_hospital_registration_page_html,
+    render_qr_page_html,
+)
 
 
 _SUPPORTED_LANGS = {"en", "hi", "hinglish"}
+
+# --- Hospital REGISTRATION flow config -----------------------------------------
+# Doctor + specialization are read from the DB (same lookup as the hospital page),
+# keyed by hospital_code. Submit does NOT book an appointment and does NOT write to
+# the DB — it only returns a unique token (Redis daily counter). Fallback name below
+# is used only when the DB has no name for the code.
+REGISTRATION_HOSPITAL_NAME_DEFAULT = "Nirmal Ashram Hospital"
 
 
 def _normalize_lang(value: str | None, *, allow_hinglish: bool = True) -> str | None:
@@ -578,6 +590,158 @@ def register_qr_routes(
         booking_url = build_qr_hospital_url(base_url=str(request.base_url), hospital_code=code)
         svg_markup = await run_in_threadpool(build_qr_svg, url=booking_url)
         filename = build_hospital_download_filename(hospital_name=hospital_name, hospital_code=code)
+        return Response(
+            content=svg_markup,
+            media_type="image/svg+xml",
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        )
+
+    # --- Hospital REGISTRATION flow (static, NO DB, isolated from all above) ------
+    @router.get("/qr/hospital/registration/checkin", response_class=HTMLResponse)
+    async def qr_hospital_registration_page(request: Request, hospital_code: str = "", hospital_name: str = ""):
+        resolved_lang, _ = _resolve_effective_language(request, {})
+        code = (hospital_code or "").strip()
+        options = {"hospital_code": code, "hospital_name": "", "specializations": [], "doctors": []}
+        if qr_checkin_service and code:
+            try:
+                options = await asyncio.wait_for(
+                    run_in_threadpool(qr_checkin_service.hospital_qr_options, code),
+                    timeout=max(qr_page_lookup_timeout_seconds, 15.0),
+                )
+            except Exception as exc:
+                logger.warning("Hospital registration options lookup failed hospital_code=%s error=%s", code, exc)
+                options = {"hospital_code": code, "hospital_name": "", "specializations": [], "doctors": []}
+        name = (
+            (hospital_name or "").strip()
+            or str(options.get("hospital_name") or "").strip()
+            or REGISTRATION_HOSPITAL_NAME_DEFAULT
+        )
+        return HTMLResponse(
+            render_hospital_registration_page_html(
+                hospital_code=code,
+                hospital_name=name,
+                doctors=options.get("doctors") or [],
+                specializations=options.get("specializations") or [],
+                language=resolved_lang,
+            )
+        )
+
+    @router.post("/qr/hospital/registration/submit")
+    async def qr_hospital_registration_submit(request: Request):
+        try:
+            payload = await request.json()
+        except Exception:
+            payload = {}
+
+        patient_name = str(payload.get("patient_name") or "").strip()
+        age = str(payload.get("age") or "").strip()
+        gender = str(payload.get("gender") or "").strip()
+        phone_number = str(payload.get("phone_number") or "").strip()
+        doctor_name = str(payload.get("doctor_name") or "").strip()
+        specialization = str(payload.get("specialization") or "").strip()
+        hospital_code = str(payload.get("hospital_code") or "").strip()
+        try:
+            doctor_id = int(payload.get("doctor_id"))
+        except Exception:
+            doctor_id = 0
+
+        if not patient_name or not age or not gender or not phone_number:
+            msg = "Please fill name, age, gender and phone number."
+            return JSONResponse({"detail": msg, "message": msg}, status_code=400)
+        if not doctor_id:
+            msg = "Please choose a valid doctor."
+            return JSONResponse({"detail": msg, "message": msg}, status_code=400)
+        if not qr_checkin_service:
+            msg = "Registration is not configured."
+            return JSONResponse({"detail": msg, "message": msg}, status_code=503)
+
+        # Upsert patient (match by admin_id+name+phone), store daily-unique token in
+        # patients.tmpregtoken. One registration per patient per day.
+        try:
+            result = await run_in_threadpool(
+                qr_checkin_service.register_hospital_patient,
+                hospital_code=hospital_code,
+                doctor_id=doctor_id,
+                patient_name=patient_name,
+                phone=phone_number,
+                age=age,
+                gender=gender,
+            )
+        except Exception as exc:
+            logger.warning("Hospital registration failed hospital_code=%s error=%s", hospital_code, exc)
+            msg = "Unable to register right now. Please try again."
+            return JSONResponse({"detail": msg, "message": msg}, status_code=500)
+
+        status = str(result.get("status") or "")
+        qr_chat_id = f"qr_registration_{''.join(ch for ch in phone_number if ch.isdigit()) or 'unknown'}"
+        log_event_fn(
+            qr_chat_id,
+            "QR_HOSPITAL_REGISTRATION_SUBMIT",
+            hospital_code=hospital_code,
+            doctor_id=doctor_id,
+            doctor_name=doctor_name,
+            specialization=specialization,
+            patient_name=patient_name[:80],
+            age=age,
+            gender=gender,
+            token=result.get("token"),
+            result_status=status,
+        )
+        if status == "error":
+            return JSONResponse(
+                {"detail": result.get("message"), "message": result.get("message")}, status_code=400
+            )
+        return JSONResponse(result)
+
+    @router.post("/qr/hospital/registration/generate")
+    async def qr_hospital_registration_generate(request: Request):
+        payload: dict[str, object] = {}
+        try:
+            payload = await request.json()
+        except Exception:
+            try:
+                form = await request.form()
+                payload = dict(form)
+            except Exception:
+                payload = {}
+
+        code = str(
+            payload.get("hospital_code")
+            or request.query_params.get("hospital_code")
+            or ""
+        ).strip()
+        name = str(
+            payload.get("hospital_name")
+            or request.query_params.get("hospital_name")
+            or ""
+        ).strip() or REGISTRATION_HOSPITAL_NAME_DEFAULT
+
+        booking_url = build_qr_hospital_registration_url(
+            base_url=str(request.base_url), hospital_code=code, hospital_name=name
+        )
+        svg_markup = await run_in_threadpool(build_qr_svg, url=booking_url)
+        filename = build_hospital_download_filename(hospital_name=f"{name}-registration", hospital_code=code or "registration")
+        download_query = f"hospital_code={code}&hospital_name={name}"
+        return JSONResponse(
+            {
+                "hospital_code": code,
+                "hospital_name": name,
+                "mime_type": "image/svg+xml",
+                "filename": filename,
+                "preview_data_url": svg_to_data_url(svg_markup),
+                "download_path": f"/qr/hospital/registration/generate/download?{download_query}",
+            }
+        )
+
+    @router.get("/qr/hospital/registration/generate/download")
+    async def qr_hospital_registration_generate_download(request: Request, hospital_code: str = "", hospital_name: str = ""):
+        code = (hospital_code or "").strip()
+        name = (hospital_name or "").strip() or REGISTRATION_HOSPITAL_NAME_DEFAULT
+        booking_url = build_qr_hospital_registration_url(
+            base_url=str(request.base_url), hospital_code=code, hospital_name=name
+        )
+        svg_markup = await run_in_threadpool(build_qr_svg, url=booking_url)
+        filename = build_hospital_download_filename(hospital_name=f"{name}-registration", hospital_code=code or "registration")
         return Response(
             content=svg_markup,
             media_type="image/svg+xml",

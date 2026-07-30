@@ -25,3 +25,12 @@ tests/artifacts/
 env_file_copy.txt
 System_Diagrams_presentation.pdf
 .env.example
+
+# QR / registration local test artifacts (curl -o outputs, generated QR images)
+clinic.html
+flores.html
+reg.html
+regnah*.html
+hospital_qr.svg
+clinic_qr.svg
+dapto_playstore_qr.svg

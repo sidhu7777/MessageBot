@@ -509,6 +509,418 @@ def render_qr_page_html(
 </html>"""
 
 
+def render_hospital_registration_page_html(
+    *,
+    hospital_code: str,
+    hospital_name: str,
+    doctors: list,
+    specializations: list,
+    language: str = "en",
+) -> str:
+    """Standalone hospital REGISTRATION page. Static doctor/specialization lists, no DB,
+    and on submit it shows a generated unique token instead of booking an appointment."""
+    dapto_logo_src = _dapto_logo_src()
+    hospital_code_safe = html_escape.escape(hospital_code or "")
+    hospital_name = str(hospital_name or "").strip() or "Hospital"
+    hospital_name_safe = html_escape.escape(hospital_name)
+    doctors_json = json.dumps(doctors or [], ensure_ascii=False)
+    specializations_json = json.dumps(specializations or [], ensure_ascii=False)
+    lang = language if language in {"en", "hi", "hinglish"} else "en"
+    submit_text = {
+        "en": "Submit",
+        "hi": "सबमिट करें",
+        "hinglish": "Submit kariye",
+    }[lang]
+    ui = {
+        "en": {
+            "kicker": "Book Your Registration",
+            "title": f"Welcome to {hospital_name_safe}",
+        },
+        "hi": {
+            "kicker": "अपना पंजीकरण करें",
+            "title": f"{hospital_name_safe} में आपका स्वागत है",
+        },
+        "hinglish": {
+            "kicker": "Book Your Registration",
+            "title": f"{hospital_name_safe} mein aapka swagat hai",
+        },
+    }[lang]
+    return f"""<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>{hospital_name_safe}</title>
+  <style>
+    :root {{
+      --bg: linear-gradient(140deg, #f6f7f2 0%, #e5efe0 60%, #d7e7dc 100%);
+      --card: #ffffff;
+      --ink: #1d2a23;
+      --muted: #5b6e62;
+      --accent: #0f766e;
+      --accent-soft: #d3f2ee;
+      --ok: #0a7a4f;
+      --warn: #a85810;
+      --danger: #9f2d2d;
+    }}
+    * {{ box-sizing: border-box; }}
+    body {{
+      margin: 0;
+      font-family: "Segoe UI", Tahoma, sans-serif;
+      color: var(--ink);
+      background: var(--bg);
+      min-height: 100vh;
+      display: grid;
+      place-items: center;
+      padding: 18px;
+    }}
+    .card {{
+      width: min(760px, 100%);
+      background: var(--card);
+      border-radius: 20px;
+      box-shadow: 0 20px 50px rgba(8, 38, 34, 0.14);
+      overflow: hidden;
+      border: 1px solid #e4efe8;
+    }}
+    .hero {{
+      padding: 28px 24px 12px 24px;
+      background:
+        radial-gradient(circle at 85% 15%, #c5f3ea 0, rgba(197,243,234,0) 46%),
+        radial-gradient(circle at 20% 0%, #ebf9f4 0, rgba(235,249,244,0) 52%);
+    }}
+    .kicker {{
+      display: inline-block;
+      background: var(--accent-soft);
+      color: #0d645d;
+      border-radius: 999px;
+      padding: 6px 12px;
+      font-size: 12px;
+      font-weight: 600;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+    }}
+    h1 {{ margin: 12px 0 8px 0; font-size: 28px; line-height: 1.2; }}
+    .subtitle {{ margin: 0; color: var(--muted); font-size: 15px; }}
+    .form-wrap {{ padding: 20px 24px 24px 24px; display: grid; gap: 14px; }}
+    label {{ display: grid; gap: 6px; font-weight: 600; font-size: 14px; }}
+    input, select {{
+      width: 100%;
+      border: 1px solid #ceded5;
+      border-radius: 12px;
+      padding: 12px 12px;
+      font-size: 15px;
+      outline: none;
+      background: #fff;
+      transition: border-color .2s, box-shadow .2s;
+    }}
+    input:focus, select:focus {{
+      border-color: var(--accent);
+      box-shadow: 0 0 0 3px rgba(15,118,110,0.13);
+    }}
+    .grid {{ display: grid; gap: 12px; }}
+    @media (min-width: 640px) {{ .grid {{ grid-template-columns: 1fr 1fr; }} }}
+    button {{
+      margin-top: 4px;
+      border: 0;
+      border-radius: 12px;
+      padding: 12px 16px;
+      color: white;
+      background: linear-gradient(135deg, #0f766e, #0b5a53);
+      font-size: 15px;
+      font-weight: 700;
+      cursor: pointer;
+    }}
+    button:disabled {{ opacity: .7; cursor: not-allowed; }}
+    .result {{ display: none; }}
+    .ok {{ color: var(--ok); }}
+    .warn {{ color: var(--warn); }}
+    .err {{ color: var(--danger); }}
+    .modal {{
+      position: fixed;
+      inset: 0;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      background: rgba(7, 24, 22, 0.48);
+      padding: 20px;
+      z-index: 999;
+    }}
+    .modal.open {{ display: flex; }}
+    .modal-card {{
+      width: min(560px, 100%);
+      background: #fff;
+      border-radius: 18px;
+      box-shadow: 0 24px 60px rgba(10, 30, 26, 0.28);
+      border: 1px solid #dfece5;
+      overflow: hidden;
+    }}
+    .modal-head {{
+      padding: 18px 20px 12px 20px;
+      border-bottom: 1px solid #ebf1ed;
+      font-size: 20px;
+      font-weight: 700;
+    }}
+    .modal-head.ok {{ color: var(--ok); }}
+    .modal-head.warn {{ color: var(--warn); }}
+    .modal-head.err {{ color: var(--danger); }}
+    .modal-body {{ padding: 18px 20px; line-height: 1.55; font-size: 15px; }}
+    .modal-actions {{ padding: 0 20px 20px 20px; display: flex; justify-content: flex-end; }}
+    .modal-actions button {{ margin-top: 0; min-width: 120px; }}
+    .brand-footer {{
+      padding: 0 24px 24px 24px;
+      display: grid;
+      justify-items: center;
+      gap: 8px;
+      text-align: center;
+      color: var(--muted);
+    }}
+    .brand-footer span {{
+      font-size: 12px;
+      font-weight: 600;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+    }}
+    .brand-footer img {{
+      display: block;
+      width: min(160px, 42vw);
+      height: auto;
+      object-fit: contain;
+    }}
+  </style>
+</head>
+<body>
+  <section class="card">
+    <div class="hero">
+      <span class="kicker">{ui["kicker"]}</span>
+      <h1>{ui["title"]}</h1>
+    </div>
+    <form class="form-wrap" id="registrationForm">
+      <div class="grid">
+        <label>
+          <span>Specialization</span>
+          <select id="specializationSelect"></select>
+        </label>
+        <label>
+          <span>Doctor</span>
+          <select id="doctorSelect" required></select>
+        </label>
+      </div>
+      <div class="grid">
+        <label>
+          <span>Full Name</span>
+          <input id="patientName" maxlength="120" required />
+        </label>
+        <label>
+          <span>Phone Number</span>
+          <input id="phoneNumber" maxlength="20" required />
+        </label>
+      </div>
+      <div class="grid">
+        <label>
+          <span>Age</span>
+          <input id="patientAge" type="number" min="0" max="130" required />
+        </label>
+        <label>
+          <span>Gender</span>
+          <select id="patientGender" required>
+            <option value="">Select gender</option>
+            <option value="Male">Male</option>
+            <option value="Female">Female</option>
+            <option value="Other">Other</option>
+          </select>
+        </label>
+      </div>
+      <button id="submitBtn" type="submit">{submit_text}</button>
+      <div id="result" class="result"></div>
+      <input type="hidden" id="hospitalCode" value="{hospital_code_safe}" />
+      <input type="hidden" id="hospitalName" value="{hospital_name_safe}" />
+    </form>
+    <div class="brand-footer">
+      <span>Powered by</span>
+      <img src="{dapto_logo_src}" alt="" onerror="this.style.display='none'" />
+    </div>
+  </section>
+  <div id="resultModal" class="modal" aria-hidden="true">
+    <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
+      <div id="modalTitle" class="modal-head">Registration Status</div>
+      <div id="modalBody" class="modal-body"></div>
+      <div class="modal-actions">
+        <button id="modalCloseBtn" type="button">Close</button>
+      </div>
+    </div>
+  </div>
+  <script>
+    const doctors = {doctors_json};
+    const specializations = {specializations_json};
+    const lang = "{lang}";
+    const labels = {{
+      allSpecializations: "All specializations",
+      chooseDoctor: "Select doctor",
+      noSpecializations: "No specializations available",
+      noDoctors: "No doctors available",
+      missingDoctor: "Please choose a doctor.",
+      missingFields: "Please fill name, age, gender and phone number.",
+      submitting: "Submitting...",
+      submit: {json.dumps(submit_text, ensure_ascii=False)},
+      failed: "Unable to submit right now. Please try again.",
+      tokenLabel: "Your Registration Token",
+      modalOk: "Registration Successful",
+      modalWarn: "Registration Update",
+      modalErr: "Registration Status",
+    }};
+
+    function fillSpecializations() {{
+      const select = document.getElementById("specializationSelect");
+      select.innerHTML = "";
+      if (!doctors.length) {{
+        const option = new Option(labels.noSpecializations, "");
+        option.disabled = true;
+        select.appendChild(option);
+        select.disabled = true;
+        return;
+      }}
+      select.disabled = false;
+      select.appendChild(new Option(labels.allSpecializations, ""));
+      specializations.forEach((name) => select.appendChild(new Option(name, name)));
+    }}
+
+    function fillDoctors() {{
+      const specialization = document.getElementById("specializationSelect").value;
+      const select = document.getElementById("doctorSelect");
+      const submitBtn = document.getElementById("submitBtn");
+      const previous = select.value;
+      select.innerHTML = "";
+      const visibleDoctors = doctors.filter((doctor) => !specialization || doctor.specialization === specialization);
+      if (!visibleDoctors.length) {{
+        const option = new Option(labels.noDoctors, "");
+        option.disabled = true;
+        select.appendChild(option);
+        select.disabled = true;
+        submitBtn.disabled = true;
+        return;
+      }}
+      select.disabled = false;
+      submitBtn.disabled = false;
+      select.appendChild(new Option(labels.chooseDoctor, ""));
+      visibleDoctors.forEach((doctor) => {{
+        const label = doctor.specialization ? `${{doctor.doctor_name}} - ${{doctor.specialization}}` : doctor.doctor_name;
+        select.appendChild(new Option(label, String(doctor.doctor_id)));
+      }});
+      if ([...select.options].some((option) => option.value === previous)) select.value = previous;
+    }}
+
+    function syncSpecializationFromDoctor() {{
+      const doctorId = Number(document.getElementById("doctorSelect").value || 0);
+      const doctor = doctors.find((item) => Number(item.doctor_id) === doctorId);
+      if (doctor && doctor.specialization) {{
+        document.getElementById("specializationSelect").value = doctor.specialization;
+        fillDoctors();
+        document.getElementById("doctorSelect").value = String(doctor.doctor_id);
+      }}
+    }}
+
+    function openResultModal(kind, htmlMessage) {{
+      const title = document.getElementById("modalTitle");
+      const body = document.getElementById("modalBody");
+      const modal = document.getElementById("resultModal");
+      title.className = "modal-head " + kind;
+      title.textContent = kind === "ok" ? labels.modalOk : kind === "warn" ? labels.modalWarn : labels.modalErr;
+      body.innerHTML = htmlMessage;
+      modal.classList.add("open");
+      modal.setAttribute("aria-hidden", "false");
+    }}
+
+    function closeResultModal() {{
+      const modal = document.getElementById("resultModal");
+      modal.classList.remove("open");
+      modal.setAttribute("aria-hidden", "true");
+    }}
+
+    function escapeHtml(value) {{
+      return String(value || "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+    }}
+
+    fillSpecializations();
+    fillDoctors();
+    document.getElementById("specializationSelect").addEventListener("change", fillDoctors);
+    document.getElementById("doctorSelect").addEventListener("change", syncSpecializationFromDoctor);
+    document.getElementById("modalCloseBtn").addEventListener("click", closeResultModal);
+    document.getElementById("resultModal").addEventListener("click", (e) => {{
+      if (e.target.id === "resultModal") closeResultModal();
+    }});
+
+    document.getElementById("registrationForm").addEventListener("submit", async (e) => {{
+      e.preventDefault();
+      const btn = document.getElementById("submitBtn");
+      const doctorId = document.getElementById("doctorSelect").value;
+      const doctorSelect = document.getElementById("doctorSelect");
+      const name = document.getElementById("patientName").value.trim();
+      const age = document.getElementById("patientAge").value.trim();
+      const gender = document.getElementById("patientGender").value;
+      const phone = document.getElementById("phoneNumber").value.trim();
+      if (!doctorId) {{
+        openResultModal("err", escapeHtml(labels.missingDoctor));
+        return;
+      }}
+      if (!name || !age || !gender || !phone) {{
+        openResultModal("err", escapeHtml(labels.missingFields));
+        return;
+      }}
+      btn.disabled = true;
+      btn.textContent = labels.submitting;
+      const controller = new AbortController();
+      const timeoutId = window.setTimeout(() => controller.abort(), 45000);
+      try {{
+        const resp = await fetch(`/qr/hospital/registration/submit?lang=${{encodeURIComponent(lang)}}`, {{
+          method: "POST",
+          signal: controller.signal,
+          headers: {{ "Content-Type": "application/json" }},
+          body: JSON.stringify({{
+            hospital_code: document.getElementById("hospitalCode").value,
+            hospital_name: document.getElementById("hospitalName").value,
+            doctor_id: doctorId,
+            doctor_name: (doctorSelect.selectedOptions[0] || {{}}).text || "",
+            specialization: document.getElementById("specializationSelect").value,
+            patient_name: name,
+            age: age,
+            gender: gender,
+            phone_number: phone,
+            detected_language: lang,
+          }}),
+        }});
+        const data = await resp.json();
+        const st = data && data.status;
+        if (st === "registered" && data.token) {{
+          openResultModal(
+            "ok",
+            "<div>" + escapeHtml(labels.tokenLabel) + "</div>" +
+            "<div style=\\"font-size:24px;font-weight:800;letter-spacing:1px;margin-top:8px;color:var(--accent)\\">" +
+            escapeHtml(data.token) + "</div>"
+          );
+        }} else if (st === "already_registered") {{
+          openResultModal(
+            "warn",
+            "<div>" + escapeHtml(data.message || "") + "</div>" +
+            (data.token
+              ? "<div style=\\"font-size:22px;font-weight:800;letter-spacing:1px;margin-top:8px;color:var(--accent)\\">" + escapeHtml(data.token) + "</div>"
+              : "")
+          );
+        }} else {{
+          openResultModal("err", escapeHtml((data && (data.message || data.detail)) || labels.failed));
+        }}
+      }} catch (err) {{
+        openResultModal("err", escapeHtml(labels.failed));
+      }} finally {{
+        window.clearTimeout(timeoutId);
+        btn.disabled = false;
+        btn.textContent = labels.submit;
+      }}
+    }});
+  </script>
+</body>
+</html>"""
+
+
 def render_hospital_qr_page_html(
     *,
     hospital_code: str,
@@ -706,7 +1118,8 @@ def render_hospital_qr_page_html(
       <h1>{ui["title"]}</h1>
     </div>
     <form class="form-wrap" id="hospitalCheckinForm">
-      <div class="grid">
+      <div id="noDoctorsNotice" role="alert" style="display:none; margin:0 0 4px 0; padding:14px 16px; border-radius:12px; background:#fdf4e6; border:1px solid #f0d9b5; color:var(--warn); font-size:15px; font-weight:600; line-height:1.5; text-align:center;"></div>
+      <div class="grid" id="selectsGrid">
         <label>
           <span>Specialization</span>
           <select id="specializationSelect"></select>
@@ -849,6 +1262,21 @@ def render_hospital_qr_page_html(
 
     fillSpecializations();
     fillDoctors();
+    if (!doctors.length) {{
+      const noDoctorsMsg = (
+        lang === "hi"
+          ? "आज बुकिंग के लिए कोई डॉक्टर उपलब्ध नहीं है। कृपया बाद में पुनः प्रयास करें या फ्रंट डेस्क से संपर्क करें।"
+          : lang === "hinglish"
+          ? "Aaj booking ke liye koi doctor available nahi hai. Kripya baad mein try karein ya front desk se sampark karein."
+          : "No doctors are available for booking today. Please try again later or contact the front desk."
+      );
+      const notice = document.getElementById("noDoctorsNotice");
+      notice.textContent = noDoctorsMsg;
+      notice.style.display = "block";
+      const selectsGrid = document.getElementById("selectsGrid");
+      if (selectsGrid) selectsGrid.style.display = "none";
+      document.getElementById("submitBtn").disabled = true;
+    }}
     document.getElementById("specializationSelect").addEventListener("change", fillDoctors);
     document.getElementById("doctorSelect").addEventListener("change", syncSpecializationFromDoctor);
     document.getElementById("modalCloseBtn").addEventListener("click", closeResultModal);
