@@ -118,11 +118,37 @@ class QrCheckinService:
         # Fallback (Redis down): non-sequential but unique enough within the day.
         return int(now_in_runtime_timezone().strftime("%H%M%S%f"))
 
+    def _resolve_hospital_admin_id(self, hospital_code: str) -> Optional[int]:
+        """Admin id for a hospital group (used when no doctor is selected)."""
+        code = str(hospital_code or "").strip()
+        group_col = self._hospital_group_column()
+        if not self.booking_repository or not code or not group_col:
+            return None
+        conn = self.booking_repository._connect()
+        cur = conn.cursor(dictionary=True)
+        try:
+            cur.execute(
+                f"""
+                SELECT admin_id
+                FROM clinics
+                WHERE TRIM(COALESCE({group_col}, '')) = %s
+                  AND admin_id IS NOT NULL
+                ORDER BY clinic_id
+                LIMIT 1
+                """,
+                (code,),
+            )
+            row = cur.fetchone()
+            return int(row["admin_id"]) if row and row.get("admin_id") is not None else None
+        finally:
+            cur.close()
+            conn.close()
+
     def register_hospital_patient(
         self,
         *,
         hospital_code: str,
-        doctor_id: int,
+        doctor_id: int = 0,
         patient_name: str,
         phone: str,
         age: str = "",
@@ -131,10 +157,12 @@ class QrCheckinService:
         """Hospital registration (NOT an appointment). Upserts the patients row by
         (admin_id + name + phone) and stores a daily-unique token in `tmpregtoken`.
 
+        - Only name/age/gender/phone are required; doctor is OPTIONAL.
         - Token format: <CODE>/<YYYY>/<MM>/<DD>/<00001> (5-digit daily sequence via Redis).
         - One-per-day: if the matched patient already has TODAY's token, it is returned
           with status 'already_registered' (no new row, no new number).
         - Existing patient (name+phone) -> UPDATE the same row; new patient -> INSERT.
+        - Saves hospital_code into patients.hospital_group_code; doctor_id may be NULL.
         """
         if not self.booking_repository:
             return {"status": "error", "message": "Registration database is not configured."}
@@ -144,9 +172,18 @@ class QrCheckinService:
         if not cleaned_name or len(normalized_phone) < 10 or len(normalized_phone) > 15:
             return {"status": "error", "message": "Please enter a valid name and phone number."}
 
-        admin_id = self._resolve_admin_id(doctor_id) if doctor_id else None
+        try:
+            doctor_id_val = int(doctor_id) if doctor_id else None
+        except Exception:
+            doctor_id_val = None
+
+        # admin_id is required (NOT NULL). Prefer the chosen doctor's admin; otherwise
+        # resolve it from the hospital code so registration works even with no doctor.
+        admin_id = self._resolve_admin_id(doctor_id_val) if doctor_id_val else None
         if not admin_id:
-            return {"status": "error", "message": "This doctor is not linked to a hospital admin."}
+            admin_id = self._resolve_hospital_admin_id(hospital_code)
+        if not admin_id:
+            return {"status": "error", "message": "This hospital is not configured for registration."}
 
         try:
             age_val = int(str(age).strip())
@@ -154,7 +191,8 @@ class QrCheckinService:
             age_val = None
 
         now = now_in_runtime_timezone()
-        code = re.sub(r"[^A-Za-z0-9]", "", str(hospital_code or "")).upper() or "REG"
+        hospital_code_raw = str(hospital_code or "").strip()
+        code = re.sub(r"[^A-Za-z0-9]", "", hospital_code_raw).upper() or "REG"
         today_prefix = f"{code}/{now.strftime('%Y/%m/%d')}/"
 
         conn = self.booking_repository._connect()
@@ -198,10 +236,18 @@ class QrCheckinService:
             sequence = self.next_registration_sequence(hospital_code)
             token = f"{today_prefix}{sequence:05d}"
 
+            has_group = "hospital_group_code" in patient_columns
+
             if row:
                 patient_id = int(row["patient_id"])
-                set_parts = ["full_name = %s", "phone = %s", "doctor_id = %s"]
-                set_vals: list[object] = [cleaned_name, normalized_phone, doctor_id]
+                set_parts = ["full_name = %s", "phone = %s"]
+                set_vals: list[object] = [cleaned_name, normalized_phone]
+                if doctor_id_val is not None:  # only overwrite when a doctor was chosen
+                    set_parts.append("doctor_id = %s")
+                    set_vals.append(doctor_id_val)
+                if has_group and hospital_code_raw:
+                    set_parts.append("hospital_group_code = %s")
+                    set_vals.append(hospital_code_raw)
                 if "age" in patient_columns and age_val is not None:
                     set_parts.append("age = %s")
                     set_vals.append(age_val)
@@ -216,8 +262,11 @@ class QrCheckinService:
                     tuple(set_vals + [patient_id]),
                 )
             else:
-                cols = ["full_name", "admin_id", "doctor_id", "phone"]
-                vals: list[object] = [cleaned_name, admin_id, doctor_id, normalized_phone]
+                cols = ["full_name", "admin_id", "phone", "doctor_id"]
+                vals: list[object] = [cleaned_name, admin_id, normalized_phone, doctor_id_val]
+                if has_group and hospital_code_raw:
+                    cols.append("hospital_group_code")
+                    vals.append(hospital_code_raw)
                 if "profile_type" in patient_columns:
                     cols.append("profile_type")
                     vals.append("SELF")

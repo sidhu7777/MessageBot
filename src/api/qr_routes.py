@@ -648,9 +648,7 @@ def register_qr_routes(
         if not patient_name or not age or not gender or not phone_number:
             msg = "Please fill name, age, gender and phone number."
             return JSONResponse({"detail": msg, "message": msg}, status_code=400)
-        if not doctor_id:
-            msg = "Please choose a valid doctor."
-            return JSONResponse({"detail": msg, "message": msg}, status_code=400)
+        # doctor_id is OPTIONAL for registration (0 -> no doctor, stored as NULL)
         if not qr_checkin_service:
             msg = "Registration is not configured."
             return JSONResponse({"detail": msg, "message": msg}, status_code=503)

@@ -545,8 +545,49 @@ def render_hospital_registration_page_html(
             "title": f"{hospital_name_safe} mein aapka swagat hai",
         },
     }[lang]
+    # Full UI text table (English + Hindi). DB values (hospital/doctor/specialization)
+    # are shown as-is and never translated. Hinglish/other -> English.
+    L = "hi" if lang == "hi" else "en"
+    t = {
+        "en": {
+            "specialization": "Specialization", "doctor": "Doctor",
+            "full_name": "Full Name", "phone": "Phone Number",
+            "age": "Age", "gender": "Gender", "select_gender": "Select gender",
+            "male": "Male", "female": "Female", "other": "Other",
+            "all_specializations": "All specializations", "choose_doctor": "Select doctor",
+            "no_specializations": "No specializations available",
+            "no_doctors": "No doctors available",
+            "missing_doctor": "Please choose a doctor.",
+            "missing_fields": "Please fill name, age, gender and phone number.",
+            "submitting": "Submitting...",
+            "failed": "Unable to submit right now. Please try again.",
+            "token_label": "Your Registration Token",
+            "already_registered": "You are already registered today. Your token is",
+            "modal_ok": "Registration Successful", "modal_warn": "Registration Update",
+            "modal_err": "Registration Status", "close": "Close",
+            "save_token": "Save Token", "img_name": "Name", "img_date": "Date",
+        },
+        "hi": {
+            "specialization": "विशेषज्ञता", "doctor": "डॉक्टर",
+            "full_name": "पूरा नाम", "phone": "फ़ोन नंबर",
+            "age": "उम्र", "gender": "लिंग", "select_gender": "लिंग चुनें",
+            "male": "पुरुष", "female": "महिला", "other": "अन्य",
+            "all_specializations": "सभी विशेषज्ञताएँ", "choose_doctor": "डॉक्टर चुनें",
+            "no_specializations": "कोई विशेषज्ञता उपलब्ध नहीं है",
+            "no_doctors": "कोई डॉक्टर उपलब्ध नहीं है",
+            "missing_doctor": "कृपया एक डॉक्टर चुनें।",
+            "missing_fields": "कृपया नाम, उम्र, लिंग और फ़ोन नंबर भरें।",
+            "submitting": "सबमिट हो रहा है...",
+            "failed": "अभी सबमिट नहीं हो सका। कृपया पुनः प्रयास करें।",
+            "token_label": "आपका पंजीकरण टोकन",
+            "already_registered": "आप आज पहले ही पंजीकृत हैं। आपका टोकन है",
+            "modal_ok": "पंजीकरण सफल", "modal_warn": "पंजीकरण अपडेट",
+            "modal_err": "पंजीकरण स्थिति", "close": "बंद करें",
+            "save_token": "टोकन सहेजें", "img_name": "नाम", "img_date": "दिनांक",
+        },
+    }[L]
     return f"""<!doctype html>
-<html lang="en">
+<html lang="{L}">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
@@ -697,36 +738,36 @@ def render_hospital_registration_page_html(
     <form class="form-wrap" id="registrationForm">
       <div class="grid">
         <label>
-          <span>Specialization</span>
+          <span>{t["specialization"]}</span>
           <select id="specializationSelect"></select>
         </label>
         <label>
-          <span>Doctor</span>
-          <select id="doctorSelect" required></select>
+          <span>{t["doctor"]}</span>
+          <select id="doctorSelect"></select>
         </label>
       </div>
       <div class="grid">
         <label>
-          <span>Full Name</span>
+          <span>{t["full_name"]}</span>
           <input id="patientName" maxlength="120" required />
         </label>
         <label>
-          <span>Phone Number</span>
+          <span>{t["phone"]}</span>
           <input id="phoneNumber" maxlength="20" required />
         </label>
       </div>
       <div class="grid">
         <label>
-          <span>Age</span>
+          <span>{t["age"]}</span>
           <input id="patientAge" type="number" min="0" max="130" required />
         </label>
         <label>
-          <span>Gender</span>
+          <span>{t["gender"]}</span>
           <select id="patientGender" required>
-            <option value="">Select gender</option>
-            <option value="Male">Male</option>
-            <option value="Female">Female</option>
-            <option value="Other">Other</option>
+            <option value="">{t["select_gender"]}</option>
+            <option value="Male">{t["male"]}</option>
+            <option value="Female">{t["female"]}</option>
+            <option value="Other">{t["other"]}</option>
           </select>
         </label>
       </div>
@@ -742,10 +783,10 @@ def render_hospital_registration_page_html(
   </section>
   <div id="resultModal" class="modal" aria-hidden="true">
     <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
-      <div id="modalTitle" class="modal-head">Registration Status</div>
+      <div id="modalTitle" class="modal-head">{t["modal_err"]}</div>
       <div id="modalBody" class="modal-body"></div>
       <div class="modal-actions">
-        <button id="modalCloseBtn" type="button">Close</button>
+        <button id="modalCloseBtn" type="button">{t["close"]}</button>
       </div>
     </div>
   </div>
@@ -754,20 +795,60 @@ def render_hospital_registration_page_html(
     const specializations = {specializations_json};
     const lang = "{lang}";
     const labels = {{
-      allSpecializations: "All specializations",
-      chooseDoctor: "Select doctor",
-      noSpecializations: "No specializations available",
-      noDoctors: "No doctors available",
-      missingDoctor: "Please choose a doctor.",
-      missingFields: "Please fill name, age, gender and phone number.",
-      submitting: "Submitting...",
+      allSpecializations: {json.dumps(t["all_specializations"], ensure_ascii=False)},
+      chooseDoctor: {json.dumps(t["choose_doctor"], ensure_ascii=False)},
+      noSpecializations: {json.dumps(t["no_specializations"], ensure_ascii=False)},
+      noDoctors: {json.dumps(t["no_doctors"], ensure_ascii=False)},
+      missingDoctor: {json.dumps(t["missing_doctor"], ensure_ascii=False)},
+      missingFields: {json.dumps(t["missing_fields"], ensure_ascii=False)},
+      submitting: {json.dumps(t["submitting"], ensure_ascii=False)},
       submit: {json.dumps(submit_text, ensure_ascii=False)},
-      failed: "Unable to submit right now. Please try again.",
-      tokenLabel: "Your Registration Token",
-      modalOk: "Registration Successful",
-      modalWarn: "Registration Update",
-      modalErr: "Registration Status",
+      failed: {json.dumps(t["failed"], ensure_ascii=False)},
+      tokenLabel: {json.dumps(t["token_label"], ensure_ascii=False)},
+      alreadyRegistered: {json.dumps(t["already_registered"], ensure_ascii=False)},
+      saveToken: {json.dumps(t["save_token"], ensure_ascii=False)},
+      modalOk: {json.dumps(t["modal_ok"], ensure_ascii=False)},
+      modalWarn: {json.dumps(t["modal_warn"], ensure_ascii=False)},
+      modalErr: {json.dumps(t["modal_err"], ensure_ascii=False)},
     }};
+    const hospitalName = {json.dumps(hospital_name, ensure_ascii=False)};
+    const imgLabels = {{
+      regToken: {json.dumps(t["token_label"], ensure_ascii=False)},
+      name: {json.dumps(t["img_name"], ensure_ascii=False)},
+      date: {json.dumps(t["img_date"], ensure_ascii=False)},
+    }};
+
+    // Render the token to a PNG in the browser and download it (no server load).
+    function downloadTokenImage(token, patientName) {{
+      try {{
+        const W = 900, H = 480;
+        const canvas = document.createElement("canvas");
+        canvas.width = W; canvas.height = H;
+        const ctx = canvas.getContext("2d");
+        ctx.fillStyle = "#ffffff"; ctx.fillRect(0, 0, W, H);
+        ctx.fillStyle = "#0f766e"; ctx.fillRect(0, 0, W, 96);
+        ctx.textAlign = "center";
+        ctx.fillStyle = "#ffffff";
+        ctx.font = "bold 34px 'Segoe UI', Arial, sans-serif";
+        ctx.fillText(hospitalName, W / 2, 60);
+        ctx.fillStyle = "#1d2a23";
+        ctx.font = "24px 'Segoe UI', Arial, sans-serif";
+        ctx.fillText(imgLabels.regToken, W / 2, 185);
+        ctx.fillStyle = "#0f766e";
+        ctx.font = "bold 46px 'Segoe UI', Arial, sans-serif";
+        ctx.fillText(token, W / 2, 260);
+        ctx.fillStyle = "#5b6e62";
+        ctx.font = "22px 'Segoe UI', Arial, sans-serif";
+        ctx.fillText(imgLabels.name + ": " + (patientName || ""), W / 2, 345);
+        ctx.fillText(imgLabels.date + ": " + new Date().toLocaleDateString(), W / 2, 385);
+        const a = document.createElement("a");
+        a.href = canvas.toDataURL("image/png");
+        a.download = "registration-token-" + String(token).replace(/[^A-Za-z0-9]/g, "-") + ".png";
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+      }} catch (err) {{ /* ignore - token is still shown on screen */ }}
+    }}
 
     function fillSpecializations() {{
       const select = document.getElementById("specializationSelect");
@@ -858,10 +939,6 @@ def render_hospital_registration_page_html(
       const age = document.getElementById("patientAge").value.trim();
       const gender = document.getElementById("patientGender").value;
       const phone = document.getElementById("phoneNumber").value.trim();
-      if (!doctorId) {{
-        openResultModal("err", escapeHtml(labels.missingDoctor));
-        return;
-      }}
       if (!name || !age || !gender || !phone) {{
         openResultModal("err", escapeHtml(labels.missingFields));
         return;
@@ -895,18 +972,22 @@ def render_hospital_registration_page_html(
             "ok",
             "<div>" + escapeHtml(labels.tokenLabel) + "</div>" +
             "<div style=\\"font-size:24px;font-weight:800;letter-spacing:1px;margin-top:8px;color:var(--accent)\\">" +
-            escapeHtml(data.token) + "</div>"
+            escapeHtml(data.token) + "</div>" +
+            "<button id=\\"saveTokenBtn\\" type=\\"button\\" style=\\"margin-top:16px;width:100%;\\">" +
+            escapeHtml(labels.saveToken) + "</button>"
           );
+          const saveBtn = document.getElementById("saveTokenBtn");
+          if (saveBtn) saveBtn.addEventListener("click", () => downloadTokenImage(data.token, name));
         }} else if (st === "already_registered") {{
           openResultModal(
             "warn",
-            "<div>" + escapeHtml(data.message || "") + "</div>" +
+            "<div>" + escapeHtml(labels.alreadyRegistered) + "</div>" +
             (data.token
               ? "<div style=\\"font-size:22px;font-weight:800;letter-spacing:1px;margin-top:8px;color:var(--accent)\\">" + escapeHtml(data.token) + "</div>"
               : "")
           );
         }} else {{
-          openResultModal("err", escapeHtml((data && (data.message || data.detail)) || labels.failed));
+          openResultModal("err", escapeHtml(labels.failed));
         }}
       }} catch (err) {{
         openResultModal("err", escapeHtml(labels.failed));
