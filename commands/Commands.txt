@@ -333,3 +333,15 @@ curl -X POST http://127.0.0.1:8001/qr/checkin/submit \
     "patient_name": "harshit",
     "phone_number": "6394753866"
   }'
+
+
+
+Correct command
+
+docker-compose rm -sf app
+docker-compose up -d --no-deps app
+
+Explanation 
+
+docker-compose rm -sf app → removes the old container (avoids the buggy "recreate" path that reads ContainerConfig).
+docker-compose up -d --no-deps app → creates a fresh container from the image you already built → no crash.

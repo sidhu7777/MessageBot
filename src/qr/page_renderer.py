@@ -884,7 +884,9 @@ def render_hospital_registration_page_html(
       submitBtn.disabled = false;
       select.appendChild(new Option(labels.chooseDoctor, ""));
       visibleDoctors.forEach((doctor) => {{
-        const label = doctor.specialization ? `${{doctor.doctor_name}} - ${{doctor.specialization}}` : doctor.doctor_name;
+        const dnl = (doctor.doctor_name || "").toLowerCase();
+        const drName = (dnl.startsWith("dr.") || dnl.startsWith("dr ")) ? doctor.doctor_name : "Dr. " + doctor.doctor_name;
+        const label = doctor.specialization ? `${{drName}} - ${{doctor.specialization}}` : drName;
         select.appendChild(new Option(label, String(doctor.doctor_id)));
       }});
       if ([...select.options].some((option) => option.value === previous)) select.value = previous;
@@ -1292,7 +1294,9 @@ def render_hospital_qr_page_html(
       submitBtn.disabled = false;
       select.appendChild(new Option(labels.chooseDoctor, ""));
       visibleDoctors.forEach((doctor) => {{
-        const label = doctor.specialization ? `${{doctor.doctor_name}} - ${{doctor.specialization}}` : doctor.doctor_name;
+        const dnl = (doctor.doctor_name || "").toLowerCase();
+        const drName = (dnl.startsWith("dr.") || dnl.startsWith("dr ")) ? doctor.doctor_name : "Dr. " + doctor.doctor_name;
+        const label = doctor.specialization ? `${{drName}} - ${{doctor.specialization}}` : drName;
         select.appendChild(new Option(label, String(doctor.doctor_id)));
       }});
       if ([...select.options].some((option) => option.value === previous)) select.value = previous;
