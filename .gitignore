@@ -40,3 +40,10 @@ en_page.html
 dl.html
 *_page.html
 nirmal_registration_qr.svg
+
+# Voice agent model weights / training artifacts (large, do NOT commit)
+voice agent/
+*.safetensors
+*.bin
+*.pt
+*.ckpt

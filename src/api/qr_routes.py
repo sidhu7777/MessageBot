@@ -32,6 +32,36 @@ _SUPPORTED_LANGS = {"en", "hi", "hinglish"}
 # is used only when the DB has no name for the code.
 REGISTRATION_HOSPITAL_NAME_DEFAULT = "Nirmal Ashram Hospital"
 
+# Localized registration error messages (English + Hindi) so the patient sees the REAL
+# reason in their language instead of a generic "unable to submit".
+REGISTRATION_ERRORS = {
+    "missing_fields": {
+        "en": "Please fill name, age, gender and phone number.",
+        "hi": "कृपया नाम, उम्र, लिंग और फ़ोन नंबर भरें।",
+    },
+    "invalid_contact": {
+        "en": "Please enter a valid name and a 10-digit phone number.",
+        "hi": "कृपया सही नाम और 10 अंकों का फ़ोन नंबर दर्ज करें।",
+    },
+    "hospital_not_configured": {
+        "en": "This hospital is not available for registration right now.",
+        "hi": "यह अस्पताल अभी पंजीकरण के लिए उपलब्ध नहीं है।",
+    },
+    "not_configured": {
+        "en": "Registration is not available right now.",
+        "hi": "पंजीकरण अभी उपलब्ध नहीं है।",
+    },
+    "failed": {
+        "en": "Unable to register right now. Please try again.",
+        "hi": "अभी पंजीकरण नहीं हो सका। कृपया पुनः प्रयास करें।",
+    },
+}
+
+
+def _registration_error(language: str, code: str) -> str:
+    entry = REGISTRATION_ERRORS.get(code, REGISTRATION_ERRORS["failed"])
+    return entry.get("hi" if language == "hi" else "en", entry["en"])
+
 
 def _normalize_lang(value: str | None, *, allow_hinglish: bool = True) -> str | None:
     raw = str(value or "").strip().lower()
@@ -640,21 +670,23 @@ def register_qr_routes(
         doctor_name = str(payload.get("doctor_name") or "").strip()
         specialization = str(payload.get("specialization") or "").strip()
         hospital_code = str(payload.get("hospital_code") or "").strip()
+        resolved_lang, _ = _resolve_effective_language(request, payload)
         try:
             doctor_id = int(payload.get("doctor_id"))
         except Exception:
             doctor_id = 0
 
         if not patient_name or not age or not gender or not phone_number:
-            msg = "Please fill name, age, gender and phone number."
+            msg = _registration_error(resolved_lang, "missing_fields")
             return JSONResponse({"detail": msg, "message": msg}, status_code=400)
         # doctor_id is OPTIONAL for registration (0 -> no doctor, stored as NULL)
         if not qr_checkin_service:
-            msg = "Registration is not configured."
+            msg = _registration_error(resolved_lang, "not_configured")
             return JSONResponse({"detail": msg, "message": msg}, status_code=503)
 
-        # Upsert patient (match by admin_id+name+phone), store daily-unique token in
-        # patients.tmpregtoken. One registration per patient per day.
+        # Insert into the dedicated hospital_registrations table (never touches patients).
+        # Daily-unique token via DB sequence + UNIQUE constraints; one registration per
+        # (hospital + phone) per day.
         try:
             result = await run_in_threadpool(
                 qr_checkin_service.register_hospital_patient,
@@ -667,7 +699,7 @@ def register_qr_routes(
             )
         except Exception as exc:
             logger.warning("Hospital registration failed hospital_code=%s error=%s", hospital_code, exc)
-            msg = "Unable to register right now. Please try again."
+            msg = _registration_error(resolved_lang, "failed")
             return JSONResponse({"detail": msg, "message": msg}, status_code=500)
 
         status = str(result.get("status") or "")
@@ -686,9 +718,9 @@ def register_qr_routes(
             result_status=status,
         )
         if status == "error":
-            return JSONResponse(
-                {"detail": result.get("message"), "message": result.get("message")}, status_code=400
-            )
+            code = str(result.get("code") or "failed")
+            msg = _registration_error(resolved_lang, code)
+            return JSONResponse({"detail": msg, "message": msg}, status_code=400)
         return JSONResponse(result)
 
     @router.post("/qr/hospital/registration/generate")

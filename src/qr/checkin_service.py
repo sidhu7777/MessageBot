@@ -154,36 +154,33 @@ class QrCheckinService:
         age: str = "",
         gender: str = "",
     ) -> dict:
-        """Hospital registration (NOT an appointment). Upserts the patients row by
-        (admin_id + name + phone) and stores a daily-unique token in `tmpregtoken`.
+        """Hospital registration (NOT an appointment). Writes to the dedicated
+        `hospital_registrations` table and NEVER touches the shared `patients` table.
 
-        - Only name/age/gender/phone are required; doctor is OPTIONAL.
-        - Token format: <CODE>/<YYYY>/<MM>/<DD>/<00001> (5-digit daily sequence via Redis).
-        - One-per-day: if the matched patient already has TODAY's token, it is returned
-          with status 'already_registered' (no new row, no new number).
-        - Existing patient (name+phone) -> UPDATE the same row; new patient -> INSERT.
-        - Saves hospital_code into patients.hospital_group_code; doctor_id may be NULL.
+        - Only name/age/gender/phone are required; doctor is OPTIONAL (NULL when absent).
+        - Token: <CODE>/<YYYY>/<MM>/<DD>/<00001>; seq_no = DB MAX(seq_no)+1 for the day
+          (persistent source of truth -> survives restarts / Redis loss).
+        - UNIQUE constraints (token, daily seq, one-per-day) guarantee no duplicates;
+          on a race the insert is retried.
+        - One registration per (hospital_code + phone) per day -> 'already_registered'.
         """
         if not self.booking_repository:
-            return {"status": "error", "message": "Registration database is not configured."}
+            return {"status": "error", "code": "not_configured", "message": "Registration database is not configured."}
 
         cleaned_name = " ".join((patient_name or "").strip().split())
         normalized_phone = self._normalize_phone(phone)
         if not cleaned_name or len(normalized_phone) < 10 or len(normalized_phone) > 15:
-            return {"status": "error", "message": "Please enter a valid name and phone number."}
+            return {"status": "error", "code": "invalid_contact", "message": "Please enter a valid name and phone number."}
 
         try:
             doctor_id_val = int(doctor_id) if doctor_id else None
         except Exception:
             doctor_id_val = None
 
-        # admin_id is required (NOT NULL). Prefer the chosen doctor's admin; otherwise
-        # resolve it from the hospital code so registration works even with no doctor.
+        # admin_id is stored for reference only (nullable) -> best-effort resolve.
         admin_id = self._resolve_admin_id(doctor_id_val) if doctor_id_val else None
         if not admin_id:
             admin_id = self._resolve_hospital_admin_id(hospital_code)
-        if not admin_id:
-            return {"status": "error", "message": "This hospital is not configured for registration."}
 
         try:
             age_val = int(str(age).strip())
@@ -193,106 +190,84 @@ class QrCheckinService:
         now = now_in_runtime_timezone()
         hospital_code_raw = str(hospital_code or "").strip()
         code = re.sub(r"[^A-Za-z0-9]", "", hospital_code_raw).upper() or "REG"
-        today_prefix = f"{code}/{now.strftime('%Y/%m/%d')}/"
+        today = now.date().isoformat()
+        date_prefix = f"{code}/{now.strftime('%Y/%m/%d')}/"
+
+        def _existing_today(cursor):
+            cursor.execute(
+                """
+                SELECT token FROM hospital_registrations
+                WHERE hospital_group_code = %s AND phone = %s AND reg_date = %s
+                LIMIT 1
+                """,
+                (hospital_code_raw, normalized_phone, today),
+            )
+            found = cursor.fetchone()
+            return found.get("token") if found else None
 
         conn = self.booking_repository._connect()
         cur = conn.cursor(dictionary=True)
         try:
-            patient_columns = self.booking_repository._table_columns("patients")
-            has_tmp = "tmpregtoken" in patient_columns
-            phone_expr = self.booking_repository._normalized_phone_sql_expr("phone")
-            profile_type_sql = (
-                "AND UPPER(COALESCE(profile_type, 'SELF')) = 'SELF'"
-                if "profile_type" in patient_columns
-                else ""
-            )
-            cur.execute(
-                f"""
-                SELECT patient_id, tmpregtoken
-                FROM patients
-                WHERE admin_id = %s
-                  AND TRIM(LOWER(COALESCE(full_name, ''))) = %s
-                  {profile_type_sql}
-                  AND ({phone_expr} = %s OR RIGHT({phone_expr}, 10) = %s)
-                ORDER BY patient_id DESC
-                LIMIT 1
-                FOR UPDATE
-                """,
-                (admin_id, cleaned_name.lower(), normalized_phone, normalized_phone[-10:]),
-            )
-            row = cur.fetchone()
+            # One registration per (hospital, phone) per day -> return the existing token.
+            token_today = _existing_today(cur)
+            if token_today:
+                conn.rollback()
+                return {
+                    "status": "already_registered",
+                    "token": token_today,
+                    "message": f"You are already registered today. Your token is {token_today}.",
+                }
 
-            # One registration per patient per day.
-            if row and has_tmp:
-                existing = str(row.get("tmpregtoken") or "")
-                if existing.startswith(today_prefix):
-                    conn.rollback()
+            # Sequence comes from the DB (persistent). UNIQUE constraints prevent
+            # duplicates; retry if a concurrent insert grabbed the same number.
+            for _attempt in range(6):
+                cur.execute(
+                    """
+                    SELECT COALESCE(MAX(seq_no), 0) + 1 AS next_seq
+                    FROM hospital_registrations
+                    WHERE hospital_group_code = %s AND reg_date = %s
+                    """,
+                    (hospital_code_raw, today),
+                )
+                seq = int(cur.fetchone()["next_seq"])
+                token = f"{date_prefix}{seq:05d}"
+                try:
+                    cur.execute(
+                        """
+                        INSERT INTO hospital_registrations
+                            (hospital_group_code, reg_date, seq_no, token,
+                             patient_name, phone, age, gender, doctor_id, admin_id)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        """,
+                        (
+                            hospital_code_raw, today, seq, token,
+                            cleaned_name, normalized_phone, age_val,
+                            (gender or None), doctor_id_val, admin_id,
+                        ),
+                    )
+                    conn.commit()
                     return {
-                        "status": "already_registered",
-                        "token": existing,
-                        "message": f"You are already registered today. Your token is {existing}.",
+                        "status": "registered",
+                        "token": token,
+                        "message": f"Registration successful. Your token is {token}.",
                     }
+                except Exception as exc:
+                    conn.rollback()
+                    msg = str(exc).lower()
+                    if "uq_one_per_day" in msg:
+                        # Concurrent same-day registration for this phone -> return it.
+                        dup = _existing_today(cur)
+                        if dup:
+                            return {
+                                "status": "already_registered",
+                                "token": dup,
+                                "message": f"You are already registered today. Your token is {dup}.",
+                            }
+                        return {"status": "error", "code": "failed", "message": "Unable to register right now."}
+                    # seq_no / token collision (counter race) -> recompute and retry.
+                    continue
 
-            sequence = self.next_registration_sequence(hospital_code)
-            token = f"{today_prefix}{sequence:05d}"
-
-            has_group = "hospital_group_code" in patient_columns
-
-            if row:
-                patient_id = int(row["patient_id"])
-                set_parts = ["full_name = %s", "phone = %s"]
-                set_vals: list[object] = [cleaned_name, normalized_phone]
-                if doctor_id_val is not None:  # only overwrite when a doctor was chosen
-                    set_parts.append("doctor_id = %s")
-                    set_vals.append(doctor_id_val)
-                if has_group and hospital_code_raw:
-                    set_parts.append("hospital_group_code = %s")
-                    set_vals.append(hospital_code_raw)
-                if "age" in patient_columns and age_val is not None:
-                    set_parts.append("age = %s")
-                    set_vals.append(age_val)
-                if "gender" in patient_columns and gender:
-                    set_parts.append("gender = %s")
-                    set_vals.append(gender)
-                if has_tmp:
-                    set_parts.append("tmpregtoken = %s")
-                    set_vals.append(token)
-                cur.execute(
-                    f"UPDATE patients SET {', '.join(set_parts)} WHERE patient_id = %s",
-                    tuple(set_vals + [patient_id]),
-                )
-            else:
-                cols = ["full_name", "admin_id", "phone", "doctor_id"]
-                vals: list[object] = [cleaned_name, admin_id, normalized_phone, doctor_id_val]
-                if has_group and hospital_code_raw:
-                    cols.append("hospital_group_code")
-                    vals.append(hospital_code_raw)
-                if "profile_type" in patient_columns:
-                    cols.append("profile_type")
-                    vals.append("SELF")
-                if "age" in patient_columns and age_val is not None:
-                    cols.append("age")
-                    vals.append(age_val)
-                if "gender" in patient_columns and gender:
-                    cols.append("gender")
-                    vals.append(gender)
-                if has_tmp:
-                    cols.append("tmpregtoken")
-                    vals.append(token)
-                cur.execute(
-                    f"INSERT INTO patients ({', '.join(cols)}) VALUES ({', '.join(['%s'] * len(cols))})",
-                    tuple(vals),
-                )
-
-            conn.commit()
-            return {
-                "status": "registered",
-                "token": token,
-                "message": f"Registration successful. Your token is {token}.",
-            }
-        except Exception:
-            conn.rollback()
-            raise
+            return {"status": "error", "code": "failed", "message": "Unable to register right now."}
         finally:
             cur.close()
             conn.close()

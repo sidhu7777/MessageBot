@@ -989,7 +989,7 @@ def render_hospital_registration_page_html(
               : "")
           );
         }} else {{
-          openResultModal("err", escapeHtml(labels.failed));
+          openResultModal("err", escapeHtml((data && (data.message || data.detail)) || labels.failed));
         }}
       }} catch (err) {{
         openResultModal("err", escapeHtml(labels.failed));
