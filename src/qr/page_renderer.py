@@ -509,6 +509,47 @@ def render_qr_page_html(
 </html>"""
 
 
+def render_registration_not_found_html(language: str = "en") -> str:
+    """Shown when the registration code/hospital does not exist. NEVER falls back to
+    another hospital."""
+    lang = "hi" if language == "hi" else "en"
+    title = "अस्पताल नहीं मिला" if lang == "hi" else "Hospital Not Found"
+    body = (
+        "यह पंजीकरण लिंक मान्य नहीं है। कृपया सही QR कोड स्कैन करें या फ्रंट डेस्क से संपर्क करें।"
+        if lang == "hi"
+        else "This registration link is not valid. Please scan the correct QR code or contact the front desk."
+    )
+    dapto_logo_src = _dapto_logo_src()
+    return f"""<!doctype html>
+<html lang="{lang}">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>{title}</title>
+  <style>
+    * {{ box-sizing: border-box; }}
+    body {{ margin: 0; font-family: "Segoe UI", Tahoma, sans-serif; color: #1d2a23;
+      background: linear-gradient(140deg, #f6f7f2 0%, #e5efe0 60%, #d7e7dc 100%);
+      min-height: 100vh; display: grid; place-items: center; padding: 18px; }}
+    .card {{ width: min(560px, 100%); background: #fff; border-radius: 20px;
+      box-shadow: 0 20px 50px rgba(8,38,34,0.14); border: 1px solid #e4efe8;
+      padding: 34px 28px; text-align: center; }}
+    h1 {{ margin: 0 0 12px 0; font-size: 24px; color: #9f2d2d; }}
+    p {{ margin: 0; color: #5b6e62; font-size: 16px; line-height: 1.6; }}
+    .brand {{ margin-top: 26px; }}
+    .brand img {{ width: min(140px, 40vw); height: auto; }}
+  </style>
+</head>
+<body>
+  <section class="card">
+    <h1>{title}</h1>
+    <p>{body}</p>
+    <div class="brand"><img src="{dapto_logo_src}" alt="" onerror="this.style.display='none'" /></div>
+  </section>
+</body>
+</html>"""
+
+
 def render_hospital_registration_page_html(
     *,
     hospital_code: str,
@@ -516,6 +557,7 @@ def render_hospital_registration_page_html(
     doctors: list,
     specializations: list,
     language: str = "en",
+    id_field: str = "hospital_code",
 ) -> str:
     """Standalone hospital REGISTRATION page. Static doctor/specialization lists, no DB,
     and on submit it shows a generated unique token instead of booking an appointment."""
@@ -558,7 +600,7 @@ def render_hospital_registration_page_html(
             "no_specializations": "No specializations available",
             "no_doctors": "No doctors available",
             "missing_doctor": "Please choose a doctor.",
-            "missing_fields": "Please fill name, age, gender and phone number.",
+            "missing_fields": "Please fill name, age and gender.",
             "submitting": "Submitting...",
             "failed": "Unable to submit right now. Please try again.",
             "token_label": "Your Registration Token",
@@ -576,7 +618,7 @@ def render_hospital_registration_page_html(
             "no_specializations": "कोई विशेषज्ञता उपलब्ध नहीं है",
             "no_doctors": "कोई डॉक्टर उपलब्ध नहीं है",
             "missing_doctor": "कृपया एक डॉक्टर चुनें।",
-            "missing_fields": "कृपया नाम, उम्र, लिंग और फ़ोन नंबर भरें।",
+            "missing_fields": "कृपया नाम, उम्र और लिंग भरें।",
             "submitting": "सबमिट हो रहा है...",
             "failed": "अभी सबमिट नहीं हो सका। कृपया पुनः प्रयास करें।",
             "token_label": "आपका पंजीकरण टोकन",
@@ -753,7 +795,7 @@ def render_hospital_registration_page_html(
         </label>
         <label>
           <span>{t["phone"]}</span>
-          <input id="phoneNumber" maxlength="20" required />
+          <input id="phoneNumber" type="tel" inputmode="numeric" maxlength="10" oninput="this.value=this.value.replace(/[^0-9]/g,'')" />
         </label>
       </div>
       <div class="grid">
@@ -941,7 +983,7 @@ def render_hospital_registration_page_html(
       const age = document.getElementById("patientAge").value.trim();
       const gender = document.getElementById("patientGender").value;
       const phone = document.getElementById("phoneNumber").value.trim();
-      if (!name || !age || !gender || !phone) {{
+      if (!name || !age || !gender) {{
         openResultModal("err", escapeHtml(labels.missingFields));
         return;
       }}
@@ -955,7 +997,7 @@ def render_hospital_registration_page_html(
           signal: controller.signal,
           headers: {{ "Content-Type": "application/json" }},
           body: JSON.stringify({{
-            hospital_code: document.getElementById("hospitalCode").value,
+            {id_field}: document.getElementById("hospitalCode").value,
             hospital_name: document.getElementById("hospitalName").value,
             doctor_id: doctorId,
             doctor_name: (doctorSelect.selectedOptions[0] || {{}}).text || "",

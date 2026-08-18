@@ -21,11 +21,15 @@ def build_qr_hospital_url(*, base_url: str, hospital_code: str) -> str:
     return f"{root}/qr/hospital/checkin?{query}"
 
 
-def build_qr_hospital_registration_url(*, base_url: str, hospital_code: str, hospital_name: str = "") -> str:
+def build_qr_hospital_registration_url(*, base_url: str, hospital_code: str = "", hospital_name: str = "", code: str = "") -> str:
     root = (base_url or "").strip().rstrip("/")
-    params = {"hospital_code": str(hospital_code or "").strip()}
-    if str(hospital_name or "").strip():
-        params["hospital_name"] = str(hospital_name).strip()
+    if str(code or "").strip():
+        # HMS flow -> encodes ?code=<hospitals.code>
+        params = {"code": str(code).strip()}
+    else:
+        params = {"hospital_code": str(hospital_code or "").strip()}
+        if str(hospital_name or "").strip():
+            params["hospital_name"] = str(hospital_name).strip()
     return f"{root}/qr/hospital/registration/checkin?{urlencode(params)}"
 
 

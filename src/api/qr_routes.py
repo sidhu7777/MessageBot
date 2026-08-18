@@ -20,6 +20,7 @@ from src.qr.page_renderer import (
     render_hospital_qr_page_html,
     render_hospital_registration_page_html,
     render_qr_page_html,
+    render_registration_not_found_html,
 )
 
 
@@ -36,8 +37,8 @@ REGISTRATION_HOSPITAL_NAME_DEFAULT = "Nirmal Ashram Hospital"
 # reason in their language instead of a generic "unable to submit".
 REGISTRATION_ERRORS = {
     "missing_fields": {
-        "en": "Please fill name, age, gender and phone number.",
-        "hi": "कृपया नाम, उम्र, लिंग और फ़ोन नंबर भरें।",
+        "en": "Please fill name, age and gender.",
+        "hi": "कृपया नाम, उम्र और लिंग भरें।",
     },
     "invalid_contact": {
         "en": "Please enter a valid name and a 10-digit phone number.",
@@ -626,33 +627,64 @@ def register_qr_routes(
             headers={"Content-Disposition": f'attachment; filename="{filename}"'},
         )
 
-    # --- Hospital REGISTRATION flow (static, NO DB, isolated from all above) ------
+    # --- Hospital REGISTRATION flow --------------------------------------------------
+    # Two parallel flows, distinguished by the query/body param:
+    #   ?code=<hospitals.code>        -> HMS flow (hospitals + hospital_doctors, dynamic)
+    #   ?hospital_code=<group_code>   -> existing clinic-grouped flow (unchanged)
     @router.get("/qr/hospital/registration/checkin", response_class=HTMLResponse)
-    async def qr_hospital_registration_page(request: Request, hospital_code: str = "", hospital_name: str = ""):
+    async def qr_hospital_registration_page(request: Request, hospital_code: str = "", hospital_name: str = "", code: str = ""):
         resolved_lang, _ = _resolve_effective_language(request, {})
-        code = (hospital_code or "").strip()
-        options = {"hospital_code": code, "hospital_name": "", "specializations": [], "doctors": []}
-        if qr_checkin_service and code:
+        code = (code or "").strip()
+        if code:
+            # HMS flow (hospitals.code + hospital_doctors)
+            options = {"hospital_name": "", "hospital_id": None, "specializations": [], "doctors": []}
+            if qr_checkin_service:
+                try:
+                    options = await asyncio.wait_for(
+                        run_in_threadpool(qr_checkin_service.hms_hospital_options, code),
+                        timeout=max(qr_page_lookup_timeout_seconds, 15.0),
+                    )
+                except Exception as exc:
+                    logger.warning("HMS registration options lookup failed code=%s error=%s", code, exc)
+                    options = {"hospital_name": "", "hospital_id": None, "specializations": [], "doctors": []}
+            # Unknown/inactive hospital -> "not found" (NEVER fall back to another hospital).
+            if not options.get("hospital_id"):
+                return HTMLResponse(render_registration_not_found_html(resolved_lang), status_code=404)
+            return HTMLResponse(
+                render_hospital_registration_page_html(
+                    hospital_code=code,
+                    hospital_name=str(options.get("hospital_name") or "").strip() or "Hospital",
+                    doctors=options.get("doctors") or [],
+                    specializations=options.get("specializations") or [],
+                    language=resolved_lang,
+                    id_field="code",
+                )
+            )
+
+        # Existing clinic-grouped flow (hospital_code -> clinics.hospital_group_code)
+        hc = (hospital_code or "").strip()
+        options = {"hospital_code": hc, "hospital_name": "", "specializations": [], "doctors": []}
+        if qr_checkin_service and hc:
             try:
                 options = await asyncio.wait_for(
-                    run_in_threadpool(qr_checkin_service.hospital_qr_options, code),
+                    run_in_threadpool(qr_checkin_service.hospital_qr_options, hc),
                     timeout=max(qr_page_lookup_timeout_seconds, 15.0),
                 )
             except Exception as exc:
-                logger.warning("Hospital registration options lookup failed hospital_code=%s error=%s", code, exc)
-                options = {"hospital_code": code, "hospital_name": "", "specializations": [], "doctors": []}
-        name = (
-            (hospital_name or "").strip()
-            or str(options.get("hospital_name") or "").strip()
-            or REGISTRATION_HOSPITAL_NAME_DEFAULT
-        )
+                logger.warning("Hospital registration options lookup failed hospital_code=%s error=%s", hc, exc)
+                options = {"hospital_code": hc, "hospital_name": "", "specializations": [], "doctors": []}
+        db_name = str(options.get("hospital_name") or "").strip()
+        # Unknown hospital_code -> "not found" (NEVER fall back to a default hospital).
+        if not hc or not db_name:
+            return HTMLResponse(render_registration_not_found_html(resolved_lang), status_code=404)
         return HTMLResponse(
             render_hospital_registration_page_html(
-                hospital_code=code,
-                hospital_name=name,
+                hospital_code=hc,
+                hospital_name=db_name,
                 doctors=options.get("doctors") or [],
                 specializations=options.get("specializations") or [],
                 language=resolved_lang,
+                id_field="hospital_code",
             )
         )
 
@@ -666,39 +698,49 @@ def register_qr_routes(
         patient_name = str(payload.get("patient_name") or "").strip()
         age = str(payload.get("age") or "").strip()
         gender = str(payload.get("gender") or "").strip()
-        phone_number = str(payload.get("phone_number") or "").strip()
+        phone_number = str(payload.get("phone_number") or "").strip()  # OPTIONAL now
         doctor_name = str(payload.get("doctor_name") or "").strip()
         specialization = str(payload.get("specialization") or "").strip()
         hospital_code = str(payload.get("hospital_code") or "").strip()
+        code = str(payload.get("code") or "").strip()  # HMS hospitals.code
         resolved_lang, _ = _resolve_effective_language(request, payload)
         try:
             doctor_id = int(payload.get("doctor_id"))
         except Exception:
             doctor_id = 0
 
-        if not patient_name or not age or not gender or not phone_number:
+        # Mandatory: name, age, gender. Phone + doctor are OPTIONAL.
+        if not patient_name or not age or not gender:
             msg = _registration_error(resolved_lang, "missing_fields")
             return JSONResponse({"detail": msg, "message": msg}, status_code=400)
-        # doctor_id is OPTIONAL for registration (0 -> no doctor, stored as NULL)
         if not qr_checkin_service:
             msg = _registration_error(resolved_lang, "not_configured")
             return JSONResponse({"detail": msg, "message": msg}, status_code=503)
 
-        # Insert into the dedicated hospital_registrations table (never touches patients).
-        # Daily-unique token via DB sequence + UNIQUE constraints; one registration per
-        # (hospital + phone) per day.
+        # Route to the right flow: HMS (code) or existing clinic-grouped (hospital_code).
         try:
-            result = await run_in_threadpool(
-                qr_checkin_service.register_hospital_patient,
-                hospital_code=hospital_code,
-                doctor_id=doctor_id,
-                patient_name=patient_name,
-                phone=phone_number,
-                age=age,
-                gender=gender,
-            )
+            if code:
+                result = await run_in_threadpool(
+                    qr_checkin_service.register_hms_patient,
+                    code=code,
+                    doctor_id=doctor_id,
+                    patient_name=patient_name,
+                    phone=phone_number,
+                    age=age,
+                    gender=gender,
+                )
+            else:
+                result = await run_in_threadpool(
+                    qr_checkin_service.register_hospital_patient,
+                    hospital_code=hospital_code,
+                    doctor_id=doctor_id,
+                    patient_name=patient_name,
+                    phone=phone_number,
+                    age=age,
+                    gender=gender,
+                )
         except Exception as exc:
-            logger.warning("Hospital registration failed hospital_code=%s error=%s", hospital_code, exc)
+            logger.warning("Registration failed code=%s hospital_code=%s error=%s", code, hospital_code, exc)
             msg = _registration_error(resolved_lang, "failed")
             return JSONResponse({"detail": msg, "message": msg}, status_code=500)
 
@@ -735,26 +777,31 @@ def register_qr_routes(
             except Exception:
                 payload = {}
 
-        code = str(
-            payload.get("hospital_code")
-            or request.query_params.get("hospital_code")
-            or ""
-        ).strip()
+        hms_code = str(payload.get("code") or request.query_params.get("code") or "").strip()
+        hcode = str(payload.get("hospital_code") or request.query_params.get("hospital_code") or "").strip()
         name = str(
             payload.get("hospital_name")
             or request.query_params.get("hospital_name")
             or ""
         ).strip() or REGISTRATION_HOSPITAL_NAME_DEFAULT
 
-        booking_url = build_qr_hospital_registration_url(
-            base_url=str(request.base_url), hospital_code=code, hospital_name=name
-        )
+        if hms_code:
+            booking_url = build_qr_hospital_registration_url(base_url=str(request.base_url), code=hms_code)
+            filename = build_hospital_download_filename(hospital_name=f"{name}-registration", hospital_code=hms_code)
+            download_query = f"code={hms_code}"
+            id_out = {"code": hms_code}
+        else:
+            booking_url = build_qr_hospital_registration_url(
+                base_url=str(request.base_url), hospital_code=hcode, hospital_name=name
+            )
+            filename = build_hospital_download_filename(hospital_name=f"{name}-registration", hospital_code=hcode or "registration")
+            download_query = f"hospital_code={hcode}&hospital_name={name}"
+            id_out = {"hospital_code": hcode}
+
         svg_markup = await run_in_threadpool(build_qr_svg, url=booking_url)
-        filename = build_hospital_download_filename(hospital_name=f"{name}-registration", hospital_code=code or "registration")
-        download_query = f"hospital_code={code}&hospital_name={name}"
         return JSONResponse(
             {
-                "hospital_code": code,
+                **id_out,
                 "hospital_name": name,
                 "mime_type": "image/svg+xml",
                 "filename": filename,
@@ -764,14 +811,19 @@ def register_qr_routes(
         )
 
     @router.get("/qr/hospital/registration/generate/download")
-    async def qr_hospital_registration_generate_download(request: Request, hospital_code: str = "", hospital_name: str = ""):
-        code = (hospital_code or "").strip()
+    async def qr_hospital_registration_generate_download(request: Request, hospital_code: str = "", hospital_name: str = "", code: str = ""):
+        hms_code = (code or "").strip()
         name = (hospital_name or "").strip() or REGISTRATION_HOSPITAL_NAME_DEFAULT
-        booking_url = build_qr_hospital_registration_url(
-            base_url=str(request.base_url), hospital_code=code, hospital_name=name
-        )
+        if hms_code:
+            booking_url = build_qr_hospital_registration_url(base_url=str(request.base_url), code=hms_code)
+            filename = build_hospital_download_filename(hospital_name=f"{name}-registration", hospital_code=hms_code)
+        else:
+            hc = (hospital_code or "").strip()
+            booking_url = build_qr_hospital_registration_url(
+                base_url=str(request.base_url), hospital_code=hc, hospital_name=name
+            )
+            filename = build_hospital_download_filename(hospital_name=f"{name}-registration", hospital_code=hc or "registration")
         svg_markup = await run_in_threadpool(build_qr_svg, url=booking_url)
-        filename = build_hospital_download_filename(hospital_name=f"{name}-registration", hospital_code=code or "registration")
         return Response(
             content=svg_markup,
             media_type="image/svg+xml",

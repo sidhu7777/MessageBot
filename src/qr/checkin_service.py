@@ -168,19 +168,26 @@ class QrCheckinService:
             return {"status": "error", "code": "not_configured", "message": "Registration database is not configured."}
 
         cleaned_name = " ".join((patient_name or "").strip().split())
+        if not cleaned_name:
+            return {"status": "error", "code": "invalid_contact", "message": "Please enter a valid name."}
         normalized_phone = self._normalize_phone(phone)
-        if not cleaned_name or len(normalized_phone) < 10 or len(normalized_phone) > 15:
-            return {"status": "error", "code": "invalid_contact", "message": "Please enter a valid name and phone number."}
+        if normalized_phone and (len(normalized_phone) < 10 or len(normalized_phone) > 15):
+            return {"status": "error", "code": "invalid_contact", "message": "Please enter a valid phone number."}
+        phone_store = normalized_phone or None  # phone is OPTIONAL -> NULL when absent
 
         try:
             doctor_id_val = int(doctor_id) if doctor_id else None
         except Exception:
             doctor_id_val = None
 
-        # admin_id is stored for reference only (nullable) -> best-effort resolve.
+        # The hospital (clinic group) must exist -> otherwise reject. NEVER register
+        # under a different/default hospital.
+        hospital_admin = self._resolve_hospital_admin_id(hospital_code)
+        if not hospital_admin:
+            return {"status": "error", "code": "hospital_not_configured", "message": "This hospital is not available for registration."}
         admin_id = self._resolve_admin_id(doctor_id_val) if doctor_id_val else None
         if not admin_id:
-            admin_id = self._resolve_hospital_admin_id(hospital_code)
+            admin_id = hospital_admin
 
         try:
             age_val = int(str(age).strip())
@@ -194,13 +201,15 @@ class QrCheckinService:
         date_prefix = f"{code}/{now.strftime('%Y/%m/%d')}/"
 
         def _existing_today(cursor):
+            if not phone_store:
+                return None
             cursor.execute(
                 """
                 SELECT token FROM hospital_registrations
-                WHERE hospital_group_code = %s AND phone = %s AND reg_date = %s
+                WHERE hospital_group_code = %s AND phone = %s AND patient_name = %s AND reg_date = %s
                 LIMIT 1
                 """,
-                (hospital_code_raw, normalized_phone, today),
+                (hospital_code_raw, phone_store, cleaned_name, today),
             )
             found = cursor.fetchone()
             return found.get("token") if found else None
@@ -209,6 +218,7 @@ class QrCheckinService:
         cur = conn.cursor(dictionary=True)
         try:
             # One registration per (hospital, phone) per day -> return the existing token.
+            # (only when a phone is given; without a phone we cannot dedup.)
             token_today = _existing_today(cur)
             if token_today:
                 conn.rollback()
@@ -241,7 +251,7 @@ class QrCheckinService:
                         """,
                         (
                             hospital_code_raw, today, seq, token,
-                            cleaned_name, normalized_phone, age_val,
+                            cleaned_name, phone_store, age_val,
                             (gender or None), doctor_id_val, admin_id,
                         ),
                     )
@@ -254,7 +264,7 @@ class QrCheckinService:
                 except Exception as exc:
                     conn.rollback()
                     msg = str(exc).lower()
-                    if "uq_one_per_day" in msg:
+                    if "uq_one_per_day" in msg and phone_store:
                         # Concurrent same-day registration for this phone -> return it.
                         dup = _existing_today(cur)
                         if dup:
@@ -265,6 +275,194 @@ class QrCheckinService:
                             }
                         return {"status": "error", "code": "failed", "message": "Unable to register right now."}
                     # seq_no / token collision (counter race) -> recompute and retry.
+                    continue
+
+            return {"status": "error", "code": "failed", "message": "Unable to register right now."}
+        finally:
+            cur.close()
+            conn.close()
+
+    # ----- HMS (Hospital Management System) registration -------------------------
+    # Separate, fully dynamic flow keyed on hospitals.code. Doctors come from
+    # hospital_doctors, token prefix from hospitals.temptokenprefix, and the daily
+    # sequence from hospital_sequence_counters. Does NOT touch the clinic-grouped flow.
+
+    def hms_hospital_options(self, code: str) -> dict:
+        """Doctors + hospital info for an HMS hospital, looked up by hospitals.code."""
+        code = str(code or "").strip()
+        result = {
+            "code": code, "hospital_name": "", "hospital_id": None,
+            "temptokenprefix": "", "specializations": [], "doctors": [],
+        }
+        if not self.booking_repository or not code:
+            return result
+        conn = self.booking_repository._connect()
+        cur = conn.cursor(dictionary=True)
+        try:
+            cur.execute(
+                "SELECT hospital_id, name, temptokenprefix FROM hospitals "
+                "WHERE code = %s AND UPPER(COALESCE(status, 'ACTIVE')) = 'ACTIVE' LIMIT 1",
+                (code,),
+            )
+            hosp = cur.fetchone()
+            if not hosp:
+                return result
+            hospital_id = int(hosp["hospital_id"])
+            result["hospital_id"] = hospital_id
+            result["hospital_name"] = str(hosp.get("name") or "").strip()
+            result["temptokenprefix"] = str(hosp.get("temptokenprefix") or "").strip()
+            cur.execute(
+                """
+                SELECT hd.doctor_id,
+                       COALESCE(NULLIF(TRIM(d.doctor_name), ''), 'Doctor') AS doctor_name,
+                       COALESCE(NULLIF(TRIM(d.specialization), ''), '') AS specialization
+                FROM hospital_doctors hd
+                JOIN doctors d ON d.doctor_id = hd.doctor_id
+                WHERE hd.hospital_id = %s
+                  AND UPPER(COALESCE(d.status, 'ACTIVE')) = 'ACTIVE'
+                ORDER BY specialization, doctor_name
+                """,
+                (hospital_id,),
+            )
+            doctors = [
+                {"doctor_id": int(r["doctor_id"]), "doctor_name": r["doctor_name"], "specialization": r["specialization"]}
+                for r in cur.fetchall()
+                if r.get("doctor_id") is not None
+            ]
+            result["doctors"] = doctors
+            result["specializations"] = sorted(
+                {d["specialization"] for d in doctors if d["specialization"]},
+                key=lambda v: v.lower(),
+            )
+            return result
+        finally:
+            cur.close()
+            conn.close()
+
+    def _next_hms_sequence(self, cursor, hospital_id: int, period_key: str) -> int:
+        """Atomic per-day counter from hospital_sequence_counters (own transaction)."""
+        cursor.execute(
+            """
+            INSERT INTO hospital_sequence_counters (hospital_id, sequence_type, period_key, current_seq)
+            VALUES (%s, 'REGISTRATION', %s, 1)
+            ON DUPLICATE KEY UPDATE current_seq = LAST_INSERT_ID(current_seq + 1)
+            """,
+            (hospital_id, period_key),
+        )
+        return 1 if cursor.rowcount == 1 else int(cursor.lastrowid)
+
+    def register_hms_patient(
+        self,
+        *,
+        code: str,
+        doctor_id: int = 0,
+        patient_name: str,
+        phone: str = "",
+        age: str = "",
+        gender: str = "",
+    ) -> dict:
+        """HMS registration. Resolves the hospital by hospitals.code, uses its
+        temptokenprefix + hospital_sequence_counters, stores in hospital_registrations.
+        Name/age/gender required; phone + doctor OPTIONAL."""
+        if not self.booking_repository:
+            return {"status": "error", "code": "not_configured", "message": "Registration database is not configured."}
+
+        cleaned_name = " ".join((patient_name or "").strip().split())
+        if not cleaned_name:
+            return {"status": "error", "code": "invalid_contact", "message": "Please enter a valid name."}
+        normalized_phone = self._normalize_phone(phone)
+        if normalized_phone and (len(normalized_phone) < 10 or len(normalized_phone) > 15):
+            return {"status": "error", "code": "invalid_contact", "message": "Please enter a valid phone number."}
+        phone_store = normalized_phone or None
+
+        try:
+            doctor_id_val = int(doctor_id) if doctor_id else None
+        except Exception:
+            doctor_id_val = None
+        try:
+            age_val = int(str(age).strip())
+        except Exception:
+            age_val = None
+
+        code_raw = str(code or "").strip()
+        conn = self.booking_repository._connect()
+        cur = conn.cursor(dictionary=True)
+        try:
+            cur.execute(
+                "SELECT hospital_id, name, temptokenprefix, admin_id FROM hospitals "
+                "WHERE code = %s AND UPPER(COALESCE(status, 'ACTIVE')) = 'ACTIVE' LIMIT 1",
+                (code_raw,),
+            )
+            hosp = cur.fetchone()
+            if not hosp:
+                return {"status": "error", "code": "hospital_not_configured", "message": "This hospital is not available for registration."}
+            hospital_id = int(hosp["hospital_id"])
+            admin_id = hosp.get("admin_id")
+            prefix = str(hosp.get("temptokenprefix") or "").strip() \
+                or re.sub(r"[^A-Za-z0-9]", "", code_raw).upper() or "REG"
+
+            now = now_in_runtime_timezone()
+            today = now.date().isoformat()
+            date_prefix = f"{prefix}/{now.strftime('%Y/%m/%d')}/"
+
+            def _existing_today(cursor):
+                if not phone_store:
+                    return None
+                cursor.execute(
+                    "SELECT token FROM hospital_registrations "
+                    "WHERE hospital_group_code = %s AND phone = %s AND patient_name = %s AND reg_date = %s LIMIT 1",
+                    (code_raw, phone_store, cleaned_name, today),
+                )
+                found = cursor.fetchone()
+                return found.get("token") if found else None
+
+            token_today = _existing_today(cur)
+            if token_today:
+                conn.rollback()
+                return {
+                    "status": "already_registered",
+                    "token": token_today,
+                    "message": f"You are already registered today. Your token is {token_today}.",
+                }
+
+            for _attempt in range(6):
+                # Counter advances in its own committed step so retries never loop.
+                seq = self._next_hms_sequence(cur, hospital_id, today)
+                conn.commit()
+                token = f"{date_prefix}{seq:05d}"
+                try:
+                    cur.execute(
+                        """
+                        INSERT INTO hospital_registrations
+                            (hospital_group_code, reg_date, seq_no, token,
+                             patient_name, phone, age, gender, doctor_id, admin_id)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        """,
+                        (
+                            code_raw, today, seq, token,
+                            cleaned_name, phone_store, age_val,
+                            (gender or None), doctor_id_val, admin_id,
+                        ),
+                    )
+                    conn.commit()
+                    return {
+                        "status": "registered",
+                        "token": token,
+                        "message": f"Registration successful. Your token is {token}.",
+                    }
+                except Exception as exc:
+                    conn.rollback()
+                    msg = str(exc).lower()
+                    if "uq_one_per_day" in msg and phone_store:
+                        dup = _existing_today(cur)
+                        if dup:
+                            return {
+                                "status": "already_registered",
+                                "token": dup,
+                                "message": f"You are already registered today. Your token is {dup}.",
+                            }
+                        return {"status": "error", "code": "failed", "message": "Unable to register right now."}
+                    # seq/token collision -> counter already advanced, retry with next.
                     continue
 
             return {"status": "error", "code": "failed", "message": "Unable to register right now."}

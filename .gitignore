@@ -47,3 +47,9 @@ voice agent/
 *.bin
 *.pt
 *.ckpt
+hms.html
+hms*.html
+reg*.html
+*_playstore_qr.svg
+*_registration_qr.svg
+stracer_playstore_qr.svg
