@@ -338,8 +338,11 @@ curl -X POST http://127.0.0.1:8001/qr/checkin/submit \
 
 Correct command
 
+git pull
+docker-compose build app        # ← REQUIRED: rebuilds the image with the new code
 docker-compose rm -sf app
 docker-compose up -d --no-deps app
+
 
 Explanation 
 

@@ -12,7 +12,7 @@ import threading
 import time
 from difflib import SequenceMatcher
 from pathlib import Path
-from typing import Any, Dict, List, Set, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 from fastapi import FastAPI, Request
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
@@ -625,6 +625,329 @@ def _clean_transcript_with_llm(raw_text: str, session_id: str = "") -> Tuple[str
     return cleaned_text, time.perf_counter() - started_at
 
 
+# ============================================================================
+# EMR FRONTEND ADAPTER
+#
+# The parchi payload above is optimized for this test page's own editable
+# UI (flat strings, OD/BD/TDS/QID-style "frequency"). The production EMR
+# prescription editor (EmrDraftSavePayload) expects a different field
+# layout: medicines split into type/medicine_name/strength/dose/timing/
+# frequency/duration_value/duration_unit, complaints/diagnosis/tests/advice
+# as arrays of named rows, and vitals as {bp, pulse, height, weight,
+# temperature, spo2}. These helpers reshape the parchi payload into that
+# layout without changing parchi extraction/rendering itself.
+# ============================================================================
+
+_FREQUENCY_CODE_TO_DOSE: Dict[str, Tuple[str, str]] = {
+    "od": ("1-0-0", "Daily"),
+    "bd": ("1-0-1", "Daily"),
+    "tds": ("1-1-1", "Daily"),
+    "qid": ("1-1-1-1", "Daily"),
+    "once daily": ("1-0-0", "Daily"),
+    "once a day": ("1-0-0", "Daily"),
+    "twice daily": ("1-0-1", "Daily"),
+    "twice a day": ("1-0-1", "Daily"),
+    "three times daily": ("1-1-1", "Daily"),
+    "thrice daily": ("1-1-1", "Daily"),
+    "four times daily": ("1-1-1-1", "Daily"),
+    "sos": ("SOS", "SOS"),
+}
+
+_MEDICINE_TIMING_MAP: Dict[str, str] = {
+    "before food": "Before Food",
+    "before meal": "Before Food",
+    "after food": "After Food",
+    "after meal": "After Food",
+    "empty stomach": "Empty Stomach",
+    "bed time": "Bed Time",
+    "bedtime": "Bed Time",
+}
+
+_DURATION_UNIT_MAP: Dict[str, str] = {
+    "day": "day", "days": "day",
+    "week": "week", "weeks": "week",
+    "month": "month", "months": "month",
+    "year": "year", "years": "year",
+}
+
+_MEDICINE_TYPE_KEYWORDS: List[Tuple[str, str]] = [
+    ("tablet", "TAB"), ("tab", "TAB"),
+    ("capsule", "CAP"), ("cap", "CAP"),
+    ("syrup", "SYRUP"),
+    ("suspension", "SUSPENSION"),
+    ("injection", "INJ"), ("inj", "INJ"),
+    ("drop", "DROP"),
+    ("cream", "CREAM"),
+    ("ointment", "OINTMENT"),
+    ("gel", "GEL"),
+    ("lotion", "LOTION"),
+    ("spray", "SPRAY"),
+    ("sachet", "SACHET"),
+    ("powder", "POWDER"),
+]
+
+# The frontend's 8 fixed clinical-history sections (EmrClinicalHistorySection).
+_CLINICAL_HISTORY_SECTION_KEYS: Tuple[str, ...] = (
+    "examination_findings",
+    "investigation_findings",
+    "past_medical_history",
+    "family_history",
+    "surgical_history",
+    "treatment_history",
+    "allergies",
+    "personal_social_history",
+)
+
+_CLINICAL_HISTORY_STOP = r"(?=\s+(?:and|so|but|follow-up|follow up)\b|[.,;]|$)"
+
+_CLINICAL_HISTORY_PATTERNS: Dict[str, List[str]] = {
+    "past_medical_history": [
+        rf"\bpast\s+medical\s+history\s*(?:of|is|was|:)?\s*([A-Za-z][A-Za-z\s]+?){_CLINICAL_HISTORY_STOP}",
+        rf"\bknown\s+case\s+of\s+([A-Za-z][A-Za-z\s]+?){_CLINICAL_HISTORY_STOP}",
+        rf"\bhistory\s+of\s+([A-Za-z][A-Za-z\s]+?){_CLINICAL_HISTORY_STOP}",
+    ],
+    "family_history": [
+        rf"\bfamily\s+history\s*(?:of|is|was|:)?\s*([A-Za-z][A-Za-z\s]+?){_CLINICAL_HISTORY_STOP}",
+    ],
+    "surgical_history": [
+        rf"\bsurgical\s+history\s*(?:of|is|was|:)?\s*([A-Za-z][A-Za-z\s]+?){_CLINICAL_HISTORY_STOP}",
+        rf"\b(?:underwent|had)\s+(?:a\s+)?surgery\s+(?:for|of)?\s*([A-Za-z][A-Za-z\s]+?){_CLINICAL_HISTORY_STOP}",
+    ],
+    "treatment_history": [
+        rf"\btreatment\s+history\s*(?:of|is|was|:)?\s*([A-Za-z][A-Za-z\s]+?){_CLINICAL_HISTORY_STOP}",
+        rf"\b(?:already|currently)\s+on\s+treatment\s+(?:for|with)\s+([A-Za-z][A-Za-z\s]+?){_CLINICAL_HISTORY_STOP}",
+    ],
+    "allergies": [
+        rf"\ballerg(?:y|ies)\s*(?:to|is|are|:)?\s*([A-Za-z][A-Za-z\s]+?){_CLINICAL_HISTORY_STOP}",
+    ],
+    "personal_social_history": [
+        rf"\b(?:personal|social)\s+history\s*(?:of|is|was|:)?\s*([A-Za-z][A-Za-z\s]+?){_CLINICAL_HISTORY_STOP}",
+    ],
+    "examination_findings": [
+        rf"\bon\s+examination\s*[,:]?\s*([A-Za-z][A-Za-z\s]+?){_CLINICAL_HISTORY_STOP}",
+        rf"\bexamination\s+(?:findings?|reveals?|shows?)\s*[:\-]?\s*([A-Za-z][A-Za-z\s]+?){_CLINICAL_HISTORY_STOP}",
+    ],
+    "investigation_findings": [
+        rf"\binvestigations?\s+(?:findings?|reveal|reveals|show|shows)\s*[:\-]?\s*([A-Za-z][A-Za-z\s]+?){_CLINICAL_HISTORY_STOP}",
+        rf"\b(?:report|reports|lab\s+report)\s+shows?\s*([A-Za-z][A-Za-z\s]+?){_CLINICAL_HISTORY_STOP}",
+    ],
+}
+
+_NO_KNOWN_ALLERGY_PATTERN = re.compile(r"\bno\s+known\s+(?:drug\s+)?allerg(?:y|ies)\b", re.I)
+_PERSONAL_HABIT_PATTERN = re.compile(
+    r"\b(non-smoker|non\s+smoker|smoker|occasional\s+drinker|alcoholic|tobacco\s+user)\b",
+    re.I,
+)
+
+
+def _extract_clinical_history_sections(text: str) -> Dict[str, str]:
+    """Best-effort extraction of the 8 EMR clinical-history sections from
+    dictation. Doctors rarely say all of these explicitly, so this only
+    fills in what it's confident about and leaves the rest for the UI."""
+    normalized = _normalize_text(text)
+    if not normalized:
+        return {}
+
+    sections: Dict[str, str] = {}
+
+    if _NO_KNOWN_ALLERGY_PATTERN.search(normalized):
+        sections["allergies"] = "No known allergies"
+
+    habit_match = _PERSONAL_HABIT_PATTERN.search(normalized)
+    if habit_match:
+        sections["personal_social_history"] = habit_match.group(1).strip().title()
+
+    for section, patterns in _CLINICAL_HISTORY_PATTERNS.items():
+        if section in sections:
+            continue
+        for pattern in patterns:
+            match = re.search(pattern, normalized, re.I)
+            if match:
+                value = match.group(1).strip(" ,.;:-")
+                if value:
+                    sections[section] = value.title()
+                    break
+
+    return sections
+
+
+def _split_medicine_name_and_strength(combined: str) -> Tuple[str, str]:
+    match = re.match(r"^(.*?)\s+(\d+(?:\.\d+)?)$", combined.strip())
+    if match:
+        return match.group(1).strip(), f"{match.group(2)} mg"
+    return combined.strip(), ""
+
+
+def _map_medicine_dose_and_frequency(frequency_text: str, timing_text: str) -> Tuple[str, str]:
+    normalized_frequency = _normalize_text(frequency_text).lower()
+    mapped = _FREQUENCY_CODE_TO_DOSE.get(normalized_frequency)
+    if mapped:
+        return mapped
+
+    normalized_timing = _normalize_text(timing_text).lower()
+    has_morning = "morning" in normalized_timing
+    has_afternoon = "afternoon" in normalized_timing
+    has_evening = "evening" in normalized_timing
+    has_night = "night" in normalized_timing
+    if not (has_morning or has_afternoon or has_evening or has_night):
+        return "", ""
+
+    if has_afternoon and has_evening:
+        slots = [has_morning, has_afternoon, has_evening, has_night]
+    else:
+        slots = [has_morning, has_afternoon or has_evening, has_night]
+    return "-".join("1" if slot else "0" for slot in slots), "Daily"
+
+
+def _map_medicine_timing_label(notes_text: str) -> str:
+    return _MEDICINE_TIMING_MAP.get(_normalize_text(notes_text).lower(), "")
+
+
+def _map_medicine_type_from_text(text: str) -> str:
+    normalized = _normalize_text(text).lower()
+    for keyword, code in _MEDICINE_TYPE_KEYWORDS:
+        if re.search(rf"\b{re.escape(keyword)}\b", normalized):
+            return code
+    return ""
+
+
+def _parse_duration_text(raw: str) -> Tuple[Optional[int], Optional[str]]:
+    match = re.search(r"(\d+)\s*(day|days|week|weeks|month|months|year|years)", raw or "", re.I)
+    if not match:
+        return None, None
+    return int(match.group(1)), _DURATION_UNIT_MAP.get(match.group(2).lower())
+
+
+def _split_named_phrases(text: str) -> List[str]:
+    normalized = _normalize_text(text)
+    if not normalized:
+        return []
+    return [
+        cleaned
+        for part in re.split(r"\s*,\s*|\s+and\s+", normalized)
+        if (cleaned := part.strip(" .;:-"))
+    ]
+
+
+def _named_items_from_text(text: str) -> List[Dict[str, Any]]:
+    return [
+        {"name": phrase, "sort_order": index}
+        for index, phrase in enumerate(_split_named_phrases(text))
+    ]
+
+
+def _complaint_items_from_text(text: str) -> List[Dict[str, Any]]:
+    items: List[Dict[str, Any]] = []
+    for index, phrase in enumerate(_split_named_phrases(text)):
+        duration_value, duration_unit = _parse_duration_text(phrase)
+        name = re.sub(
+            r"\bfor\s+\d+\s*(?:day|days|week|weeks|month|months|year|years)\b",
+            "",
+            phrase,
+            flags=re.I,
+        ).strip(" .;:-")
+        items.append(
+            {
+                "name": name or phrase,
+                "severity": "",
+                "frequency": "",
+                "duration_value": duration_value,
+                "duration_unit": duration_unit,
+                "notes": "",
+                "sort_order": index,
+            }
+        )
+    return items
+
+
+def _strip_vital_unit(value: str) -> str:
+    return re.sub(r"\s*(mmHg|°F|kgs?)\s*$", "", value or "", flags=re.I).strip()
+
+
+def _parchi_medicine_to_emr(medicine: Dict[str, Any], sort_order: int) -> Dict[str, Any]:
+    medicine_name, strength = _split_medicine_name_and_strength(_coerce_text(medicine.get("name")))
+    medicine_type = _map_medicine_type_from_text(_coerce_text(medicine.get("name")))
+    dose, frequency = _map_medicine_dose_and_frequency(
+        _coerce_text(medicine.get("frequency")), _coerce_text(medicine.get("timing"))
+    )
+    duration_value, duration_unit = _parse_duration_text(_coerce_text(medicine.get("duration")))
+    timing_label = _map_medicine_timing_label(_coerce_text(medicine.get("notes")))
+
+    return {
+        "type": medicine_type,
+        "medicine_name": medicine_name,
+        "salt_composition": "",
+        "strength": strength,
+        "dose": dose,
+        "timing": timing_label,
+        "frequency": frequency,
+        "duration_value": duration_value,
+        "duration_unit": duration_unit,
+        "duration_text": "",
+        "notes": "",
+        "sort_order": sort_order,
+    }
+
+
+def _clinical_history_items_from_dict(sections: Optional[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Each section can hold either one string (the extractor's best guess)
+    or a list of strings (multiple entries added by hand in the UI, e.g.
+    two separate Family History rows) -- every entry becomes its own
+    {section, details} row, matching EmrClinicalHistoryPayload[]."""
+    items: List[Dict[str, Any]] = []
+    sort_order = 0
+    for key in _CLINICAL_HISTORY_SECTION_KEYS:
+        raw_value = (sections or {}).get(key)
+        values = raw_value if isinstance(raw_value, list) else [raw_value] if raw_value else []
+        for value in values:
+            details = _coerce_text(value)
+            if details:
+                items.append({"section": key, "details": details, "sort_order": sort_order})
+                sort_order += 1
+    return items
+
+
+def _parchi_to_emr_draft_payload(parchi: Dict[str, Any]) -> Dict[str, Any]:
+    """Reshape the parchi payload into the field layout the EMR prescription
+    editor (EmrDraftSavePayload) expects: structured medicine rows, named-item
+    arrays for complaints/diagnosis/tests/advice, a {bp, pulse, height, weight,
+    temperature, spo2} vitals object, and the 8-section clinical_history list
+    (past medical/family/surgical/treatment history, allergies, personal/
+    social history, examination/investigation findings)."""
+    parchi = parchi or {}
+    vitals = dict(parchi.get("vital_signs") or {})
+    medicines = parchi.get("medicines")
+    follow_up_text = _coerce_text(parchi.get("follow_up"))
+    follow_up_value, follow_up_unit = _parse_duration_text(follow_up_text)
+
+    return {
+        "patient_name": _coerce_text(parchi.get("patient_name")),
+        "complaints": _complaint_items_from_text(_coerce_text(parchi.get("complaints"))),
+        "diagnosis": _named_items_from_text(_coerce_text(parchi.get("diagnosis"))),
+        "medicines": [
+            _parchi_medicine_to_emr(item, index)
+            for index, item in enumerate(medicines if isinstance(medicines, list) else [])
+            if isinstance(item, dict)
+        ],
+        "tests": _named_items_from_text(_coerce_text(parchi.get("tests"))),
+        "advice": _named_items_from_text(_coerce_text(parchi.get("advice"))),
+        "vitals": {
+            "bp": _strip_vital_unit(_coerce_text(vitals.get("blood_pressure"))),
+            "pulse": _coerce_text(vitals.get("pulse")),
+            "height": _coerce_text(vitals.get("height")),
+            "weight": _strip_vital_unit(_coerce_text(vitals.get("weight"))),
+            "temperature": _strip_vital_unit(_coerce_text(vitals.get("temperature"))),
+            "spo2": _coerce_text(vitals.get("spo2")),
+        },
+        "clinical_history": _clinical_history_items_from_dict(parchi.get("clinical_history")),
+        "follow_up": {
+            "duration_value": follow_up_value,
+            "duration_unit": follow_up_unit,
+            "duration_text": follow_up_text,
+        },
+    }
+
+
 def _fallback_parchi_payload(cleaned_text: str) -> Dict[str, Any]:
     normalized = _normalize_text(cleaned_text)
     return {
@@ -635,11 +958,15 @@ def _fallback_parchi_payload(cleaned_text: str) -> Dict[str, Any]:
         "vital_signs": {
             "blood_pressure": "",
             "temperature": "",
-            "weight": ""
+            "weight": "",
+            "pulse": "",
+            "spo2": "",
+            "height": "",
         },
         "advice": normalized,
         "tests": "",
         "follow_up": "",
+        "clinical_history": {},
     }
 
 
@@ -665,6 +992,17 @@ def _coerce_parchi_payload(payload: Dict[str, Any], transcript: str) -> Dict[str
             "blood_pressure": _coerce_text(vitals.get("blood_pressure"))[:40],
             "temperature": _coerce_text(vitals.get("temperature"))[:40],
             "weight": _coerce_text(vitals.get("weight"))[:40],
+            "pulse": _coerce_text(vitals.get("pulse"))[:20],
+            "spo2": _coerce_text(vitals.get("spo2"))[:20],
+            "height": _coerce_text(vitals.get("height"))[:20],
+        }
+
+    clinical_history_payload = payload.get("clinical_history")
+    if isinstance(clinical_history_payload, dict):
+        result["clinical_history"] = {
+            key: _coerce_text(clinical_history_payload.get(key))[:300]
+            for key in _CLINICAL_HISTORY_SECTION_KEYS
+            if _coerce_text(clinical_history_payload.get(key))
         }
 
     medicines = payload.get("medicines")
@@ -688,6 +1026,8 @@ def _coerce_parchi_payload(payload: Dict[str, Any], transcript: str) -> Dict[str
     result["medicines"] = clean_medicines
 
     extracted_vitals = _extract_vital_signs(transcript)
+    extracted_vitals.update(_extract_additional_vitals(transcript))
+    extracted_clinical_history = _extract_clinical_history_sections(transcript)
     extracted_name = _extract_patient_name(transcript)
     extracted_complaints = _extract_complaints(transcript)
     extracted_diagnosis = _extract_diagnosis(transcript)
@@ -704,12 +1044,11 @@ def _coerce_parchi_payload(payload: Dict[str, Any], transcript: str) -> Dict[str
         result["tests"] = extracted_tests[:300]
     if not result["follow_up"]:
         result["follow_up"] = _extract_follow_up(transcript)
-    if not result["vital_signs"]["blood_pressure"]:
-        result["vital_signs"]["blood_pressure"] = extracted_vitals["blood_pressure"]
-    if not result["vital_signs"]["temperature"]:
-        result["vital_signs"]["temperature"] = extracted_vitals["temperature"]
-    if not result["vital_signs"]["weight"]:
-        result["vital_signs"]["weight"] = extracted_vitals["weight"]
+    for key in ("blood_pressure", "temperature", "weight", "pulse", "spo2", "height"):
+        if not result["vital_signs"].get(key):
+            result["vital_signs"][key] = extracted_vitals.get(key, "")
+    if not result.get("clinical_history"):
+        result["clinical_history"] = extracted_clinical_history
     return result
 
 
@@ -721,6 +1060,7 @@ def _payload_has_clinical_content(payload: Dict[str, Any]) -> bool:
         or payload.get("medicines")
         or any(_coerce_text(v) for v in dict(payload.get("vital_signs") or {}).values())
         or _coerce_text(payload.get("follow_up"))
+        or any(_coerce_text(v) for v in dict(payload.get("clinical_history") or {}).values())
     )
 
 
@@ -742,18 +1082,26 @@ def _build_parchi_payload_with_llm(cleaned_text: str) -> Tuple[Dict[str, Any], f
         '  "complaints": "",\n'
         '  "diagnosis": "",\n'
         '  "medicines": [{"name": "", "frequency": "", "timing": "", "duration": "", "notes": ""}],\n'
-        '  "vital_signs": {"blood_pressure": "", "temperature": "", "weight": ""},\n'
+        '  "vital_signs": {"blood_pressure": "", "temperature": "", "weight": "", "pulse": "", "spo2": "", "height": ""},\n'
         '  "advice": "",\n'
         '  "tests": "",\n'
-        '  "follow_up": ""\n'
+        '  "follow_up": "",\n'
+        '  "clinical_history": {\n'
+        '    "past_medical_history": "", "family_history": "", "surgical_history": "",\n'
+        '    "treatment_history": "", "allergies": "", "personal_social_history": "",\n'
+        '    "examination_findings": "", "investigation_findings": ""\n'
+        "  }\n"
         "}\n\n"
         "Rules:\n"
         "- Keep medicine names without inventing dose numbers.\n"
         "- Put symptoms in complaints.\n"
         "- Put confirmed disease labels like high blood pressure in diagnosis.\n"
-        "- Put BP/temp/weight only in vital_signs.\n"
+        "- Put BP/temp/weight/pulse/spo2/height only in vital_signs.\n"
         "- Put 'come after N days' as follow_up.\n"
-        "- If a field is not present, use an empty string or empty list.\n\n"
+        "- Put prior conditions, family history, past surgeries, ongoing treatments, "
+        "drug allergies, smoking/alcohol habits, and exam/investigation findings under "
+        "the matching clinical_history key, only when explicitly stated.\n"
+        "- If a field is not present, use an empty string, empty object, or empty list.\n\n"
         f"Transcript:\n{normalized}"
     )
     started_at = time.perf_counter()
@@ -1001,6 +1349,40 @@ def _extract_vital_signs(text: str) -> Dict[str, str]:
     return vitals
 
 
+def _extract_additional_vitals(text: str) -> Dict[str, str]:
+    """Pulse/SpO2/height aren't part of _extract_vital_signs (kept stable for
+    /clean-edit-field callers); the EMR vitals row needs them too, so they're
+    extracted separately here."""
+    vitals = {"pulse": "", "spo2": "", "height": ""}
+    normalized = _normalize_text(text)
+
+    pulse_match = re.search(
+        r"\bpulse\s*(?:rate)?\s*(?:is|was|:)?\s*(\d{2,3})\s*(?:bpm|per\s+minute)?\b",
+        normalized,
+        re.I,
+    )
+    if pulse_match:
+        vitals["pulse"] = pulse_match.group(1)
+
+    spo2_match = re.search(
+        r"\b(?:spo2|oxygen\s+saturation|saturation|sats?)\s*(?:is|was|:)?\s*(\d{2,3})\s*%?\b",
+        normalized,
+        re.I,
+    )
+    if spo2_match:
+        vitals["spo2"] = spo2_match.group(1)
+
+    height_match = re.search(
+        r"\bheight\s*(?:is|was|:)?\s*(\d{2,3}(?:\.\d+)?)\s*(?:cm|centimeters?)?\b",
+        normalized,
+        re.I,
+    )
+    if height_match:
+        vitals["height"] = height_match.group(1)
+
+    return vitals
+
+
 def _extract_tests(text: str) -> str:
     patterns = [
         r"\b(?:recommend|recommended|advise|advised|suggest|suggested)\s+(?:recommended\s+)?tests?\s+(?:like|such\s+as|are|is|:)?\s*([A-Za-z][A-Za-z\s,]+)",
@@ -1210,7 +1592,13 @@ def _build_rule_based_parchi_payload(cleaned_text: str) -> Tuple[Dict[str, Any],
 
     # Extract vital signs
     vital_signs = _extract_vital_signs(normalized)
-    
+    vital_signs.update(_extract_additional_vitals(normalized))
+
+    # Extract clinical history sections (past medical/family/surgical/
+    # treatment history, allergies, personal/social history, exam &
+    # investigation findings)
+    clinical_history = _extract_clinical_history_sections(normalized)
+
     # Extract duration (deterministic)
     duration = _extract_duration(normalized)
 
@@ -1264,6 +1652,7 @@ def _build_rule_based_parchi_payload(cleaned_text: str) -> Tuple[Dict[str, Any],
         "advice": normalized if not medicines else "",
         "tests": tests,
         "follow_up": follow_up,
+        "clinical_history": clinical_history,
     }
     
     elapsed = time.perf_counter() - started_at
@@ -1320,6 +1709,9 @@ def _clean_edit_field_value(field_name: str, raw_text: str, session_id: str = ""
         return _extract_vital_signs(cleaned_text)["temperature"][:40], elapsed
     if field == "weight":
         return _extract_vital_signs(cleaned_text)["weight"][:40], elapsed
+    if field in ("pulse", "spo2", "height"):
+        value = _extract_additional_vitals(cleaned_text)[field]
+        return (value or cleaned_text)[:20], elapsed
     if field == "follow_up":
         value = _extract_follow_up(cleaned_text) or cleaned_text
         return value[:80], elapsed
@@ -1329,6 +1721,9 @@ def _clean_edit_field_value(field_name: str, raw_text: str, session_id: str = ""
     if field == "advice":
         value = re.sub(r"(?i)\b(?:advice|instructions?)\s*(?:are|is|:)?\s*", "", cleaned_text).strip(" ,.;:-")
         return value[:500], elapsed
+    if field in _CLINICAL_HISTORY_SECTION_KEYS:
+        value = _extract_clinical_history_sections(cleaned_text).get(field) or cleaned_text
+        return value[:300], elapsed
     return cleaned_text[:500], elapsed
 
 
@@ -1802,6 +2197,27 @@ def live_page() -> HTMLResponse:
       min-height: 80px;
       resize: vertical;
     }
+    .parchi-chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      background: #f1ede4;
+      border: 1px solid #ddd0bc;
+      border-radius: 12px;
+      padding: 2px 4px 2px 10px;
+      margin: 2px 4px 2px 0;
+      font-size: 12px;
+    }
+    .parchi-chip button {
+      border: 0;
+      background: none;
+      cursor: pointer;
+      color: #b45309;
+      font-weight: bold;
+      font-size: 14px;
+      line-height: 1;
+      padding: 2px 6px;
+    }
     .parchi-footer {
       display: flex;
       gap: 8px;
@@ -2026,6 +2442,9 @@ def live_page() -> HTMLResponse:
                   <div><strong>BP:</strong> <span id="parchiBloodPressure">-</span></div>
                   <div><strong>Temp:</strong> <span id="parchiTemperature">-</span></div>
                   <div><strong>Weight:</strong> <span id="parchiWeight">-</span></div>
+                  <div><strong>Pulse:</strong> <span id="parchiPulse">-</span></div>
+                  <div><strong>SpO2:</strong> <span id="parchiSpo2">-</span></div>
+                  <div><strong>Height:</strong> <span id="parchiHeight">-</span></div>
                 </div>
               </div>
               <div class="parchi-section wide">
@@ -2039,6 +2458,10 @@ def live_page() -> HTMLResponse:
               <div class="parchi-section">
                 <div class="parchi-label">Tests</div>
                 <div id="parchiTests">-</div>
+              </div>
+              <div class="parchi-section wide">
+                <div class="parchi-label">Clinical History</div>
+                <div id="parchiClinicalHistory" style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 8px;">-</div>
               </div>
             </div>
             <div class="parchi-footer" style="display: flex; gap: 8px; padding: 12px 18px; border-top: 1px solid #ddd0bc; justify-content: flex-end;">
@@ -2129,6 +2552,17 @@ def live_page() -> HTMLResponse:
       return parchiEditMode && !!activeEditField;
     }
 
+    const CLINICAL_HISTORY_FIELDS = [
+      { key: "examination_findings", label: "Examination Findings", id: "editExaminationFindings" },
+      { key: "investigation_findings", label: "Investigation Findings", id: "editInvestigationFindings" },
+      { key: "past_medical_history", label: "Past Medical History", id: "editPastMedicalHistory" },
+      { key: "family_history", label: "Family History", id: "editFamilyHistory" },
+      { key: "surgical_history", label: "Surgical History", id: "editSurgicalHistory" },
+      { key: "treatment_history", label: "Treatment History", id: "editTreatmentHistory" },
+      { key: "allergies", label: "Allergies", id: "editAllergies" },
+      { key: "personal_social_history", label: "Personal/Social History", id: "editPersonalSocialHistory" },
+    ];
+
     function getEditFieldLabel(fieldName) {
       const labels = {
         patient_name: "Patient",
@@ -2139,7 +2573,14 @@ def live_page() -> HTMLResponse:
         blood_pressure: "BP",
         temperature: "Temperature",
         weight: "Weight",
+        pulse: "Pulse",
+        spo2: "SpO2",
+        height: "Height",
       };
+      const clinicalHistoryField = CLINICAL_HISTORY_FIELDS.find((f) => f.key === fieldName);
+      if (clinicalHistoryField) {
+        return clinicalHistoryField.label;
+      }
       if (fieldName.startsWith("medicine_name_")) {
         return "Medicine";
       }
@@ -2168,7 +2609,14 @@ def live_page() -> HTMLResponse:
         blood_pressure: "editBloodPressure",
         temperature: "editTemperature",
         weight: "editWeight",
+        pulse: "editPulse",
+        spo2: "editSpo2",
+        height: "editHeight",
       };
+      const clinicalHistoryField = CLINICAL_HISTORY_FIELDS.find((f) => f.key === fieldName);
+      if (clinicalHistoryField) {
+        return clinicalHistoryField.id;
+      }
       if (fieldName.startsWith("medicine_")) {
         return `editField__${fieldName}`;
       }
@@ -2185,10 +2633,14 @@ def live_page() -> HTMLResponse:
           blood_pressure: "",
           temperature: "",
           weight: "",
+          pulse: "",
+          spo2: "",
+          height: "",
         },
         advice: "",
         tests: "",
         follow_up: "",
+        clinical_history: {},
       };
     }
 
@@ -2240,7 +2692,8 @@ def live_page() -> HTMLResponse:
       if (fieldEl) {
         fieldEl.value = merged;
       }
-      if (activeEditField === "blood_pressure" || activeEditField === "temperature" || activeEditField === "weight") {
+      const VITAL_SIGN_FIELDS = ["blood_pressure", "temperature", "weight", "pulse", "spo2", "height"];
+      if (VITAL_SIGN_FIELDS.includes(activeEditField)) {
         if (!parchiData.vital_signs) {
           parchiData.vital_signs = {};
         }
@@ -2258,6 +2711,11 @@ def live_page() -> HTMLResponse:
           }
           parchiData.medicines[medIndex][medField] = merged;
         }
+      } else if (CLINICAL_HISTORY_FIELDS.some((f) => f.key === activeEditField)) {
+        // Clinical-history inputs are "add one item" boxes, not a single
+        // persisted value: leave the dictated text sitting in the input
+        // (already written above) for the doctor to review, then commit
+        // via Enter or +Add, same as typing it in by hand.
       } else {
         parchiData[activeEditField] = merged;
       }
@@ -2728,20 +3186,51 @@ def live_page() -> HTMLResponse:
       console.log("[PARCHI] Preview visible, Edit button accessible");
     }
 
+    function clinicalHistoryItems(clinicalHistory, key) {
+      const value = (clinicalHistory || {})[key];
+      if (Array.isArray(value)) {
+        return value.filter((item) => String(item || "").trim());
+      }
+      if (value) {
+        return [String(value).trim()];
+      }
+      return [];
+    }
+
+    window.addClinicalHistoryItem = function (key) {
+      const field = CLINICAL_HISTORY_FIELDS.find((f) => f.key === key);
+      if (!field) {
+        return;
+      }
+      const inputEl = document.getElementById(field.id);
+      const value = (inputEl?.value || "").trim();
+      if (!value) {
+        return;
+      }
+      if (!parchiData.clinical_history) {
+        parchiData.clinical_history = {};
+      }
+      parchiData.clinical_history[key] = [...clinicalHistoryItems(parchiData.clinical_history, key), value];
+      updateParchiDisplay();
+    };
+
+    window.removeClinicalHistoryItem = function (key, index) {
+      if (!parchiData.clinical_history) {
+        return;
+      }
+      const items = clinicalHistoryItems(parchiData.clinical_history, key);
+      items.splice(index, 1);
+      parchiData.clinical_history[key] = items;
+      updateParchiDisplay();
+    };
+
     function updateParchiDisplay() {
       document.getElementById("parchiDate").textContent = `Date: ${new Date().toLocaleDateString()}`;
       document.getElementById("parchiFollowUp").textContent = parchiData.follow_up ? `Follow-up: ${parchiData.follow_up}` : "";
-      
-      // Update vital signs with null checks
-      const bpEl = document.getElementById("parchiBloodPressure");
-      const tempEl = document.getElementById("parchiTemperature");
-      const wtEl = document.getElementById("parchiWeight");
-      
+
       const vs = parchiData.vital_signs || {};
-      if (bpEl) bpEl.textContent = escapeHtml(vs.blood_pressure || "-");
-      if (tempEl) tempEl.textContent = escapeHtml(vs.temperature || "-");
-      if (wtEl) wtEl.textContent = escapeHtml(vs.weight || "-");
-      
+      const clinicalHistory = parchiData.clinical_history || {};
+
       if (parchiEditMode) {
         // Edit mode
         document.getElementById("parchiPatientName").innerHTML = `<input type="text" class="parchi-edit-input" id="editPatientName" data-edit-field="patient_name" value="${escapeHtml(parchiData.patient_name || "")}" />`;
@@ -2750,7 +3239,7 @@ def live_page() -> HTMLResponse:
         document.getElementById("parchiAdvice").innerHTML = `<textarea class="parchi-edit-textarea" id="editAdvice" data-edit-field="advice">${escapeHtml(parchiData.advice || "")}</textarea>`;
         document.getElementById("parchiTests").innerHTML = `<input type="text" class="parchi-edit-input" id="editTests" data-edit-field="tests" value="${escapeHtml(parchiData.tests || "")}" />`;
         document.getElementById("parchiMedicines").innerHTML = renderMedicinesEditable(parchiData.medicines || []);
-        
+
         // Add vital signs edit fields
         const vsEditEl = document.getElementById("parchiVitalSigns");
         if (vsEditEl) {
@@ -2758,10 +3247,41 @@ def live_page() -> HTMLResponse:
             <div><strong>BP:</strong> <input type="text" class="parchi-edit-input" id="editBloodPressure" data-edit-field="blood_pressure" value="${escapeHtml(vs.blood_pressure || "")}" placeholder="e.g., 120/80 mmHg" /></div>
             <div><strong>Temp:</strong> <input type="text" class="parchi-edit-input" id="editTemperature" data-edit-field="temperature" value="${escapeHtml(vs.temperature || "")}" placeholder="e.g., 98.6°F" /></div>
             <div><strong>Weight:</strong> <input type="text" class="parchi-edit-input" id="editWeight" data-edit-field="weight" value="${escapeHtml(vs.weight || "")}" placeholder="e.g., 70 kg" /></div>
+            <div><strong>Pulse:</strong> <input type="text" class="parchi-edit-input" id="editPulse" data-edit-field="pulse" value="${escapeHtml(vs.pulse || "")}" placeholder="e.g., 78 bpm" /></div>
+            <div><strong>SpO2:</strong> <input type="text" class="parchi-edit-input" id="editSpo2" data-edit-field="spo2" value="${escapeHtml(vs.spo2 || "")}" placeholder="e.g., 98%" /></div>
+            <div><strong>Height:</strong> <input type="text" class="parchi-edit-input" id="editHeight" data-edit-field="height" value="${escapeHtml(vs.height || "")}" placeholder="e.g., 170 cm" /></div>
           `;
         }
+
+        const chEditEl = document.getElementById("parchiClinicalHistory");
+        if (chEditEl) {
+          chEditEl.innerHTML = CLINICAL_HISTORY_FIELDS.map((f) => {
+            const items = clinicalHistoryItems(clinicalHistory, f.key);
+            const chips = items
+              .map(
+                (item, idx) => `
+                  <span class="parchi-chip">${escapeHtml(item)}<button type="button" onclick="window.removeClinicalHistoryItem('${f.key}', ${idx})" aria-label="Remove">&times;</button></span>
+                `
+              )
+              .join("");
+            return `
+              <div>
+                <strong>${escapeHtml(f.label)}:</strong>
+                <div style="display:flex; gap:6px; margin-top:4px;">
+                  <input type="text" class="parchi-edit-input" id="${f.id}" data-edit-field="${f.key}"
+                    placeholder="Add ${escapeHtml(f.label)} and press Enter"
+                    onkeydown="if(event.key==='Enter'){event.preventDefault(); window.addClinicalHistoryItem('${f.key}');}" />
+                  <button type="button" onclick="window.addClinicalHistoryItem('${f.key}')"
+                    style="border:0; border-radius:6px; padding:6px 10px; font-size:12px; cursor:pointer; background:var(--accent); color:white; white-space:nowrap;">+ Add</button>
+                </div>
+                <div style="margin-top:4px;">${chips}</div>
+              </div>
+            `;
+          }).join("");
+        }
+
         attachEditFieldDictationHandlers();
-        
+
         document.getElementById("parchiEditBtn").style.display = "none";
         document.getElementById("parchiSaveBtn").style.display = "inline-block";
         document.getElementById("parchiCancelBtn").style.display = "inline-block";
@@ -2773,24 +3293,28 @@ def live_page() -> HTMLResponse:
         document.getElementById("parchiAdvice").innerHTML = `<div class="parchi-value" data-view-field="advice">${escapeHtml(parchiData.advice || "-")}</div>`;
         document.getElementById("parchiTests").innerHTML = `<div class="parchi-value" data-view-field="tests">${escapeHtml(parchiData.tests || "-")}</div>`;
         document.getElementById("parchiMedicines").innerHTML = renderMedicines(parchiData.medicines || []);
-        
-        // Vital signs display mode (already updated above)
+
         const vsDisplayEl = document.getElementById("parchiVitalSigns");
         if (vsDisplayEl) {
           vsDisplayEl.innerHTML = `
-            <div data-view-field="blood_pressure"><strong>BP:</strong> <span id="parchiBloodPressure">-</span></div>
-            <div data-view-field="temperature"><strong>Temp:</strong> <span id="parchiTemperature">-</span></div>
-            <div data-view-field="weight"><strong>Weight:</strong> <span id="parchiWeight">-</span></div>
+            <div data-view-field="blood_pressure"><strong>BP:</strong> <span>${escapeHtml(vs.blood_pressure || "-")}</span></div>
+            <div data-view-field="temperature"><strong>Temp:</strong> <span>${escapeHtml(vs.temperature || "-")}</span></div>
+            <div data-view-field="weight"><strong>Weight:</strong> <span>${escapeHtml(vs.weight || "-")}</span></div>
+            <div data-view-field="pulse"><strong>Pulse:</strong> <span>${escapeHtml(vs.pulse || "-")}</span></div>
+            <div data-view-field="spo2"><strong>SpO2:</strong> <span>${escapeHtml(vs.spo2 || "-")}</span></div>
+            <div data-view-field="height"><strong>Height:</strong> <span>${escapeHtml(vs.height || "-")}</span></div>
           `;
-          // Update after rendering
-          const bpSpan = document.getElementById("parchiBloodPressure");
-          const tempSpan = document.getElementById("parchiTemperature");
-          const wtSpan = document.getElementById("parchiWeight");
-          if (bpSpan) bpSpan.textContent = escapeHtml(vs.blood_pressure || "-");
-          if (tempSpan) tempSpan.textContent = escapeHtml(vs.temperature || "-");
-          if (wtSpan) wtSpan.textContent = escapeHtml(vs.weight || "-");
         }
-        
+
+        const chDisplayEl = document.getElementById("parchiClinicalHistory");
+        if (chDisplayEl) {
+          chDisplayEl.innerHTML = CLINICAL_HISTORY_FIELDS.map((f) => {
+            const items = clinicalHistoryItems(clinicalHistory, f.key);
+            const valueHtml = items.length ? items.map((item) => escapeHtml(item)).join(", ") : "-";
+            return `<div data-view-field="${f.key}"><strong>${escapeHtml(f.label)}:</strong> <span>${valueHtml}</span></div>`;
+          }).join("");
+        }
+
         document.getElementById("parchiEditBtn").style.display = "inline-block";
         document.getElementById("parchiSaveBtn").style.display = "none";
         document.getElementById("parchiCancelBtn").style.display = "none";
@@ -2820,13 +3344,38 @@ def live_page() -> HTMLResponse:
         const bpEl = document.getElementById("editBloodPressure");
         const tempEl = document.getElementById("editTemperature");
         const wtEl = document.getElementById("editWeight");
-        
+        const pulseEl = document.getElementById("editPulse");
+        const spo2El = document.getElementById("editSpo2");
+        const heightEl = document.getElementById("editHeight");
+
         parchiData.vital_signs = {
           blood_pressure: (bpEl?.value || "").trim(),
           temperature: (tempEl?.value || "").trim(),
-          weight: (wtEl?.value || "").trim()
+          weight: (wtEl?.value || "").trim(),
+          pulse: (pulseEl?.value || "").trim(),
+          spo2: (spo2El?.value || "").trim(),
+          height: (heightEl?.value || "").trim(),
         };
-        
+
+        // Save clinical history sections: flush any not-yet-added text
+        // sitting in the entry box for each section, then keep only
+        // sections that ended up with at least one item.
+        if (!parchiData.clinical_history) {
+          parchiData.clinical_history = {};
+        }
+        const clinicalHistory = {};
+        CLINICAL_HISTORY_FIELDS.forEach((f) => {
+          const pending = (document.getElementById(f.id)?.value || "").trim();
+          const items = clinicalHistoryItems(parchiData.clinical_history, f.key);
+          if (pending) {
+            items.push(pending);
+          }
+          if (items.length) {
+            clinicalHistory[f.key] = items;
+          }
+        });
+        parchiData.clinical_history = clinicalHistory;
+
         console.log("[PARCHI_EDIT] Data collected:", parchiData);
         parchiEditMode = false;
         resetEditDictationState(true);
@@ -3437,9 +3986,11 @@ async def render_parchi(request: Request):
             timeout=PARCHI_REQUEST_TIMEOUT_SECONDS,
         )
     except asyncio.TimeoutError:
+        timeout_parchi_payload = _fallback_parchi_payload(cleaned_text)
         return JSONResponse(
             {
-                "parchi": _fallback_parchi_payload(cleaned_text),
+                "parchi": timeout_parchi_payload,
+                "emr_draft": _parchi_to_emr_draft_payload(timeout_parchi_payload),
                 "parchi_elapsed_seconds": 0.0,
                 "warning": f"Parchi extraction timed out after {PARCHI_REQUEST_TIMEOUT_SECONDS:.1f}s",
             },
@@ -3451,6 +4002,7 @@ async def render_parchi(request: Request):
     return JSONResponse(
         {
             "parchi": parchi_payload,
+            "emr_draft": _parchi_to_emr_draft_payload(parchi_payload),
             "parchi_elapsed_seconds": parchi_elapsed_seconds,
         }
     )
