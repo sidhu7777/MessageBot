@@ -196,6 +196,36 @@ class SMSNotificationService:
         )
         return message
 
+    def build_hms_registration_message(
+        self,
+        patient_name: str,
+        token: str,
+        hospital_name: str,
+        registered_at: datetime,
+    ) -> str:
+        """
+        Build HMS pre-registration OPD token SMS message.
+
+        Args:
+            patient_name: Patient's name
+            token: OPD registration token (e.g. "HMSTEST/2026/08/21/00001")
+            hospital_name: Hospital name
+            registered_at: Registration date/time
+
+        Returns:
+            Formatted SMS message
+        """
+        display_date = registered_at.strftime("%d %b %Y")
+        display_time = registered_at.strftime("%I:%M %p").lstrip("0")
+        message = (
+            f"Dear {patient_name},\n"
+            f"Your OPD ID {token} has been generated for {hospital_name} on {display_date}, {display_time}.\n"
+            f"Please show this SMS at registration.\n"
+            f"Regards,\n"
+            f"Dapto"
+        )
+        return message
+
     def build_message_by_event_type(
         self,
         event_type: str,

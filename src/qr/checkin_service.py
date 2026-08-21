@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 from dataclasses import dataclass
@@ -41,9 +42,17 @@ class HospitalQrScheduleResolution:
 
 
 class QrCheckinService:
-    def __init__(self, booking_repository: Any, scheduling_repository: Any) -> None:
+    def __init__(
+        self,
+        booking_repository: Any,
+        scheduling_repository: Any,
+        settings: Any = None,
+        logger: Any = None,
+    ) -> None:
         self.booking_repository = booking_repository
         self.scheduling_repository = scheduling_repository
+        self.settings = settings
+        self.logger = logger or logging.getLogger(__name__)
         self.qr_overflow_extension_minutes = max(
             0,
             int(os.getenv("QR_OVERFLOW_EXTENSION_MINUTES", "90")),
@@ -445,6 +454,19 @@ class QrCheckinService:
                         ),
                     )
                     conn.commit()
+                    registration_id = cur.lastrowid
+                    if phone_store:
+                        self._send_hms_registration_sms(
+                            cur,
+                            conn,
+                            registration_id=registration_id,
+                            hospital_id=hospital_id,
+                            hospital_name=str(hosp.get("name") or "").strip(),
+                            patient_name=cleaned_name,
+                            token=token,
+                            phone=phone_store,
+                            registered_at=now,
+                        )
                     return {
                         "status": "registered",
                         "token": token,
@@ -469,6 +491,99 @@ class QrCheckinService:
         finally:
             cur.close()
             conn.close()
+
+    def _send_hms_registration_sms(
+        self,
+        cur,
+        conn,
+        *,
+        registration_id: int,
+        hospital_id: int,
+        hospital_name: str,
+        patient_name: str,
+        token: str,
+        phone: str,
+        registered_at: datetime,
+    ) -> None:
+        """Best-effort HMS registration OPD-token SMS, gated by the hospital's own
+        SMS credit balance (hospital_sms_service). Never raises: a failure here
+        must not affect the registration response already returned to the caller.
+        Fully isolated from the doctor/appointment SMS credit system."""
+        try:
+            cur.execute(
+                """
+                UPDATE hospital_sms_service
+                SET
+                    current_pack_used = current_pack_used + 1,
+                    sms_credit_used = sms_credit_used + 1,
+                    sms_service_status = CASE
+                        WHEN (current_pack_total - (current_pack_used + 1)) <= 0 THEN 'EXHAUSTED'
+                        ELSE 'ACTIVE'
+                    END,
+                    exhausted_alerted_at = CASE
+                        WHEN (current_pack_total - (current_pack_used + 1)) <= 0 THEN CURRENT_TIMESTAMP
+                        ELSE exhausted_alerted_at
+                    END,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE hospital_id = %s
+                  AND sms_service_enabled = 1
+                  AND (current_pack_total - current_pack_used) > 0
+                """,
+                (hospital_id,),
+            )
+            credit_consumed = cur.rowcount == 1
+            conn.commit()
+
+            if not credit_consumed:
+                cur.execute(
+                    """
+                    INSERT INTO registration_notification_log
+                        (registration_id, hospital_id, phone, status, failure_reason)
+                    VALUES (%s, %s, %s, 'NO_CREDIT', 'hospital SMS balance exhausted or disabled')
+                    """,
+                    (registration_id, hospital_id, phone),
+                )
+                conn.commit()
+                return
+
+            from src.runtime.sms_notification_service import SMSNotificationService
+
+            sms_service = SMSNotificationService(self.settings, self.logger)
+            message = sms_service.build_hms_registration_message(
+                patient_name=patient_name,
+                token=token,
+                hospital_name=hospital_name,
+                registered_at=registered_at,
+            )
+            success, provider_message_id = sms_service.send_sms(phone, message)
+
+            cur.execute(
+                """
+                INSERT INTO registration_notification_log
+                    (registration_id, hospital_id, phone, status, provider_message_id, failure_reason, sent_at)
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
+                """,
+                (
+                    registration_id,
+                    hospital_id,
+                    phone,
+                    "SENT" if success else "FAILED",
+                    provider_message_id,
+                    None if success else "SMS_SEND_FAILED",
+                    registered_at if success else None,
+                ),
+            )
+            conn.commit()
+        except Exception:
+            self.logger.exception(
+                "HMS registration SMS failed registration_id=%s hospital_id=%s",
+                registration_id,
+                hospital_id,
+            )
+            try:
+                conn.rollback()
+            except Exception:
+                pass
 
     @staticmethod
     def _normalize_language(language: str) -> str:

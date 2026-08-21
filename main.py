@@ -66,7 +66,12 @@ booking_repository, scheduling_repository = repositories_from_env()
 conversation_repository = conversation_repository_from_env()
 channel_account_repository = channel_account_repository_from_env()
 qr_checkin_service = (
-    QrCheckinService(booking_repository=booking_repository, scheduling_repository=scheduling_repository)
+    QrCheckinService(
+        booking_repository=booking_repository,
+        scheduling_repository=scheduling_repository,
+        settings=settings,
+        logger=LOGGER,
+    )
     if booking_repository and scheduling_repository
     else None
 )
